@@ -7,8 +7,10 @@ Postgres or the network.
 
 import click
 from click.testing import CliRunner
+from conftest import pg_conn
 
-from rung import cli
+from rung import cli, db, queue
+from rung.models import StateProgramRecord
 
 
 def _recorder():
@@ -25,7 +27,8 @@ _ALL_COMMANDS = [
     cli.recon_cmd, cli.bootstrap_dutchie_cmd, cli.bootstrap_pools_cmd,
     cli.search_states, cli.find_lists, cli.scrape_states,
     cli.scrape_company_stores_cmd, cli.scrape_menus_cmd, cli.compare_stores_cmd,
-    cli.dedupe_stores_cmd, cli.prune_jobs_cmd, cli.reap_jobs_cmd, cli.show_states, cli.analyze,
+    cli.dedupe_stores_cmd, cli.prune_jobs_cmd, cli.reap_jobs_cmd, cli.worker_cmd,
+    cli.show_states, cli.analyze,
 ]
 
 
@@ -144,3 +147,116 @@ def test_commands_are_click_commands() -> None:
     # Guards the [project.scripts] entry points: each name resolves to a click Command.
     for command in _ALL_COMMANDS:
         assert isinstance(command, click.Command)
+
+
+# --- DB-backed command bodies (the standalone commands that own their own connection) ---
+#
+# These run the real command body against a throwaway test schema, so they cover the
+# queue/DB plumbing the monkeypatched wiring tests above deliberately skip.
+
+class _NoCloseConn:
+    """Wraps a test connection so a command's ``conn.close()`` is a no-op — conftest still
+    owns the real connection and drops its schema in teardown (a command-closed connection
+    would break teardown's ``current_schema()`` probe and leak the schema)."""
+
+    def __init__(self, conn: db.DBConn) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        pass
+
+
+def _bind_test_conn(monkeypatch) -> db.DBConn:
+    """Point ``db.get_connection`` at a fresh test schema; return the real connection so the
+    test can seed rows on the same session the command will read."""
+    conn = pg_conn()
+    db.create_tables(conn)
+    monkeypatch.setattr(db, "get_connection", lambda: _NoCloseConn(conn))
+    return conn
+
+
+def test_prune_jobs_deletes_aged_finished(monkeypatch) -> None:
+    conn = _bind_test_conn(monkeypatch)
+    queue.enqueue(conn, "store_menu", "PA:1")
+    job = queue.claim_next(conn, "store_menu", "w1")
+    assert job is not None
+    queue.complete(conn, job.id, "done", worker="w1")
+    conn.execute("UPDATE jobs SET finished_at = now() - make_interval(days => 10)")
+    conn.commit()
+    result = CliRunner().invoke(cli.prune_jobs_cmd, ["--older-than-hours", "168"])
+    assert result.exit_code == 0, result.output
+    assert "Pruned 1 finished jobs" in result.output
+
+
+def test_reap_jobs_reports_count_on_empty_queue(monkeypatch) -> None:
+    _bind_test_conn(monkeypatch)
+    result = CliRunner().invoke(cli.reap_jobs_cmd, [])
+    assert result.exit_code == 0, result.output
+    assert "Reaped 0 lease-expired jobs." in result.output
+
+
+def test_show_states_empty_warns(monkeypatch) -> None:
+    _bind_test_conn(monkeypatch)
+    result = CliRunner().invoke(cli.show_states, [])
+    assert result.exit_code == 0
+    assert "No state data" in result.output
+
+
+def test_show_states_prints_report(monkeypatch) -> None:
+    conn = _bind_test_conn(monkeypatch)
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="PA", name="Pennsylvania", programs="medical",
+        program_term="medical", agency="DOH"))
+    conn.commit()
+    result = CliRunner().invoke(cli.show_states, [])
+    assert result.exit_code == 0, result.output
+    assert "PA" in result.output or "Pennsylvania" in result.output
+
+
+# --- worker command ---
+
+def test_worker_requires_state() -> None:
+    assert CliRunner().invoke(cli.worker_cmd, []).exit_code == 2
+
+
+def test_worker_drains_each_state_both_stages(monkeypatch) -> None:
+    _bind_test_conn(monkeypatch)
+    seen: list[tuple[str, str]] = []
+
+    async def _fake_company(_conn, abbr):
+        seen.append(("company", abbr))
+        return []
+
+    async def _fake_menus(_conn, abbr, **_kw):
+        seen.append(("menus", abbr))
+        return []
+
+    stages = {
+        "company_stores.run": _fake_company, "company_stores.print": lambda r, s: None,
+        "menus.run": _fake_menus, "menus.print": lambda r, s: None,
+    }
+    monkeypatch.setattr(cli, "_stage", lambda name: stages[name])
+    result = CliRunner().invoke(cli.worker_cmd, ["--state", "pa, nj", "--task", "both"])
+    assert result.exit_code == 0, result.output
+    # each state drained once, company-stores before menus, states in order, uppercased.
+    assert seen == [("company", "PA"), ("menus", "PA"), ("company", "NJ"), ("menus", "NJ")]
+
+
+def test_worker_defaults_to_menus_only(monkeypatch) -> None:
+    _bind_test_conn(monkeypatch)
+    seen: list[str] = []
+
+    async def _fake_menus(_conn, abbr, **_kw):
+        seen.append(abbr)
+        return []
+
+    # Only the menus stage is registered; if the default task resolved company-stores too,
+    # `_stage("company_stores.run")` would KeyError and fail the run.
+    stages = {"menus.run": _fake_menus, "menus.print": lambda r, s: None}
+    monkeypatch.setattr(cli, "_stage", lambda name: stages[name])
+    result = CliRunner().invoke(cli.worker_cmd, ["--state", "OK"])
+    assert result.exit_code == 0, result.output
+    assert seen == ["OK"]

@@ -33,6 +33,7 @@ dedupe-stores  = "rung.cli:dedupe_stores_cmd"
 compare-stores = "rung.cli:compare_stores_cmd"
 prune-jobs     = "rung.cli:prune_jobs_cmd"
 reap-jobs      = "rung.cli:reap_jobs_cmd"
+worker         = "rung.cli:worker_cmd"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-cov>=5"]
@@ -43,8 +44,9 @@ testpaths = ["tests"]
 pythonpath = ["."]
 # --strict-markers/--strict-config catch typos in markers/config; coverage runs as a
 # ratchet (fail-under just below the measured core-only floor (~69%)) so it flags regressions
-# without churning on small uncovered branches. cli.py / ai_fallback.py are the known
-# 0%-covered gaps (see the backlog) — raise the floor as those get tests.
+# without churning on small uncovered branches. The uncovered remainder is the
+# scrape runners) that a unit test can't drive without a real target — the pure logic
+# and the CLI wiring around it are tested. Raise the floor as more of it gets covered.
 addopts = "--strict-markers --strict-config --cov=rung --cov-fail-under=60"
 
 [build-system]

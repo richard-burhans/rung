@@ -71,9 +71,16 @@ the correct unit of control).
 - **Token buckets / limiter** — `token_buckets` tokens per host under shared-IP fallback.
 - Grafana views are sketched in `docs/distributed_scraping_design.md` §8; thresholds tune live.
 
+## Worker entrypoint (`worker` CLI)
+The per-worker loop above is now a first-class command — `uv run worker --state PA,NJ` — instead of
+the ad-hoc scoped-claim path. It reaps crashed leases and drains the queue for the given states
+(`--task menus|company-stores|both`), carrying the same freshness/aggregator/history flags as
+`scrape-menus`; `--poll-seconds N` keeps a long-lived process re-draining (0, the default, drains
+once and exits — the cron shape). One process per egress IP; the tier env (`DISPENSARY_PROXIES_*`)
+and a unique `worker_id` are the only per-process differences. The runners still own the heartbeat
+and startup reap, so a bare `scrape-menus`/`scrape-company-stores` remains an equivalent single-stage
+worker; `worker` just packages the reaper + both stages + the poll loop.
+
 ## Open items (not blocking bring-up)
-- Formalize the worker as a first-class CLI entrypoint (claim loop + reaper duty) if the ad-hoc
-  `--only`/scoped-claim path isn't ergonomic at fleet scale. (The per-worker heartbeat is already
-  automatic inside the runners; the `reap-jobs` cron covers the standalone reaper.)
 - Decide worker orchestration beyond a single VPS (VM pool vs k8s CronJob→Job vs Cloud Run) —
   ~7k jobs/day fits any; revisit when a single box saturates its IP budget.

@@ -261,6 +261,59 @@ def reap_jobs_cmd() -> None:
     click.echo(f"Reaped {reaped} lease-expired jobs.")
 
 
+@click.command("worker")
+@click.option(
+    "--state", required=True,
+    help="Comma-separated states this worker drains (e.g. PA,NJ). Jobs are claimed via the "
+    "queue (FOR UPDATE SKIP LOCKED), so several workers can run the same states and partition "
+    "the targets without a distributed lock — one process per egress IP.",
+)
+@click.option(
+    "--task", type=click.Choice(["menus", "company-stores", "both"]), default="menus",
+    help="Which stage's queue to drain (default: menus — the dominant Stage-3 workload).",
+)
+@click.option(
+    "--max-age-hours", type=float, default=24.0,
+    help="Menu freshness gate: skip stores snapshotted within this many hours (default 24, a "
+    "daily cadence). Ignored for the company-stores stage.",
+)
+@click.option(
+    "--skip-aggregators", is_flag=True,
+    help="Skip Weedmaps/Leafly stores — route those to a separate residential-proxied worker.",
+)
+@click.option(
+    "--only-aggregators", is_flag=True,
+    help="Drain ONLY Weedmaps/Leafly stores (mirror of --skip-aggregators).",
+)
+@click.option(
+    "--record-history", is_flag=True,
+    help="Also append price/potency/terpene history to the master-DB tables (products + "
+    "product_observations) alongside the snapshot.",
+)
+@click.option(
+    "--poll-seconds", type=float, default=0.0,
+    help="After a drain, re-drain (reaping crashed leases first) every N seconds — a long-lived "
+    "fleet worker. 0 (default) drains once and exits, the shape a cron invocation wants.",
+)
+def worker_cmd(
+    state: str, task: str, max_age_hours: float, skip_aggregators: bool,
+    only_aggregators: bool, record_history: bool, poll_seconds: float,
+) -> None:
+    """Run a fleet worker: reap crashed leases, then drain the queue for the given states.
+
+    A first-class entrypoint over the Stage-2/3 runners for distributed deployment (one process
+    per egress IP — see docs/worker_fleet_deployment.md). The runners already reap lease-expired
+    jobs at startup, keep a per-worker heartbeat, and claim via SKIP LOCKED; this command adds the
+    standalone entrypoint, the two-stage combination, and an optional continuous poll loop.
+    """
+    states = [s.strip().upper() for s in state.split(",") if s.strip()]
+    asyncio.run(_run_worker(
+        states=states, task=task, max_age_hours=max_age_hours,
+        skip_aggregators=skip_aggregators, only_aggregators=only_aggregators,
+        record_history=record_history, poll_seconds=poll_seconds,
+    ))
+
+
 @click.command("show-states")
 def show_states() -> None:
     """Print the state coverage table from the database."""
@@ -401,3 +454,42 @@ async def _run_recon(state: str | None = None, discover: bool = False) -> None:
             flag = "⚠ " if record.confidence == "low" else "  "
             platform = record.platform or "custom"
             click.echo(f"{flag}{record.canonical_name}: {record.homepage_url}  # {platform}")
+
+
+async def _run_worker(
+    *, states: list[str], task: str, max_age_hours: float, skip_aggregators: bool,
+    only_aggregators: bool, record_history: bool, poll_seconds: float,
+) -> None:
+    """Drain the Stage-2/3 queue for each state, then optionally poll for more.
+
+    Each stage runner reaps lease-expired jobs at startup and claims via SKIP LOCKED, so calling
+    them per state per cycle IS the reaper-plus-claim loop; this just sequences the stages and
+    (with --poll-seconds) keeps re-draining. Uses one consumer connection for the whole process.
+    """
+    run_company_stores = _stage("company_stores.run") if task in ("company-stores", "both") else None
+    run_store_menus = _stage("menus.run") if task in ("menus", "both") else None
+
+    conn = db.get_connection()
+    db.create_tables(conn)
+    try:
+        while True:
+            for abbr in states:
+                if run_company_stores is not None:
+                    click.echo(f"[worker] draining company-stores for {abbr}…", err=True)
+                    results = await run_company_stores(conn, abbr)
+                    _stage("company_stores.print")(results, abbr)
+                if run_store_menus is not None:
+                    click.echo(f"[worker] draining menus for {abbr}…", err=True)
+                    results = await run_store_menus(
+                        conn, abbr, max_age_hours=max_age_hours,
+                        skip_platforms={"weedmaps", "leafly"} if skip_aggregators else None,
+                        only_platforms={"weedmaps", "leafly"} if only_aggregators else None,
+                        record_history=record_history,
+                    )
+                    _stage("menus.print")(results, abbr)
+            if poll_seconds <= 0:
+                break
+            click.echo(f"[worker] queue drained; re-checking in {poll_seconds:g}s…", err=True)
+            await asyncio.sleep(poll_seconds)
+    finally:
+        conn.close()

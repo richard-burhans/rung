@@ -56,3 +56,26 @@ def test_ollama_model_defaults_and_honors_env(monkeypatch) -> None:
 
     monkeypatch.delenv("DISPENSARY_OLLAMA_MODEL", raising=False)
     importlib.reload(ai_fallback)  # restore module state for other tests
+
+
+def test_extract_with_ai_builds_tagged_records(monkeypatch) -> None:
+    # extract_with_ai runs _run_graph in an executor, then maps each location dict to a
+    # DispensaryRecord stamped with the source tag. Stub the graph so no scrapegraphai/Ollama
+    # is needed; include a non-dict to exercise the guard that skips it.
+    import asyncio
+
+    from rung.sources import ai_fallback
+
+    monkeypatch.setattr(
+        ai_fallback, "_run_graph",
+        lambda url: [
+            {"name": "Store A", "address": "1 Main St", "city": "Pittsburgh",
+             "state": "PA", "zip_code": "15201", "phone": "412-555-0100"},
+            "junk",  # not a dict → skipped by the isinstance guard in extract_with_ai
+        ],
+    )
+    records = asyncio.run(ai_fallback.extract_with_ai("http://example/list", "ai:test"))
+    assert [r.name for r in records] == ["Store A"]
+    assert records[0].source == "ai:test"
+    assert records[0].city == "Pittsburgh"
+    assert records[0].zip_code == "15201"

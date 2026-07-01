@@ -5,9 +5,8 @@ them, and the dependency direction. A *map*, not a rationale dump; it exists so 
 audit can test concrete invariants instead of gut feel.
 
 **Two packages.** The codebase is split into the public open-source core **`rung`**
-and the private overlay **`dispensary_scraper_intel`** (the proprietary Stage-2/3 scraping catalogs
-and per-platform recipes, the roster-comparison intel, recon, bootstrap, and the curated platform
-datasets — slugs/chains/tokens/store-ids). The core ships and runs on its own: its proprietary
+and a private plugin overlay (the domain catalogs and per-platform recipes, the
+roster-comparison logic, recon, bootstrap, and the curated datasets). The core ships and runs on its own: its proprietary
 stages resolve to registry stubs until the overlay plugs in via the `rung.plugins`
 entry point. The boundary is enforced — the core imports **nothing** from the overlay, and no
 proprietary data lives in the core (`tests/test_import_layering.py`). The overlay is a uv-workspace
@@ -19,13 +18,13 @@ container, URL via `DATABASE_URL`). Stage contracts —
 which stage reads/writes which table, and with what semantics — are formalized
 in `docs/stage_contracts.md`:
 
-- **Stage 1 — state lists.** Discover each state's dispensary-list resource and
+- **Stage 1 — rosters.** Discover each authority's list resource and
   extract the official roster into `dispensaries`.
-- **Stage 2 — company sites.** For each company derived from those rosters, scrape
-  its *own* website for its stores (the **trusted** source of truth), dedupe by
-  physical address, and compare against the state roster.
-- **Stage 3 — menus.** Scrape each handled store's menu (products, prices, potency,
-  terpenes) into per-store `store_products` snapshots, routed by the platform that
+- **Stage 2 — entity sites.** For each entity derived from those rosters, scrape
+  its *own* website for its locations (the **trusted** source of truth), dedupe by
+  physical address, and compare against the roster.
+- **Stage 3 — listings.** Scrape each handled location's live catalog into per-store
+  `store_products` snapshots, routed by the platform that
   minted the store's Stage-2 scrape handle.
 
 Stages 2 and 3 route through a generic **access-method registry** (`access.py`): a
@@ -87,7 +86,9 @@ see `docs/stage_contracts.md`). Every claim stamps a `lease_until` window + `las
 each Stage-2/3 runner keeps its process's in-flight leases fresh with `heartbeat_forever`
 (a per-worker keep-alive on a dedicated connection — `bump_worker_heartbeat` extends all of the
 worker's claims in one statement so it never interleaves with a consumer's `run_target`
-transaction), reaps at startup, and the `reap-jobs` CLI is the standalone reaper; `reap_expired`
+transaction), reaps at startup, and the `reap-jobs` CLI is the standalone reaper (the `worker` CLI packages
+reap-at-start + both Stage-2/3 consumers + an optional poll loop as the single fleet entrypoint —
+one process per egress IP, `docs/worker_fleet_deployment.md`); `reap_expired`
 re-queues an expired-lease (dead-worker) claim through a `FOR UPDATE SKIP LOCKED` subquery so
 concurrent reapers don't collide (`requeue_stale` is the coarser claimed_at-age fallback) — see
  §4-5. The per-run companion to the durable `access_methods` registry;
@@ -116,9 +117,9 @@ adaptive 406 cooldown + the unified `backoff_action` governor) stays private in 
   predicate override for other record shapes (menus pass `menus.menu_plausible`).
   Imports `db` (for `record_access_attempt`/`get_access_*`).
 
-**Plugin seam:** `registry.py` — the boundary between the **public** open-source core and the
-**private** `dispensary_scraper_intel` overlay (the Stage-2/3 scraping catalogs, the
-roster-comparison intel, and recon). `cli.py` resolves those proprietary stages by name through
+**Plugin seam:** `registry.py` — the boundary between the **public** open-source core and a
+**private** plugin overlay (the Stage-2/3 scraping catalogs, the roster-comparison
+logic, and recon). `cli.py` resolves those proprietary stages by name through
 `registry.resolve(...)` (a runtime lookup, never a static import); the overlay registers the real
 implementations via the `rung.plugins` entry-point group, discovered once by
 `registry.load_plugins()`. With the overlay absent, an unplugged stage resolves to a stub that
@@ -132,9 +133,7 @@ public/private partition: [`docs/publish_split_design.md`](docs/publish_split_de
 `homepage_discovery`, `dedupe` — Stage-1 government-roster extraction + shared dedup); the
 **proprietary** scrapers/catalogs/mappers/intel moved **flat into the overlay**
 `dispensary_scraper_intel/` (`company_stores`, `company_store_fetch`, `company_store_extractors`,
-`menus`, `menu_extractors`, `compare`, `recon`, `bootstrap`, and the platform recipes `dutchie`,
-`dutchie_plus`, `weedmaps`, `leafly`, `sweedpos`, `trulieve`, `cresco`, `curaleaf`, `fluent`,
-`hytiva`). The table below keeps the per-module detail; **[overlay]** marks the moved ones (write
+`menus`, `menu_extractors`, `compare`, `recon`, `bootstrap`, and the per-platform recipes). The table below keeps the per-module detail; **[overlay]** marks the moved ones (write
 through the core's `db.py` or return records):
 
 | Module | Problem | Key API | Writes |
