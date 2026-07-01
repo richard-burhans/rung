@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local scrape output (regenerable via the pipeline)
+dispensaries.db
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*_tokens.yml
+*.pem
+*.key
+proxies.txt

@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Keep the CI workflow's pinned actions (checkout, setup-uv) current. Monthly so it
+  # stays low-noise; Python deps are managed via uv + the committed uv.lock, not here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

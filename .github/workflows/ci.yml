@@ -1,0 +1,76 @@
+name: CI
+
+# Lint -> type-check -> tests + coverage floor on every PR and
+# push to main, so the gate is enforced in the cloud — not only by the local pre-push
+# hook, which a --no-verify push or a fresh clone can bypass. Uses a Postgres service
+# container (the tests need a real Postgres; conftest.py
+# hands out a throwaway schema per test in the dispensaries_test database).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:  # also runnable on demand from the Actions tab ("Run workflow")
+
+# One in-flight run per branch/PR; a new push cancels the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: dispensary
+          POSTGRES_PASSWORD: dispensary
+          POSTGRES_DB: dispensaries
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dispensary -d dispensaries"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # conftest.py reads DATABASE_URL_TEST (default points at the same host:port);
+      # set it explicitly so the source of truth is visible in the workflow.
+      DATABASE_URL_TEST: postgresql://dispensary:dispensary@localhost:5432/dispensaries_test
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Pin Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        # Populate .venv so `ty` can resolve the project's third-party imports
+        # (curl_cffi, yaml, …) — it discovers .venv in the project root. The `analysis`
+        # extra (matplotlib/numpy/pandas/scikit-learn) lets ty type-check the opt-in
+        # scientific-stack scripts too, catching arg-type/overload bugs the core env hid.
+        run: uv sync --extra analysis
+
+      - name: Create the pytest database
+        # The service provisions `dispensaries`; tests run inside `dispensaries_test`
+        # (here we create it directly).
+        env:
+          PGPASSWORD: dispensary
+        run: psql -h localhost -U dispensary -d dispensaries -c 'CREATE DATABASE dispensaries_test;'
+
+      - name: Lint (ruff)
+        run: uv tool run ruff check rung/ tests/
+
+      - name: Type-check (ty)
+        run: uv tool run ty check rung/
+
+      - name: Tests + coverage (pytest)
+        run: uv run pytest

@@ -1,0 +1,146 @@
+[
+ {
+  "id": "27eaLRYjHyMPZqigT",
+  "cName": "liberty-philadelphia",
+  "name": "Liberty (Philadelphia)",
+  "phone": "(267) 686-2824",
+  "address": "8900 Krewstown Rd, Philadelphia, PA 19115, USA",
+  "chain": "liberty",
+  "status": "open",
+  "recDispensary": false,
+  "medicalDispensary": true,
+  "location": {
+   "ln1": "8900 Krewstown Rd",
+   "ln2": "",
+   "city": "Philadelphia",
+   "state": "PA",
+   "zipcode": "19115",
+   "geometry": {
+    "coordinates": [
+     -75.0497523,
+     40.0830926
+    ]
+   }
+  }
+ },
+ {
+  "id": "5f1a2b3c4d5e6f7a8b9c0d1e",
+  "cName": "curaleaf-pa-king-of-prussia",
+  "name": "Curaleaf (PA) - King of Prussia",
+  "phone": "(610) 555-0142",
+  "address": "150 N Gulph Rd, King of Prussia, PA 19406, USA",
+  "chain": "curaleaf",
+  "status": "open",
+  "recDispensary": false,
+  "medicalDispensary": true,
+  "location": {
+   "ln1": "150 N Gulph Rd",
+   "ln2": "Suite 100",
+   "city": "King of Prussia",
+   "state": "PA",
+   "zipcode": "19406",
+   "geometry": {
+    "coordinates": [
+     -75.3855,
+     40.0884
+    ]
+   }
+  }
+ },
+ {
+  "id": "aa11bb22cc33dd44ee55ff66",
+  "cName": "ayr-wellness-pittsburgh",
+  "name": "AYR Cannabis Dispensary - Pittsburgh",
+  "phone": "(412) 555-0190",
+  "address": "1 Smithfield St, Pittsburgh, PA 15222, USA",
+  "chain": "ayr",
+  "status": "open",
+  "recDispensary": false,
+  "medicalDispensary": true,
+  "location": {
+   "ln1": "1 Smithfield St",
+   "ln2": "",
+   "city": "Pittsburgh",
+   "state": "PA",
+   "zipcode": "15222",
+   "geometry": {
+    "coordinates": [
+     -79.9959,
+     40.4374
+    ]
+   }
+  }
+ },
+ {
+  "id": "sb00sandbox00row",
+  "cName": "curaleaf-pa-sandbox",
+  "name": "Curaleaf (PA) - Sandbox",
+  "phone": "(215) 555-0000",
+  "address": "123 Test Ave, Philadelphia, PA 19103, USA",
+  "chain": "curaleaf",
+  "status": "open",
+  "recDispensary": true,
+  "medicalDispensary": true,
+  "location": {
+   "ln1": "123 Test Ave",
+   "ln2": "",
+   "city": "Philadelphia",
+   "state": "PA",
+   "zipcode": "19103",
+   "geometry": {
+    "coordinates": [
+     -75.1652,
+     39.9526
+    ]
+   }
+  }
+ },
+ {
+  "id": "qwMWWzQQBWXfQxagZ",
+  "cName": "ethos-cannabis",
+  "name": "Ethos Philadelphia",
+  "phone": "(267) 807-0747",
+  "address": "807 Locust St, Philadelphia, PA 19107, USA",
+  "chain": "ethos",
+  "status": "closed",
+  "recDispensary": false,
+  "medicalDispensary": true,
+  "location": {
+   "ln1": "807 Locust St",
+   "ln2": "",
+   "city": "Philadelphia",
+   "state": "PA",
+   "zipcode": "19107",
+   "geometry": {
+    "coordinates": [
+     -75.1552904,
+     39.94737420000001
+    ]
+   }
+  }
+ },
+ {
+  "id": "OOSXXXXXXXX",
+  "cName": "curaleaf-camden",
+  "name": "Curaleaf (NJ) - Camden",
+  "phone": "(856) 555-0000",
+  "address": "1 Market St, Camden, NJ 08102, USA",
+  "chain": "curaleaf",
+  "status": "open",
+  "recDispensary": true,
+  "medicalDispensary": true,
+  "location": {
+   "ln1": "1 Market St",
+   "ln2": "",
+   "city": "Camden",
+   "state": "NJ",
+   "zipcode": "08102",
+   "geometry": {
+    "coordinates": [
+     -75.1196,
+     39.9445
+    ]
+   }
+  }
+ }
+]

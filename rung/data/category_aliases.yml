@@ -1,0 +1,23 @@
+# Canonical product category -> substring keywords (the "truth source" for category_std).
+#
+# normalize_category(raw) lowercases the raw string, strips it to alphanumerics, then returns
+# the FIRST canonical below (top-to-bottom = PRIORITY) whose any keyword is a substring of it;
+# no match -> "Other". Order matters: a "live resin cart" is a Vape (cart) before a Concentrate
+# (resin); "rosin gels" is a Capsule (gel) before a Concentrate; "ice cream" is an Edible before
+# a Topical ("cream"). Keywords are matched after the same alnum-strip, so "pre-rolls" /
+# "pre rolls" / "preroll" all hit the keyword "preroll".
+#
+# Keep it conservative: when a raw string is genuinely ambiguous, leave it to "Other" rather
+# than guess — a wrong bucket is worse than an honest unknown. Audit the Other bucket
+# (GROUP BY category_std) and fold high-volume stragglers in here.
+
+Pre-Roll: [preroll, blunt, cone, cannagar]
+Vape: [vaporizer, vape, cartridge, cart, pod, disposable, trupod, trustik, atomizer, allinone, "510"]
+Capsule: [capsule, softgel, gelcap, gels, suppositor]
+Concentrate: [concentrate, extract, rosin, resin, shatter, crumble, budder, badder, wax, diamond, hash, kief, sauz, sauce, rso, ricksimpson, isolate, distillate, dab]
+Tincture: [tincture, sublingual, troche, oral, nasal, syringe]
+Beverage: [drink, beverage, tea, coffee, tonic, soda, seltzer]
+Edible: [edible, gummy, gummies, gummi, candy, candies, chocolate, mint, cookie, brownie, baked, snack, icecream, honey, spread, driedfruit, chew, lozenge, bar]
+Topical: [topical, balm, lotion, cream, salve, rollon, patch, intimate, lube]
+Flower: [flower, smalls, mini, moonrock, sungrown, indoor, outdoor, trim, shake]
+Accessory: [accessor, gear, apparel, merch, clothing, battery, charger, grinder, paper, wrap, pipe, lighter, rolling, paraphernalia, device, smoking, gift, rig, knife, tips, ancillary, humidity, vending]

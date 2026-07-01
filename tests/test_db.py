@@ -1,0 +1,313 @@
+"""Direct coverage for db.py helpers exercised only indirectly elsewhere.
+
+Uses the real conftest Postgres (a throwaway schema per test) with real record
+dataclasses — no mocked DB, no crafted external payloads.
+"""
+
+import datetime
+
+from conftest import pg_conn
+
+from rung import db, seed_companies
+from rung.models import (
+    CompanyReconRecord,
+    CompanyStoreRecord,
+    StateProgramRecord,
+    StoreProductRecord,
+)
+
+
+def _conn() -> db.DBConn:
+    conn = pg_conn()
+    db.create_tables(conn)
+    seed_companies.create_companies_table(conn)  # db.create_tables omits companies
+    return conn
+
+
+def test_one_returns_the_single_row_and_raises_when_empty():
+    import pytest
+    conn = _conn()
+    assert db.one(conn, "SELECT 1, 2")[0] == 1                 # non-None, subscriptable
+    assert db.one(conn, "SELECT count(*) FROM company_stores")[0] == 0
+    with pytest.raises(LookupError):
+        db.one(conn, "SELECT 1 WHERE false")                  # no row -> raises
+
+
+def _store(company_id=1, name="Acme", *, platform=None, external_id=None, **kw):
+    return CompanyStoreRecord(
+        company_id=company_id, canonical_name="Acme", state="PA",
+        source="x", name=name, platform=platform, external_id=external_id, **kw,
+    )
+
+
+# ── indexes ───────────────────────────────────────────────────────────────────
+
+def test_create_tables_builds_the_per_state_read_indexes() -> None:
+    # The per-state hot paths (Stage-2 keep-the-best replace on company_stores, the Stage-3
+    # freshness group on the 4.8M-row store_products) need these composite indexes to avoid a
+    # full table scan; create_tables must build them.
+    conn = _conn()
+    indexes = {
+        row[0]
+        for row in conn.execute(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"
+        ).fetchall()
+    }
+    assert "company_stores_state_company" in indexes
+    assert "store_products_state_store_key" in indexes
+    assert "store_products_store_key" in indexes  # the per-store lookup index still present
+
+
+def test_create_tables_builds_the_partial_pending_claim_index() -> None:
+    # The FOR UPDATE SKIP LOCKED claim scans WHERE task_type=… AND status='pending' ORDER BY id;
+    # a partial index over just the pending rows keeps it index-only as done/failed history grows.
+    conn = _conn()
+    row = conn.execute(
+        "SELECT indexdef FROM pg_indexes "
+        "WHERE schemaname = current_schema() AND indexname = 'jobs_pending_claim'"
+    ).fetchone()
+    assert row is not None                              # the index exists
+    assert "status" in row[0] and "'pending'" in row[0]  # …and it is the partial (pending-only) one
+
+
+# ── snapshot freshness ────────────────────────────────────────────────────────
+
+def test_latest_snapshot_times_returns_max_per_store_key() -> None:
+    conn = _conn()
+    for store_key in ("A", "A", "B"):
+        db.insert_store_product(conn, StoreProductRecord(
+            company_id=1, state="PA", store_key=store_key, platform="p",
+            external_id="1", source="s", name="x"))
+    conn.commit()
+    # Force distinct timestamps: store A has an old and a new row; B a single row.
+    conn.execute("UPDATE store_products SET scraped_at = '2026-01-01T00:00:00+00:00' "
+                 "WHERE store_key = 'A'")
+    conn.execute("UPDATE store_products SET scraped_at = '2026-06-01T00:00:00+00:00' "
+                 "WHERE store_key = 'A' AND ctid = (SELECT ctid FROM store_products "
+                 "WHERE store_key = 'A' LIMIT 1)")
+    conn.execute("UPDATE store_products SET scraped_at = '2026-03-15T00:00:00+00:00' "
+                 "WHERE store_key = 'B'")
+    conn.commit()
+    times = db.latest_snapshot_times(conn, "PA")
+    assert times["A"] == datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC)   # max of A's two rows
+    assert times["B"] == datetime.datetime(2026, 3, 15, tzinfo=datetime.UTC)
+    assert db.latest_snapshot_times(conn, "ZZ") == {}   # no rows for another state
+
+
+def test_latest_snapshot_times_max_is_chronological_not_lexical() -> None:
+    # The bug the timestamptz cast fixes: a LATER instant whose ISO string sorts EARLIER lexically
+    # (a non-UTC offset) must still win the max. "20:00+00:00" (20:00Z) is later than
+    # "23:00+05:00" (18:00Z) but sorts lexically smaller — a string max would pick the wrong one.
+    conn = _conn()
+    for _ in range(2):
+        db.insert_store_product(conn, StoreProductRecord(
+            company_id=1, state="PA", store_key="A", platform="p",
+            external_id="1", source="s", name="x"))
+    conn.commit()
+    ctids = [r[0] for r in conn.execute("SELECT ctid FROM store_products").fetchall()]
+    conn.execute("UPDATE store_products SET scraped_at='2026-01-01T23:00:00+05:00' WHERE ctid=%s",
+                 (ctids[0],))  # 18:00Z — lexically larger
+    conn.execute("UPDATE store_products SET scraped_at='2026-01-01T20:00:00+00:00' WHERE ctid=%s",
+                 (ctids[1],))  # 20:00Z — the true chronological max
+    conn.commit()
+    times = db.latest_snapshot_times(conn, "PA")
+    assert times["A"] == datetime.datetime(2026, 1, 1, 20, 0, tzinfo=datetime.UTC)
+
+
+# ── recon companies for a state ───────────────────────────────────────────────
+
+def test_get_recon_companies_coalesces_homeless_homepage() -> None:
+    conn = _conn()
+    for cid, name, state in [(1, "Curaleaf", "PA"), (2, "RISE", "PA"), (3, "Other", "NJ")]:
+        conn.execute("INSERT INTO companies (id, canonical_name, state, created_at) "
+                     "VALUES (%s, %s, %s, 'now')", (cid, name, state))
+    db.upsert_recon(conn, CompanyReconRecord(
+        company_id=1, canonical_name="Curaleaf", homepage_url="https://curaleaf.test",
+        platform="sweedpos"))
+    db.upsert_recon(conn, CompanyReconRecord(company_id=2, canonical_name="RISE"))  # homeless
+    db.upsert_recon(conn, CompanyReconRecord(
+        company_id=3, canonical_name="Other", homepage_url="https://nj.test"))
+    conn.commit()
+    rows = db.get_recon_companies_for_state(conn, "PA")
+    assert rows == [
+        (1, "Curaleaf", "https://curaleaf.test", "sweedpos"),
+        (2, "RISE", "", None),   # homeless: homepage coalesced to '', not NULL
+    ]   # NJ company excluded; ordered by canonical_name
+
+
+# ── dedupe markers ────────────────────────────────────────────────────────────
+
+def test_canonical_marker_hides_store_from_menu_jobs_and_clear_restores() -> None:
+    conn = _conn()
+    db.insert_company_store(conn, _store(name="Main", platform="jane", external_id="11"))
+    db.insert_company_store(conn, _store(name="Dup", platform="jane", external_id="22"))
+    conn.commit()
+    assert len(db.get_menu_stores_for_state(conn, "PA")) == 2
+    dup_id = next(r[0] for r in db.get_company_stores_for_dedupe(conn, "PA") if r[3] == "Dup")
+    db.set_store_canonical(conn, dup_id, 1)   # fold Dup into the canonical company
+    conn.commit()
+    # canonical_company_id IS NOT NULL → excluded from menu jobs.
+    assert {r[6] for r in db.get_menu_stores_for_state(conn, "PA")} == {"Main"}
+    db.clear_store_canonical_for_state(conn, "PA")
+    conn.commit()
+    assert len(db.get_menu_stores_for_state(conn, "PA")) == 2
+
+
+def test_set_store_storefront_stamps_display_brand() -> None:
+    conn = _conn()
+    db.insert_company_store(conn, _store(name="Legal Entity LLC"))
+    conn.commit()
+    store_id = db.get_company_stores_for_dedupe(conn, "PA")[0][0]
+    db.set_store_storefront(conn, store_id, "Sunnyside")
+    conn.commit()
+    row = conn.execute(
+        "SELECT storefront_name FROM company_stores WHERE id = %s", (store_id,)
+    ).fetchone()
+    assert row[0] == "Sunnyside"
+
+
+# ── per-company store deletion ────────────────────────────────────────────────
+
+def test_delete_company_stores_for_company_is_scoped() -> None:
+    conn = _conn()
+    db.insert_company_store(conn, _store(company_id=1, name="C1a"))
+    db.insert_company_store(conn, _store(company_id=1, name="C1b"))
+    db.insert_company_store(conn, _store(company_id=2, name="C2a"))
+    conn.commit()
+    deleted = db.delete_company_stores_for_company(conn, 1, "PA")
+    conn.commit()
+    assert deleted == 2
+    assert db.count_company_stores(conn, 1, "PA") == 0
+    assert db.count_company_stores(conn, 2, "PA") == 1   # other company untouched
+
+
+# ── keep-the-best replace (quality-aware: menu handles beat aggregator listings) ──
+
+def _agg(name, ext):   # an aggregator-only handle (Weedmaps/Leafly directory listing)
+    return _store(name=name, platform="leafly", external_id=ext)
+
+
+def _menu(name, ext):  # a real-menu-rung handle (Jane/Dutchie/Sweed/…)
+    return _store(name=name, platform="jane", external_id=ext)
+
+
+def test_replace_prefers_menu_handles_over_more_aggregator_stores() -> None:
+    """Terra Pharm case: 3 real Jane handles must beat 4 stored empty Leafly handles."""
+    conn = _conn()
+    for i in range(4):
+        db.insert_company_store(conn, _agg(f"Agg{i}", f"L{i}"))
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_menu(f"Jane{i}", f"J{i}") for i in range(3)])
+    conn.commit()
+    assert kept is False and n == 3
+    platforms = {r[0] for r in conn.execute(
+        "SELECT platform FROM company_stores WHERE company_id=1 AND state='PA'").fetchall()}
+    assert platforms == {"jane"}   # aggregator rows replaced by the real-menu handles
+
+
+def test_replace_does_not_downgrade_menu_handles_to_aggregator() -> None:
+    """A larger aggregator scrape must NOT clobber a smaller real-menu set."""
+    conn = _conn()
+    for i in range(3):
+        db.insert_company_store(conn, _menu(f"Jane{i}", f"J{i}"))
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_agg(f"Agg{i}", f"L{i}") for i in range(5)])
+    conn.commit()
+    assert kept is True and n == 3   # kept the 3 Jane stores despite 5 aggregator candidates
+    platforms = {r[0] for r in conn.execute(
+        "SELECT platform FROM company_stores WHERE company_id=1 AND state='PA'").fetchall()}
+    assert platforms == {"jane"}
+
+
+def test_replace_equal_menu_count_falls_back_to_distinct_count() -> None:
+    """Same menu-bearing count (here zero) → the distinct-count rule decides (more wins)."""
+    conn = _conn()
+    for i in range(2):
+        db.insert_company_store(conn, _agg(f"Agg{i}", f"L{i}"))
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_agg(f"New{i}", f"N{i}") for i in range(3)])
+    conn.commit()
+    assert kept is False and n == 3   # 0==0 menu → count logic: 3 >= 2 overwrites
+
+
+def _bare(name):  # a bare-address store: no menu platform, no external_id handle
+    return _store(name=name)
+
+
+def test_replace_menu_gain_accepted_at_half_retention_boundary() -> None:
+    """Gaining menu handles wins at exactly _MENU_UPGRADE_RETENTION (0.5): 4 agg → 2 Jane."""
+    conn = _conn()
+    for i in range(4):
+        db.insert_company_store(conn, _agg(f"Agg{i}", f"L{i}"))   # 0 menu handles
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_menu(f"Jane{i}", f"J{i}") for i in range(2)])
+    conn.commit()
+    # new_menu 2 > existing_menu 0 → accept iff new_distinct(2) >= existing_distinct(4) * 0.5 == 2.0
+    assert kept is False and n == 2
+    platforms = {r[0] for r in conn.execute(
+        "SELECT platform FROM company_stores WHERE company_id=1 AND state='PA'").fetchall()}
+    assert platforms == {"jane"}
+
+
+def test_replace_rejects_menu_gain_that_collapses_below_half_retention() -> None:
+    """A 15→1 menu-gaining collapse is still rejected (drops below _MENU_UPGRADE_RETENTION)."""
+    conn = _conn()
+    for i in range(15):
+        db.insert_company_store(conn, _agg(f"Agg{i}", f"L{i}"))
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_menu("Jane0", "J0")])
+    conn.commit()
+    # new_menu 1 > existing_menu 0 but new_distinct(1) < existing_distinct(15) * 0.5 == 7.5 → reject
+    assert kept is True and n == 15
+    platforms = {r[0] for r in conn.execute(
+        "SELECT platform FROM company_stores WHERE company_id=1 AND state='PA'").fetchall()}
+    assert platforms == {"leafly"}   # the lone Jane handle did NOT clobber 15 listings
+
+
+def test_replace_upgrades_bare_addresses_to_handles_at_080_retention() -> None:
+    """Equal (zero) menu count: a bare-address set is upgraded to handle-bearing rows at ≥0.8."""
+    conn = _conn()
+    for i in range(5):
+        db.insert_company_store(conn, _bare(f"Store{i}"))   # no external_id handles
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_agg(f"Agg{i}", f"L{i}") for i in range(4)])
+    conn.commit()
+    # 0==0 menu, new_distinct(4) < existing(5) → handle-upgrade: existing_handles 0, new_handles 4,
+    # 4 >= 5 * _HANDLE_UPGRADE_RETENTION(0.8) == 4.0 → accept
+    assert kept is False and n == 4
+    handles = {r[0] for r in conn.execute(
+        "SELECT external_id FROM company_stores WHERE company_id=1 AND state='PA'").fetchall()}
+    assert handles == {"L0", "L1", "L2", "L3"}
+
+
+def test_replace_rejects_handle_upgrade_below_080_retention() -> None:
+    """A handle upgrade that loses >20% of the stores is rejected (below _HANDLE_UPGRADE_RETENTION)."""
+    conn = _conn()
+    for i in range(5):
+        db.insert_company_store(conn, _bare(f"Store{i}"))
+    conn.commit()
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_agg(f"Agg{i}", f"L{i}") for i in range(3)])
+    conn.commit()
+    # 0==0 menu, new_distinct(3) < existing(5) * 0.8 == 4.0 → reject; bare addresses retained
+    assert kept is True and n == 5
+    handles = {r[0] for r in conn.execute(
+        "SELECT external_id FROM company_stores WHERE company_id=1 AND state='PA'").fetchall()}
+    assert handles == {None}   # still the bare-address rows, no handles
+
+
+# ── state programs round-trip ─────────────────────────────────────────────────
+
+def test_get_all_state_programs_round_trips_ordered_by_name() -> None:
+    conn = _conn()
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="PA", name="Pennsylvania", programs="medical", program_term="medical",
+        agency="DOH", best_url="https://pa.gov", source_type="pdf"))
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="AZ", name="Arizona", programs="both", program_term="adult-use",
+        agency="ADHS"))
+    conn.commit()
+    programs = db.get_all_state_programs(conn)
+    assert [p.abbr for p in programs] == ["AZ", "PA"]   # ordered by name
+    pa = next(p for p in programs if p.abbr == "PA")
+    assert pa.programs == "medical" and pa.best_url == "https://pa.gov"
+    assert pa.source_type == "pdf"

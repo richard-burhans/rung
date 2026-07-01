@@ -1,0 +1,373 @@
+# Geo anchors for the Dutchie platform-directory sweep (sources/dutchie.py).
+#
+# Dutchie's consumer GraphQL resolves dispensaries by GEO radius, not by state, so
+# we enumerate a state by sweeping a handful of population-center anchors and merging
+# the results (deduped by dispensary id). Each entry is [latitude, longitude]; the
+# sweep radius is fixed in sources/dutchie.py (_ANCHOR_RADIUS_MI).
+#
+# Coverage is a recall knob: add anchors for a state's population centers until the
+# pool stops growing. A state with no anchors yields an empty pool — the dutchie
+# rung then returns nothing and the company falls through to the next method.
+#
+# Each sweep randomly jitters every anchor by up to _ANCHOR_JITTER_DEG (~7 mi, in
+# sources/dutchie.py) so repeat runs don't send byte-identical coordinates (anti-
+# fingerprint). The jitter is bounded inside the radius margin, so place anchors with
+# the usual overlap and the in-range store set stays stable run to run.
+#
+# PA verified: these 5 anchors @ 75 mi deduped to 107 PA Dutchie dispensaries.
+
+PA:
+  - [39.9526, -75.1652]   # Philadelphia
+  - [40.4406, -79.9959]   # Pittsburgh
+  - [40.2732, -76.8867]   # Harrisburg
+  - [42.1292, -80.0851]   # Erie
+  - [41.4090, -75.6624]   # Scranton
+
+# IL verified 2026-06-16: these 8 anchors @ 75 mi deduped to 211 IL Dutchie dispensaries.
+# Records are state-filtered downstream, so border anchors don't pull in WI/MO/IN stores.
+IL:
+  - [41.8781, -87.6298]   # Chicago
+  - [42.2711, -89.0940]   # Rockford
+  - [41.5067, -90.5151]   # Quad Cities / Moline
+  - [40.6936, -89.5890]   # Peoria
+  - [40.1164, -88.2434]   # Champaign
+  - [39.7817, -89.6501]   # Springfield
+  - [38.7900, -89.9900]   # Metro East (Edwardsville / Collinsville)
+  - [37.7273, -89.2168]   # Carbondale (far south)
+
+# MD verified 2026-06-16: these 5 anchors @ 75 mi deduped to 141 MD Dutchie dispensaries.
+# State-filtered downstream, so the DC anchor's VA/DC stores are dropped.
+MD:
+  - [39.2904, -76.6122]   # Baltimore
+  - [38.9907, -77.0261]   # Silver Spring (DC suburbs)
+  - [39.4143, -77.4105]   # Frederick
+  - [38.3607, -75.5994]   # Salisbury (Eastern Shore)
+  - [39.6418, -77.7200]   # Hagerstown (western MD)
+
+# OH verified 2026-06-16: these 6 anchors @ 75 mi deduped to 240 OH Dutchie dispensaries.
+# With the homeless-company Dutchie path, these operators attribute without per-operator
+# homepage seeding.
+OH:
+  - [39.9612, -82.9988]   # Columbus
+  - [41.4993, -81.6944]   # Cleveland
+  - [39.1031, -84.5120]   # Cincinnati
+  - [41.6639, -83.5552]   # Toledo
+  - [39.7589, -84.1916]   # Dayton
+  - [39.3292, -82.1013]   # Athens (southeast)
+
+# OK added 2026-06-18 (Oklahoma bring-up): 9 anchors @ 75 mi spanning the full E-W width
+# incl. the panhandle. OK is the largest US dispensary market (~2,000 medical, mostly
+# independents on Dutchie/Jane/Weedmaps/Leafly) — official OMMA roster is JS-gated
+# (MedPortal/Salesforce), so discovery is platform-sweep-driven (Dutchie + Weedmaps/Leafly).
+OK:
+  - [35.4676, -97.5164]   # Oklahoma City
+  - [36.1540, -95.9928]   # Tulsa
+  - [34.6036, -98.3959]   # Lawton (southwest)
+  - [34.1743, -97.1436]   # Ardmore (south)
+  - [34.9334, -95.7697]   # McAlester (southeast)
+  - [36.3956, -97.8784]   # Enid (north-central)
+  - [36.4336, -99.3904]   # Woodward (northwest)
+  - [36.6828, -101.4816]  # Guymon (panhandle)
+  - [33.8957, -94.8266]   # Idabel (far southeast)
+
+# FL verified 2026-06-16: these 6 anchors @ 75 mi deduped to 392 FL Dutchie dispensaries.
+# Trulieve is proprietary (not in the pool) — seed its homepage so trulieve_rest routes it.
+FL:
+  - [25.7617, -80.1918]   # Miami
+  - [28.5383, -81.3792]   # Orlando
+  - [27.9506, -82.4572]   # Tampa
+  - [30.3322, -81.6557]   # Jacksonville
+  - [30.4383, -84.2807]   # Tallahassee
+  - [26.1224, -80.1373]   # Fort Lauderdale
+
+# MO verified 2026-06-17: 6 anchors @ 75 mi -> 278 MO Dutchie dispensaries.
+MO:
+  - [39.0997, -94.5786]   # Kansas City
+  - [38.6270, -90.1994]   # St. Louis
+  - [37.2090, -93.2923]   # Springfield
+  - [38.9517, -92.3341]   # Columbia
+  - [37.0842, -94.5133]   # Joplin
+  - [37.3059, -89.5181]   # Cape Girardeau
+
+# OR verified 2026-06-17: 5 anchors @ 75 mi -> 820 OR Dutchie dispensaries (nectar, la-mota,
+# serra, mr-nice-guy, chalice-farms).
+OR:
+  - [45.5152, -122.6784]  # Portland
+  - [44.0521, -123.0868]  # Eugene
+  - [44.9429, -123.0351]  # Salem
+  - [44.0582, -121.3153]  # Bend
+  - [42.3265, -122.8756]  # Medford
+
+# WA verified 2026-06-17: 6 anchors @ 75 mi -> 335 WA Dutchie dispensaries (zips, cannazone,
+# the-kushery, the-joint, main-street-marijuana).
+WA:
+  - [47.6062, -122.3321]  # Seattle
+  - [47.6588, -117.4260]  # Spokane
+  - [47.2529, -122.4443]  # Tacoma
+  - [45.6387, -122.6615]  # Vancouver
+  - [48.7519, -122.4787]  # Bellingham
+  - [46.2112, -119.1372]  # Tri-Cities
+
+# NY verified 2026-06-17: 6 anchors -> 621 NY Dutchie pool. NB the OCM roster is LICENSEE
+# legal entities, not brands, so most can't chain-attribute; coverage comes mainly from the
+# 26%-with-websites own-site path.
+NY:
+  - [40.7128, -74.0060]   # New York City
+  - [42.8864, -78.8784]   # Buffalo
+  - [43.1566, -77.6088]   # Rochester
+  - [42.6526, -73.7562]   # Albany
+  - [43.0481, -76.1474]   # Syracuse
+  - [40.7891, -73.1350]   # Long Island
+
+# NJ verified 2026-06-17: 5 anchors -> 315 MSO-heavy Dutchie pool. NJ's official roster is
+# locked in an auth-gated atlist embed, so NJ is BOOTSTRAPPED from the Dutchie pool itself
+# (pool stores inserted as dispensaries).
+NJ:
+  - [40.7357, -74.1724]   # Newark
+  - [40.2206, -74.7597]   # Trenton
+  - [39.3643, -74.4229]   # Atlantic City
+  - [39.9259, -75.1196]   # Camden
+  - [40.9176, -74.1718]   # Paterson
+
+# CA verified 2026-06-17: 12 anchors -> ~1050 CA Dutchie pool (highly fragmented: 411 chain-less).
+# ca_dcc roster is mixed licensee/brand names + 0 websites, so attribution is the brand-named subset.
+CA:
+  - [34.0522, -118.2437]  # Los Angeles
+  - [37.7749, -122.4194]  # San Francisco
+  - [32.7157, -117.1611]  # San Diego
+  - [38.5816, -121.4944]  # Sacramento
+  - [36.7378, -119.7871]  # Fresno
+  - [33.6846, -117.8265]  # Santa Ana (OC)
+  - [38.4404, -122.7141]  # Santa Rosa
+  - [34.4208, -119.6982]  # Santa Barbara
+  - [35.3733, -119.0187]  # Bakersfield
+  - [40.5865, -122.3917]  # Redding
+  - [33.8303, -116.5453]  # Palm Springs
+  - [40.8021, -124.1637]  # Eureka
+
+NV:
+  - [36.1699, -115.1398]  # Las Vegas
+  - [36.0395, -114.9817]  # Henderson
+  - [39.5296, -119.8138]  # Reno
+  - [39.1638, -119.7674]  # Carson City
+  - [36.2083, -115.9839]  # Pahrump
+  - [40.8324, -115.7631]  # Elko
+  - [36.8055, -114.0672]  # Mesquite
+
+MT:
+  - [45.7833, -108.5007]  # Billings
+  - [46.8721, -113.9940]  # Missoula
+  - [47.5053, -111.3008]  # Great Falls
+  - [45.6770, -111.0429]  # Bozeman
+  - [46.0038, -112.5348]  # Butte
+  - [46.5891, -112.0391]  # Helena
+  - [48.1958, -114.3129]  # Kalispell
+  - [46.4083, -105.8406]  # Miles City
+
+AZ:
+  - [33.4484, -112.0740]  # Phoenix
+  - [32.2226, -110.9747]  # Tucson
+  - [35.1983, -111.6513]  # Flagstaff
+  - [32.6927, -114.6277]  # Yuma
+  - [34.5400, -112.4685]  # Prescott
+  - [34.4839, -114.3225]  # Lake Havasu City
+  - [31.5455, -110.2773]  # Sierra Vista
+  - [34.2542, -110.0298]  # Show Low
+
+# MI bootstrapped from the Dutchie pool (official CRA roster is a dead arcgis app + JS-only
+# licensing reports). Pool stores inserted as dispensaries named by chain (NJ-style).
+MI:
+  - [42.3314, -83.0458]   # Detroit
+  - [42.9634, -85.6681]   # Grand Rapids
+  - [42.7325, -84.5555]   # Lansing
+  - [43.0125, -83.6875]   # Flint
+  - [42.2808, -83.7430]   # Ann Arbor
+  - [42.2917, -85.5872]   # Kalamazoo
+  - [44.7631, -85.6206]   # Traverse City
+  - [43.4195, -83.9508]   # Saginaw
+  - [46.5436, -87.3954]   # Marquette (UP)
+  - [45.7453, -87.0646]   # Escanaba (UP)
+
+# CO: medical stores from the co_med roster; retail stores bootstrapped from the Dutchie pool.
+CO:
+  - [39.7392, -104.9903]  # Denver
+  - [38.8339, -104.8214]  # Colorado Springs
+  - [40.5853, -105.0844]  # Fort Collins
+  - [38.2544, -104.6091]  # Pueblo
+  - [39.0639, -108.5506]  # Grand Junction
+  - [37.2753, -107.8801]  # Durango
+  - [37.1695, -104.5005]  # Trinidad
+  - [39.5505, -107.3248]  # Glenwood Springs
+
+# MA: official CCC roster is legal-entity names, so retail is also bootstrapped from the Dutchie pool.
+MA:
+  - [42.3601, -71.0589]   # Boston
+  - [42.2626, -71.8023]   # Worcester
+  - [42.1015, -72.5898]   # Springfield
+  - [42.4501, -73.2454]   # Pittsfield
+  - [41.7003, -70.3002]   # Barnstable (Cape)
+  - [42.3251, -72.6412]   # Northampton
+
+CT:
+  - [41.7637, -72.6851]   # Hartford
+  - [41.3083, -72.9279]   # New Haven
+  - [41.0534, -73.5387]   # Stamford
+  - [41.1792, -73.1894]   # Bridgeport
+  - [41.5582, -73.0515]   # Waterbury
+  - [41.3557, -72.0995]   # New London
+
+# NM: official roster JS-gated (Salesforce license search + Tableau portal); bootstrapped from Dutchie pool.
+NM:
+  - [35.0844, -106.6504]  # Albuquerque
+  - [35.6870, -105.9378]  # Santa Fe
+  - [32.3199, -106.7637]  # Las Cruces
+  - [33.3943, -104.5230]  # Roswell
+  - [36.7281, -108.2187]  # Farmington
+  - [32.7026, -103.1360]  # Hobbs
+  - [34.4048, -103.2052]  # Clovis
+  - [35.5281, -108.7426]  # Gallup
+  - [31.7968, -106.5836]  # Sunland Park
+
+ME:
+  - [43.6591, -70.2568]   # Portland
+  - [44.8012, -68.7778]   # Bangor
+  - [44.3106, -69.7795]   # Augusta
+  - [44.1004, -70.2148]   # Lewiston
+  - [43.4393, -70.7742]   # Sanford
+  - [46.6812, -68.0159]   # Presque Isle
+  - [44.5437, -68.4194]   # Ellsworth
+
+AK:
+  - [61.2181, -149.9003]  # Anchorage
+  - [64.8378, -147.7164]  # Fairbanks
+  - [58.3019, -134.4197]  # Juneau
+  - [61.5814, -149.4394]  # Wasilla
+  - [60.5544, -151.2583]  # Kenai
+  - [55.3422, -131.6461]  # Ketchikan
+
+# AR added 2026-06-18 (Arkansas bring-up): 6 anchors @ 75 mi covering the compact state.
+# Medical-only market; official ABC roster isn't a clean list, so Dutchie-pool bootstrap.
+AR:
+  - [34.7465, -92.2896]   # Little Rock (central)
+  - [36.0822, -94.1719]   # Fayetteville/Springdale (NW)
+  - [35.3859, -94.3985]   # Fort Smith (W)
+  - [35.8423, -90.7043]   # Jonesboro (NE)
+  - [33.4418, -94.0377]   # Texarkana (SW)
+  - [33.2076, -92.6663]   # El Dorado (S)
+
+# Medical-state batch added 2026-06-18 (Dutchie-pool bootstrap; markets vary in size/platform).
+WV:
+  - [38.3498, -81.6326]   # Charleston
+  - [39.6295, -79.9559]   # Morgantown
+  - [38.4192, -82.4452]   # Huntington
+  - [40.0640, -80.7209]   # Wheeling
+  - [37.7782, -81.1882]   # Beckley
+  - [39.4562, -77.9639]   # Martinsburg
+MS:
+  - [32.2988, -90.1848]   # Jackson
+  - [30.3674, -89.0928]   # Gulfport
+  - [34.2576, -88.7034]   # Tupelo
+  - [31.3271, -89.2903]   # Hattiesburg
+  - [34.3665, -89.5192]   # Oxford
+ND:
+  - [46.8772, -96.7898]   # Fargo
+  - [46.8083, -100.7837]  # Bismarck
+  - [47.9253, -97.0329]   # Grand Forks
+  - [48.2330, -101.2923]  # Minot
+SD:
+  - [43.5446, -96.7311]   # Sioux Falls
+  - [44.0805, -103.2310]  # Rapid City
+  - [45.4647, -98.4865]   # Aberdeen
+  - [44.3683, -100.3510]  # Pierre
+NH:
+  - [42.9956, -71.4548]   # Manchester
+  - [43.2081, -71.5376]   # Concord
+  - [43.6423, -72.2518]   # Lebanon
+  - [43.9793, -71.1212]   # Conway
+HI:
+  - [21.3069, -157.8583]  # Honolulu (Oahu)
+  - [19.7297, -155.0900]  # Hilo (Big Island)
+  - [19.6400, -155.9969]  # Kona (Big Island)
+  - [20.8893, -156.4729]  # Kahului (Maui)
+  - [21.9811, -159.3711]  # Lihue (Kauai)
+UT:
+  - [40.7608, -111.8910]  # Salt Lake City
+  - [40.2338, -111.6585]  # Provo
+  - [41.2230, -111.9738]  # Ogden
+  - [37.0965, -113.5684]  # St. George
+LA:
+  - [29.9511, -90.0715]   # New Orleans
+  - [30.4515, -91.1871]   # Baton Rouge
+  - [32.5252, -93.7502]   # Shreveport
+  - [30.2241, -92.0198]   # Lafayette
+  - [32.5093, -92.1193]   # Monroe
+KY:
+  - [38.2527, -85.7585]   # Louisville
+  - [38.0406, -84.5037]   # Lexington
+  - [36.9685, -86.4808]   # Bowling Green
+  - [37.0834, -88.6000]   # Paducah
+  - [37.4793, -82.5188]   # Pikeville
+# DE added 2026-06-18 (Delaware bring-up): small state, has a real roster so no bootstrap.
+DE:
+  - [39.7459, -75.5466]   # Wilmington
+  - [39.1582, -75.5244]   # Dover
+  - [38.6901, -75.3854]   # Georgetown
+
+VA:
+  - [37.5407, -77.4360]   # Richmond
+  - [36.8508, -76.2859]   # Virginia Beach / Hampton Roads
+  - [38.8462, -77.3064]   # Fairfax / Northern Virginia
+  - [37.2710, -79.9414]   # Roanoke (SW)
+  - [38.0293, -78.4767]   # Charlottesville (central)
+  - [36.6200, -82.1800]   # Bristol / Abingdon (far SW)
+  - [38.4500, -78.8700]   # Harrisonburg (Shenandoah)
+
+VT:
+  - [44.4759, -73.2121]   # Burlington
+  - [44.2601, -72.5754]   # Montpelier
+  - [43.6106, -72.9726]   # Rutland
+  - [42.8509, -72.5579]   # Brattleboro
+  - [42.8781, -73.1968]   # Bennington
+  - [44.4192, -72.0151]   # St. Johnsbury
+
+RI:
+  - [41.8240, -71.4128]   # Providence
+  - [41.7001, -71.4162]   # Warwick
+  - [41.4901, -71.3128]   # Newport
+  - [41.5801, -71.4774]   # West Warwick
+
+MN:
+  - [44.9778, -93.2650]   # Minneapolis
+  - [44.9537, -93.0900]   # St. Paul
+  - [46.7867, -92.1005]   # Duluth
+  - [44.0121, -92.4802]   # Rochester
+  - [45.5579, -94.1632]   # St. Cloud
+  - [46.8772, -96.7898]   # Moorhead
+  - [47.9211, -97.0739]   # (Grand Forks border / NW MN)
+
+DC:
+  - [38.9072, -77.0369]   # Washington
+  - [38.9200, -76.9900]   # NE/Anacostia
+
+GA:
+  - [33.7490, -84.3880]   # Atlanta
+  - [32.0809, -81.0912]   # Savannah
+  - [33.4735, -81.9748]   # Augusta
+  - [32.8407, -83.6324]   # Macon
+  - [31.5785, -84.1557]   # Albany
+  - [34.2579, -85.1647]   # Rome (NW)
+
+IA:
+  - [41.5868, -93.6250]   # Des Moines
+  - [41.6611, -91.5302]   # Iowa City
+  - [41.9779, -91.6656]   # Cedar Rapids
+  - [41.5236, -90.5776]   # Davenport
+  - [42.4963, -96.4049]   # Sioux City
+  - [42.4928, -92.3426]   # Waterloo
+
+AL:
+  - [33.5186, -86.8104]   # Birmingham
+  - [32.3668, -86.3000]   # Montgomery
+  - [30.6954, -88.0399]   # Mobile
+  - [34.7304, -86.5861]   # Huntsville
+  - [33.2098, -87.5692]   # Tuscaloosa

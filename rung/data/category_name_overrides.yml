@@ -1,0 +1,30 @@
+# Name-keyword -> category overrides, applied AFTER the raw-category classification.
+#
+# category_std normally comes from the platform's raw `category` string (name-blind). But platforms
+# routinely file a dosed/finished FORM under the wrong category — a capsule sold as an "edible", a
+# live-resin disposable sold as a "concentrate". When the product NAME unambiguously names such a
+# form, it overrides the raw-category bucket.
+#
+# Each rule fires ONLY when the current category_std is in its `from` list, so it corrects a known
+# mislabel without ever clobbering an already-correct higher-format category: "Infused Flower" in a
+# Pre-Roll name stays Pre-Roll (an infused pre-roll), but in a Concentrate name becomes Flower.
+# `null` in `from` covers a blank/uncategorized raw category. Keywords are alnum-stripped substrings
+# like category_aliases.yml ("all in one" -> "allinone", "infused flower" -> "infusedflower"); the
+# first matching rule wins. Only high-confidence form words belong here — never strain/flavor words.
+# Audited against the national name x category_std distribution; see docs/category_taxonomy.md.
+
+- to: Capsule                                    # capsules mislabeled Edible/Tincture/Other (~18k US)
+  keywords: [capsule, softgel, gelcap, protab]
+  from: [Edible, Tincture, Topical, Concentrate, Other, null]
+- to: Capsule                                    # suppositories mislabeled Topical (dosed-internal)
+  keywords: [suppositor]
+  from: [Topical, Edible, Tincture, Concentrate, Other, null]
+- to: Edible                                     # troches (lozenges) are an Edible subform, not Tincture
+  keywords: [troche]
+  from: [Tincture, Other, null]
+- to: Flower                                      # infused/ground flower mislabeled Concentrate
+  keywords: [infused flower, ground flower]
+  from: [Concentrate, Other, null]
+- to: Vape                                        # finished vapes (disposable/AIO/cart) sold as Concentrate
+  keywords: [disposable, all in one, aio, cartridge]
+  from: [Concentrate, Other, null]

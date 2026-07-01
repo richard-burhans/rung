@@ -1,0 +1,34 @@
+# Canonical strain type -> substring keywords (the "truth source" for strain_type_std).
+#
+# normalize_strain_type(raw) lowercases the raw string, strips it to alphanumerics, then
+# returns the FIRST canonical below (top-to-bottom = PRIORITY) whose any keyword is a substring
+# of it; NO match -> None (not "Other"). The raw `strain_type` column is a mess — platforms
+# stamp the actual lineage (Indica/Sativa/Hybrid), but also product CATEGORIES (Concentrate,
+# Edible, Gear, Drink…) and bare STRAIN/BRAND NAMES (Blueberry Muffin, Dragon's Blend). Only
+# unambiguous lineage maps to a canonical here; everything else falls through to None, which is
+# honest ("no recognizable strain type") rather than a forced — possibly WRONG — bucket.
+#
+# Keywords are deliberately CONSERVATIVE. The tempting broad ones are traps that match brand /
+# product / flavor names, so they are NOT used:
+#   - "blend"/"mix"  -> "Dragon's Blend" (a topical line), "Boujee Blendz", "Cake Mix",
+#                       "Trail Mix", "Mixed Berry" — flavor/brand, not lineage.
+#   - "dominant"     -> "Body Dominant"/"Mind Dominant" — effect labels, not lineage.
+#   - "ratio"        -> "Expiration", "Celebration", "Horatio" all contain the substring.
+# Genuine lineage that also carries those words still classifies correctly via its lineage
+# token: "Indica Dominant"/"Indica Blend"/"Indica Mix" -> Indica (the literal lineage present);
+# only "…-Hybrid"/"Hybrid Blend" carry the explicit "hybrid" token. Bare "Mixed"/"Blend" with no
+# lineage word -> None (honestly ambiguous).
+#
+# Order matters because the lean labels contain a pure label as a substring:
+#   - CBD first: a high-CBD / balanced-ratio product's defining trait is its CBD, even when also
+#     a hybrid ("CBD Hybrid" -> CBD). Ratio products read as balanced/CBD; the common "N to N"
+#     word forms are enumerated (so "1 to 1" -> "1to1"). Colon forms ("1:1") and exotic ratios
+#     fall to None — a stray "11" token would match far too much.
+#   - Hybrid before Indica/Sativa: "Indica-Hybrid"/"Sativa-Hybrid" carry the "hybrid" token and
+#     are crosses -> Hybrid. A pure "Indica"/"Sativa" string has no hybrid token, so it falls
+#     through to its own canonical.
+
+CBD: [cbd, 1to1, 2to1, 5to1, 10to1, 20to1]
+Hybrid: [hybrid]
+Indica: [indica]
+Sativa: [sativa]

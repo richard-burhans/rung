@@ -1,0 +1,933 @@
+"""Extract dispensary records from a state's discovered list resource.
+
+Dispatches on the coarse list_type stored by state_lists.py:
+
+  pdf    → generic PDF table extraction (pdfplumber)
+  csv    → delimited download
+  kml    → Google My Maps / KML placemarks
+  arcgis → resolve the ArcGIS web map's feature service and query it
+  html   → parse the most dispensary-like HTML table
+  lookup → search-tool front ends have no static list → AI fallback
+  unknown→ AI fallback
+
+Each handler returns DispensaryRecord objects; the caller stamps state + source.
+Handlers are best-effort and return [] on failure so the caller can fall back to
+the AI extractor (ai_fallback.extract_with_ai), which is only attempted on request.
+"""
+
+import asyncio
+import csv
+import io
+import re
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from typing import Literal, get_args
+from urllib.parse import parse_qs, quote, urlparse
+
+import pdfplumber
+from selectolax.parser import HTMLParser
+
+from rung import db
+from rung.addresses import (
+    PHONE_RE as _PHONE_RE,
+    STREET_RE as _STREET_RE,
+    ZIP_RE as _ZIP_RE,
+    clean as _clean,
+    extract_address_blocks as _extract_address_blocks,
+)
+from rung.http import make_session
+from rung.models import DispensaryRecord
+from rung.text import is_placeholder_name
+
+# Header synonyms, longest/most-specific first so "zip code" beats "code" etc.
+_FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "zip_code": ("zip code", "zipcode", "postal code", "zip", "postal"),
+    "address": ("street address", "address", "street", "addr"),
+    "city": ("city", "town", "municipality"),
+    "state": ("state", "province"),
+    "phone": ("phone number", "telephone", "phone", "tel"),
+    "website": ("website", "web site", "url", "homepage"),
+    "name": (
+        "dispensary name", "business name", "trade name", "legal name", "dba",
+        "licensee", "facility name", "establishment", "entity", "name",
+        "company name", "dispensary", "business", "company", "facility", "store",
+    ),
+}
+
+# Separators states use to pack "NAME – 123 Main St" into one cell.
+_NAME_ADDR_SEP_RE = re.compile(r"\s*[–—|]\s*|\s+-\s+")
+_YES_NO_VALUES = {"Y", "N", "YES", "NO", "X", "N/A", "NA", "-", "—"}
+# iframe srcs that never hold a dispensary list (analytics, embeds, video).
+_JUNK_IFRAME_RE = re.compile(
+    r"googletagmanager|google-analytics|doubleclick|youtube|vimeo|recaptcha|facebook",
+    re.IGNORECASE,
+)
+# Address primitives (_ZIP_RE, _STREET_RE, _PHONE_RE, _clean,
+# _extract_address_blocks) are imported from rung.addresses above;
+# that module also serves the company-store extractor, so neither reaches into the other.
+
+
+def _match_field(header: str) -> str | None:
+    """Map a header cell to a DispensaryRecord field, or None."""
+    h = " ".join(header.lower().split())
+    if not h:
+        return None
+    for field, synonyms in _FIELD_SYNONYMS.items():
+        for syn in synonyms:
+            if syn == h or syn in h.split() or h.startswith(syn) or h.endswith(syn):
+                return field
+    return None
+
+
+# A bare date — never a street address. The table extractors can mis-map a date column onto
+# `address` when a roster interleaves non-dispensary rows (IL's "all cannabis licenses" PDF puts a
+# license-issuance date where the address would be); nulling it keeps a junk value out of `address`
+# regardless of whether the row's name also tripped the placeholder filter.
+_DATE_VALUE_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{2,4}\s*$")
+
+
+def _addr_or_none(value: str | None) -> str | None:
+    return None if value and _DATE_VALUE_RE.match(value) else value
+
+
+def _record_from_values(source: str, values: dict[str, str | None]) -> DispensaryRecord:
+    """Build a DispensaryRecord from a header→field-name value map.
+
+    The HTML/PDF/CSV extractors map detected columns to DispensaryRecord field names
+    (a subset of the text fields — see ``_FIELD_SYNONYMS``), yielding a
+    ``dict[str, str | None]``. Pulling each field explicitly (rather than ``**values``)
+    keeps the construction type-checkable and silently ignores any non-field key.
+    Numeric ``latitude``/``longitude`` are never column-mapped — the geo extractors set
+    those directly — so they are intentionally absent here.
+    """
+    return DispensaryRecord(
+        source=source,
+        name=values.get("name"),
+        address=_addr_or_none(values.get("address")),
+        city=values.get("city"),
+        state=values.get("state"),
+        zip_code=values.get("zip_code"),
+        phone=values.get("phone"),
+        website=values.get("website"),
+    )
+
+
+# ── HTML tables ──────────────────────────────────────────────────────────────
+
+def _row_cells(tr) -> list[str]:
+    return [(c.text() or "").strip() for c in tr.css("td, th")]
+
+
+def _looks_like_name(value: str) -> bool:
+    """A cell that could plausibly be a dispensary name (free text with letters)."""
+    v = value.strip()
+    if len(v) < 3 or v.upper() in _YES_NO_VALUES:
+        return False
+    if _ZIP_RE.fullmatch(v) or _PHONE_RE.fullmatch(v):
+        return False
+    return any(c.isalpha() for c in v)
+
+
+def _infer_name_column(body_rows: list[list[str]]) -> int | None:
+    """Pick the column most likely to hold the dispensary name.
+
+    Used when no header cell matched a name synonym (e.g. the header row is a
+    section title like "Southern Nevada Retail Stores"). Choose the column whose
+    cells are mostly free text and longest on average — names, often with an
+    appended street address, dominate such tables.
+    """
+    width = max((len(r) for r in body_rows), default=0)
+    best_idx: int | None = None
+    best_len = 0.0
+    for idx in range(width):
+        cells = [r[idx] for r in body_rows if idx < len(r)]
+        named = [c for c in cells if _looks_like_name(c)]
+        if not cells or len(named) < max(3, len(cells) * 0.6):
+            continue
+        avg_len = sum(len(c) for c in named) / len(named)
+        if avg_len > best_len:
+            best_len = avg_len
+            best_idx = idx
+    return best_idx
+
+
+def _split_name_address(value: str) -> tuple[str, str | None]:
+    """Split a combined "NAME – 123 Main St – Adult Use" cell into (name, address).
+
+    Only splits when the segment after the name looks like a street address, so
+    names that merely contain a hyphen (e.g. "BEYOND/HELLO - Reno") are left
+    intact. A trailing license-type tag (no digits, few words — "Adult Use",
+    "Medical") is dropped from the address.
+    """
+    parts = [p.strip() for p in _NAME_ADDR_SEP_RE.split(value) if p.strip()]
+    if len(parts) < 2:
+        return value.strip(), None
+    name, rest = parts[0], parts[1:]
+    if len(rest) > 1 and not any(ch.isdigit() for ch in rest[-1]) and len(rest[-1].split()) <= 4:
+        rest = rest[:-1]
+    address = ", ".join(rest)
+    if name and _STREET_RE.match(address):
+        return name, address
+    return value.strip(), None
+
+
+def _location_fraction(records: list[DispensaryRecord]) -> float:
+    """Share of records carrying any location signal (address/city/zip/phone)."""
+    if not records:
+        return 0.0
+    located = sum(
+        1 for r in records if r.address or r.city or r.zip_code or r.phone
+    )
+    return located / len(records)
+
+
+def _extract_table(table) -> tuple[list[DispensaryRecord], bool]:
+    """Extract records from one table.
+
+    Returns (records, header_named). header_named is True when a header cell
+    matched a name synonym (high confidence); False when the name column was
+    inferred from the body and the caller should require a location signal
+    before trusting the table.
+    """
+    rows = table.css("tr")
+    if len(rows) < 2:
+        return [], False
+    header = _row_cells(rows[0])
+    col_map: dict[int, str] = {}
+    for idx, cell in enumerate(header):
+        field = _match_field(cell)
+        if field is not None and field not in col_map.values():
+            col_map[idx] = field
+
+    header_named = "name" in col_map.values()
+    body = rows[1:]
+    if not header_named:
+        name_idx = _infer_name_column([_row_cells(r) for r in body])
+        if name_idx is None:
+            return [], False
+        col_map[name_idx] = "name"
+
+    # If no address column was identified, the name cell may carry the address.
+    split_name = "address" not in col_map.values()
+    records: list[DispensaryRecord] = []
+    for tr in body:
+        cells = _row_cells(tr)
+        if not cells:
+            continue
+        values = {field: _clean(cells[idx]) for idx, field in col_map.items() if idx < len(cells)}
+        name = values.get("name")
+        if not name:
+            continue
+        if split_name:
+            name, address = _split_name_address(name)
+            values["name"] = name
+            if address:
+                values["address"] = address
+        records.append(_record_from_values("html", values))
+    return records, header_named
+
+
+def _extract_html(html: str) -> list[DispensaryRecord]:
+    """Return dispensary records aggregated across every qualifying HTML table.
+
+    A page may split locations over several tables (e.g. NV's northern/southern
+    regions). Header-named tables are trusted outright; inferred-name tables are
+    kept only when most rows carry a location signal, to avoid scooping up an
+    unrelated text table. Records are de-duplicated on (name, address).
+    """
+    tree = HTMLParser(html)
+    aggregated: list[DispensaryRecord] = []
+    seen: set[tuple[str | None, ...]] = set()
+    for table in tree.css("table"):
+        records, header_named = _extract_table(table)
+        if not records:
+            continue
+        if not header_named and _location_fraction(records) < 0.5:
+            continue
+        for record in records:
+            # Dedup on the full identity, not just (name, address): operators
+            # with many locations often share a name and have no street address
+            # (e.g. a "Licensee's Name" + City listing), so a coarse key would
+            # collapse distinct stores into one.
+            key = (record.name, record.address, record.city, record.phone)
+            if key not in seen:
+                seen.add(key)
+                aggregated.append(record)
+    return aggregated
+
+
+# ── PDF tables ───────────────────────────────────────────────────────────────
+
+def _header_map(row: list) -> dict[int, str] | None:
+    col_map: dict[int, str] = {}
+    for idx, cell in enumerate(row):
+        if not cell:
+            continue
+        field = _match_field(str(cell))
+        if field is not None and field not in col_map.values():
+            col_map[idx] = field
+    return col_map if "name" in col_map.values() else None
+
+
+def _extract_pdf(content: bytes) -> list[DispensaryRecord]:
+    records: list[DispensaryRecord] = []
+    col_map: dict[int, str] | None = None
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            table = page.extract_table()
+            if not table:
+                continue
+            for row in table:
+                if col_map is None:
+                    col_map = _header_map(row)
+                    continue  # this row was the header
+                # Skip a header repeated atop a later page. A real header matches
+                # several field synonyms; require ≥3 so a data row whose name cell
+                # merely contains a synonym word ("... Dispensary", "... Store")
+                # isn't mistaken for a header and dropped.
+                repeated = _header_map(row)
+                if repeated is not None and len(repeated) >= 3:
+                    continue
+                values = {
+                    field: _clean(row[idx])
+                    for idx, field in col_map.items()
+                    if idx < len(row)
+                }
+                if not values.get("name"):
+                    continue
+                records.append(_record_from_values("pdf", values))
+    return records
+
+
+# ── Arizona DHS 'Licensed Marijuana Establishments' PDF (list_type='az_dhs') ──
+# A borderless, word-wrapped columnar PDF the generic pdfplumber table extractor mangles
+# (it recovered 25/143 rows and picked the legal entity over the brand). Parse it by
+# bucketing words into the fixed columns by x-position instead.
+
+_AZ_CERT_RE = re.compile(r"^0*\d+ES[0-9A-Z]+$")  # e.g. 00000070ESCO78837103
+# (column name, left x of its header) — a word belongs to the right-most column it clears.
+_AZ_COLS = (
+    ("status", 42), ("cert", 116), ("estname", 258), ("dba", 420),
+    ("street", 515), ("city", 619), ("zip", 694),
+)
+_AZ_SKIP_RE = re.compile(
+    r"certificate number|establishment name|zip code|street address"
+    r"|total licensees|updated|adult use marijuana|licensed marijuana|page",
+    re.IGNORECASE,
+)
+
+
+def _az_column(x0: float) -> str:
+    column = _AZ_COLS[0][0]
+    for name, start in _AZ_COLS:
+        if x0 >= start - 6:
+            column = name
+    return column
+
+
+def _extract_az_dhs(content: bytes) -> list[DispensaryRecord]:
+    """Parse the AZDHS Licensed Marijuana Establishments PDF.
+
+    Words are bucketed into the Status/Cert/Establishment/DBA/Street/City/Zip columns by
+    x-position; a record begins on the line carrying a certificate number and absorbs the
+    wrapped continuation lines below it (header/footer lines are skipped). The name prefers
+    the DBA (storefront brand) and falls back to the legal entity when no DBA is listed.
+    """
+    fields = ("estname", "dba", "street", "city", "zip")
+    rows: list[dict[str, str]] = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            lines: dict[int, list] = {}
+            for word in page.extract_words():
+                lines.setdefault(round(word["top"] / 3), []).append(word)
+            current: dict[str, str] | None = None
+            for key in sorted(lines):
+                cells: dict[str, list[str]] = {}
+                for word in sorted(lines[key], key=lambda w: w["x0"]):
+                    cells.setdefault(_az_column(word["x0"]), []).append(word["text"])
+                joined = {col: " ".join(parts) for col, parts in cells.items()}
+                line_text = " ".join(joined.values())
+                if _AZ_SKIP_RE.search(line_text):
+                    continue
+                if _AZ_CERT_RE.match(joined.get("cert", "").replace(" ", "")):
+                    current = {col: joined.get(col, "") for col in fields}
+                    rows.append(current)
+                elif current is not None:  # wrapped continuation of the current record
+                    for col in fields:
+                        if joined.get(col):
+                            current[col] = f"{current[col]} {joined[col]}".strip()
+    records: list[DispensaryRecord] = []
+    for row in rows:
+        name = _clean(row["dba"]) or _clean(row["estname"])
+        if name:
+            records.append(DispensaryRecord(
+                source="az_dhs", name=name, address=_clean(row["street"]),
+                city=_clean(row["city"]), zip_code=_clean(row["zip"]),
+            ))
+    return records
+
+
+# ── CSV ──────────────────────────────────────────────────────────────────────
+
+_DBA_HEADERS = frozenset({"dba", "d/b/a", "doing business as", "trade name", "trade_name"})
+
+
+def _extract_csv(text: str) -> list[DispensaryRecord]:
+    reader = csv.reader(io.StringIO(text))
+    rows = list(reader)
+    if len(rows) < 2:
+        return []
+    # The storefront brand (a DBA / trade-name column) is preferred over the legal/business name
+    # via a per-row override below. So the DBA column must NOT claim the `name` slot itself —
+    # otherwise a row with a blank DBA but a populated legal name is dropped when the DBA column
+    # happens to sort before the legal-name column (the override can't recover it). Keep `name`
+    # mapped to a non-DBA column so a blank DBA falls back to the legal/business name.
+    dba_idx = next(
+        (idx for idx, cell in enumerate(rows[0]) if " ".join(cell.lower().split()) in _DBA_HEADERS),
+        None,
+    )
+    col_map: dict[int, str] = {}
+    for idx, cell in enumerate(rows[0]):
+        field = _match_field(cell)
+        if field is None or field in col_map.values():  # first column per field wins
+            continue
+        if field == "name" and idx == dba_idx:
+            continue  # the DBA column is the override, not the fallback name source
+        col_map[idx] = field
+    if "name" not in col_map.values():
+        # The only name-ish column IS the DBA column (no separate legal/business name) — use it.
+        if dba_idx is None:
+            return []
+        col_map[dba_idx] = "name"
+    records: list[DispensaryRecord] = []
+    for row in rows[1:]:
+        values = {field: _clean(row[idx]) for idx, field in col_map.items() if idx < len(row)}
+        if dba_idx is not None and dba_idx < len(row) and _clean(row[dba_idx]):
+            values["name"] = _clean(row[dba_idx])
+        if values.get("name"):
+            records.append(_record_from_values("csv", values))
+    return records
+
+
+# ── Colorado MED 'Stores' Google Sheet CSV (list_type='co_med') ──────────────
+# The CO MED publishes its licensed stores as a Google Sheet (exported as CSV). Columns:
+# License Number, Facility Name (legal entity), DBA (storefront brand), Facility Type,
+# Street, City, ZIP Code, ... The generic CSV path would pick "Facility Name" (legal) for
+# the name because it precedes "DBA"; this handler prefers the DBA brand (like az_dhs).
+
+def _extract_co_med(text: str) -> list[DispensaryRecord]:
+    reader = csv.DictReader(io.StringIO(text))
+    records: list[DispensaryRecord] = []
+    for row in reader:
+        lower = {(k or "").strip().lower(): v for k, v in row.items()}
+        name = _clean(lower.get("dba")) or _clean(lower.get("facility name"))
+        if not name:
+            continue
+        records.append(DispensaryRecord(
+            source="co_med", name=name, address=_clean(lower.get("street")),
+            city=_clean(lower.get("city")), zip_code=_clean(lower.get("zip code")),
+        ))
+    return records
+
+
+# ── Massachusetts CCC 'commenced operations' CSV (list_type='ma_ccc') ────────
+# The MA Cannabis Control Commission publishes a SODA CSV of all establishments that have
+# commenced operations — geocoded, with every license type. Keep only the active storefronts
+# (Marijuana Retailer + Medical Marijuana Treatment Center); drop cultivators/manufacturers/
+# transporters/labs. Names are the legal entity (no DBA column), but the rows carry lat/lng.
+
+_MA_STOREFRONT_TYPES = {"Marijuana Retailer", "Medical Marijuana Treatment Center"}
+
+
+def _extract_ma_ccc(text: str) -> list[DispensaryRecord]:
+    def _f(value: str | None) -> float | None:
+        try:
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    reader = csv.DictReader(io.StringIO(text))
+    records: list[DispensaryRecord] = []
+    for row in reader:
+        if row.get("LICENSE_TYPE") not in _MA_STOREFRONT_TYPES:
+            continue
+        if (row.get("LICENSE_STATUS") or "").strip() != "Active":
+            continue
+        name = _clean(row.get("BUSINESS_NAME"))
+        if not name:
+            continue
+        records.append(DispensaryRecord(
+            source="ma_ccc", name=name,
+            address=_clean(row.get("ADDRESS_1")) or _clean(row.get("PHYSICAL_ADDRESS_1")),
+            city=_clean(row.get("CITY")) or _clean(row.get("PHYSICAL_CITY")),
+            zip_code=_clean(row.get("ZIP_CODE")) or _clean(row.get("PHYSICAL_ZIP_CODE")),
+            latitude=_f(row.get("latitude")), longitude=_f(row.get("longitude")),
+        ))
+    return records
+
+
+# ── KML / Google My Maps ─────────────────────────────────────────────────────
+
+_KML_NS = "{http://www.opengis.net/kml/2.2}"
+
+
+def _extract_kml(content: bytes) -> list[DispensaryRecord]:
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return []
+    records: list[DispensaryRecord] = []
+    for placemark in root.iter(f"{_KML_NS}Placemark"):
+        name = _clean(placemark.findtext(f"{_KML_NS}name"))
+        if not name:
+            continue
+        data: dict[str, str | None] = {}
+        ext = placemark.find(f"{_KML_NS}ExtendedData")
+        if ext is not None:
+            for d in ext.findall(f"{_KML_NS}Data"):
+                key = (d.get("name") or "").lower()
+                val = d.find(f"{_KML_NS}value")
+                field = _match_field(key)
+                if field:
+                    data[field] = _clean(val.text if val is not None else None)
+        address = data.get("address")
+        if not address:
+            desc = _clean(placemark.findtext(f"{_KML_NS}description"))
+            if desc and _STREET_RE.search(desc):
+                address = desc
+        records.append(
+            DispensaryRecord(
+                source="kml", name=name, address=address,
+                city=data.get("city"), state=data.get("state"),
+                zip_code=data.get("zip_code"), phone=data.get("phone"),
+            )
+        )
+    return records
+
+
+# ── ArcGIS ───────────────────────────────────────────────────────────────────
+
+def _arcgis_attr(attrs: dict, *names: str) -> str | None:
+    """Pick the first attribute whose key loosely matches any of names."""
+    lower = {k.lower(): v for k, v in attrs.items()}
+    for want in names:
+        for key, val in lower.items():
+            if want in key:
+                return _clean(str(val)) if val not in (None, "") else None
+    return None
+
+
+_ARCGIS_SERVICE_RE = re.compile(r"/(?:Feature|Map)Server(?:/\d+)?/?$", re.IGNORECASE)
+
+
+# ArcGIS feature services cap a single response (the layer's maxRecordCount, often 1000-2000),
+# so a layer with more rows MUST be paged with resultOffset or it silently truncates. We page
+# until a short page or the server stops flagging exceededTransferLimit; the page cap is a
+# runaway guard for a server that ignores resultOffset (it would otherwise re-serve page 0).
+_ARCGIS_PAGE_SIZE = 2000
+_ARCGIS_PAGE_CAP = 25  # ≤50k features — far above any state's dispensary roster
+
+
+def _arcgis_record(feat: dict) -> DispensaryRecord | None:
+    """One ArcGIS feature → a DispensaryRecord, or None when it carries no usable name."""
+    attrs = feat.get("attributes") or {}
+    name = _arcgis_attr(
+        attrs, "dispensar", "name", "dba", "business", "licensee", "facility", "store"
+    )
+    if not name:
+        return None
+    return DispensaryRecord(
+        source="arcgis", name=name,
+        address=_arcgis_attr(attrs, "address", "addr", "street"),
+        city=_arcgis_attr(attrs, "city", "town"),
+        state=_arcgis_attr(attrs, "state"),
+        zip_code=_arcgis_attr(attrs, "zip", "postal"),
+        phone=_arcgis_attr(attrs, "phone", "tel"),
+    )
+
+
+async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]:
+    """Query one feature/map service layer and parse dispensary records, paging all rows.
+
+    A service-root URL (…/FeatureServer) defaults to layer 0. A `where=` query
+    string on the URL filters the layer (e.g. to retailer-only license types);
+    otherwise all rows are returned. Pages with resultOffset so a layer larger than its
+    maxRecordCount isn't silently truncated at the first page.
+    """
+    parsed = urlparse(layer_url)
+    where = parse_qs(parsed.query).get("where", ["1=1"])[0] if parsed.query else "1=1"
+    base = parsed._replace(query="").geturl().rstrip("/")
+    if not re.search(r"/\d+$", base):
+        base = f"{base}/0"
+    records: list[DispensaryRecord] = []
+    for page in range(_ARCGIS_PAGE_CAP):
+        try:
+            q = (
+                f"{base}/query?where={quote(where)}&outFields=*&f=json"
+                f"&resultRecordCount={_ARCGIS_PAGE_SIZE}"
+                f"&resultOffset={page * _ARCGIS_PAGE_SIZE}&returnGeometry=false"
+            )
+            payload = (await session.get(q, timeout=30)).json()
+        except Exception:
+            break
+        features = payload.get("features") or []
+        records.extend(rec for feat in features if (rec := _arcgis_record(feat)) is not None)
+        # A short page is the end; otherwise keep going only while the server flags more.
+        if len(features) < _ARCGIS_PAGE_SIZE or not payload.get("exceededTransferLimit"):
+            break
+        if page == _ARCGIS_PAGE_CAP - 1:
+            print(f"  arcgis: hit page cap ({_ARCGIS_PAGE_CAP}) — layer may be truncated")
+    return records
+
+
+async def _extract_arcgis(url: str, session) -> list[DispensaryRecord]:
+    """Extract from an ArcGIS source.
+
+    Accepts either a direct feature/map service URL (queried straight away) or a
+    webappviewer/Experience app URL (with an ?id= item), which is resolved to its
+    operational layers — directly or via a nested web map.
+    """
+    # A direct feature/map service URL — query it straight away.
+    if _ARCGIS_SERVICE_RE.search(urlparse(url).path):
+        return await _query_arcgis_layer(url, session)
+
+    item_id = None
+    for part in urlparse(url).query.split("&"):
+        if part.startswith("id="):
+            item_id = part[3:]
+            break
+    if not item_id:
+        return []
+    sharing = url.split("/apps/", 1)[0] + "/sharing/rest"
+
+    async def _item_data(iid: str) -> dict:
+        try:
+            return (
+                await session.get(
+                    f"{sharing}/content/items/{iid}/data?f=json", timeout=30
+                )
+            ).json()
+        except Exception:
+            return {}
+
+    def _layers(d: dict) -> list[str]:
+        return [
+            layer["url"]
+            for layer in (d.get("operationalLayers") or [])
+            if isinstance(layer, dict) and layer.get("url")
+        ]
+
+    # The viewer's id is the *app* item. If its data already lists operational
+    # layers, use them; a Web AppBuilder app instead nests the web map id under
+    # map.itemId, whose data carries the operational layers.
+    data = await _item_data(item_id)
+    layer_urls = _layers(data)
+    if not layer_urls:
+        webmap_id = (
+            (data.get("map") or {}).get("itemId")
+            or (data.get("values") or {}).get("webmap")
+        )
+        if webmap_id:
+            layer_urls = _layers(await _item_data(webmap_id))
+
+    for layer_url in layer_urls:
+        records = await _query_arcgis_layer(layer_url, session)
+        if records:
+            return records
+    return []
+
+
+# ── California DCC retailer API (list_type='ca_dcc') ─────────────────────────
+
+# California bounding box (minLat, maxLat, minLng, maxLng).
+_CA_DCC_BBOX = (32.3, 42.1, -124.6, -114.0)
+_CA_DCC_PAGE = 1000  # the API caps a response at this many rows and ignores ?page
+
+
+def _ca_dcc_record(lic: dict) -> DispensaryRecord | None:
+    """Map one DCC license object to a record, keeping only active retailers."""
+    if lic.get("licenseStatus") != "Active":
+        return None
+    if "retailer" not in (lic.get("licenseType") or "").lower():
+        return None
+    name = _clean(lic.get("businessDbaName") or lic.get("businessLegalName"))
+    if not name:
+        return None
+    return DispensaryRecord(
+        source="ca_dcc", name=name,
+        address=_clean(lic.get("premiseStreetAddress")),
+        city=_clean(lic.get("premiseCity")),
+        state=_clean(lic.get("premiseState")),
+        zip_code=_clean(lic.get("premiseZipCode")),
+        phone=_clean(lic.get("businessPhone")),
+        latitude=lic.get("premiseLatitude"),
+        longitude=lic.get("premiseLongitude"),
+    )
+
+
+async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
+    """Sweep California's DCC RetailerLocationSearch API for active retailers.
+
+    The endpoint returns {metadata:{totalCount,…}, data:[license, …]} for a lat/long
+    box but caps a response at 1000 rows and ignores ?page. So we recursively split
+    any box whose totalCount exceeds one page into quadrants until every box fits,
+    then dedupe distinct premises.
+    """
+    records: list[DispensaryRecord] = []
+    seen: set[tuple[str | None, str | None]] = set()
+
+    async def sweep(box: tuple[float, float, float, float], depth: int) -> None:
+        min_lat, max_lat, min_lng, max_lng = box
+        q = (
+            f"{url}?minLatitude={min_lat}&maxLatitude={max_lat}"
+            f"&minLongitude={min_lng}&maxLongitude={max_lng}&pageSize={_CA_DCC_PAGE}"
+        )
+        try:
+            payload = (await session.get(q, timeout=60)).json()
+        except Exception:
+            return
+        data = payload.get("data") or []
+        total = (payload.get("metadata") or {}).get("totalCount", len(data))
+        if total > len(data) and depth < 6:  # capped — subdivide into quadrants
+            mid_lat, mid_lng = (min_lat + max_lat) / 2, (min_lng + max_lng) / 2
+            await sweep((min_lat, mid_lat, min_lng, mid_lng), depth + 1)
+            await sweep((min_lat, mid_lat, mid_lng, max_lng), depth + 1)
+            await sweep((mid_lat, max_lat, min_lng, mid_lng), depth + 1)
+            await sweep((mid_lat, max_lat, mid_lng, max_lng), depth + 1)
+            return
+        for lic in data:
+            record = _ca_dcc_record(lic)
+            if record is None:
+                continue
+            key = (record.name, record.address)
+            if key not in seen:
+                seen.add(key)
+                records.append(record)
+
+    await sweep(_CA_DCC_BBOX, 0)
+    return records
+
+
+# ── Dispatcher ───────────────────────────────────────────────────────────────
+
+# The list_type vocabulary this dispatcher understands. `state_lists._classify` (the
+# producer) must stay a subset of this — guarded by test_list_type_vocabulary_consistent
+# so the two never drift. Any other value falls through to the html parser.
+ListType = Literal["pdf", "csv", "kml", "arcgis", "ca_dcc", "az_dhs", "co_med", "ma_ccc", "lookup", "html"]
+HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
+
+
+async def extract_records(list_url: str, list_type: ListType | str) -> list[DispensaryRecord]:
+    """Extract dispensary records from a list resource. Returns [] on failure.
+
+    `list_type` should be one of `HANDLED_LIST_TYPES`; an unrecognised value falls through
+    to the html table/address-block parser (the same path as `"html"`).
+    """
+    async with make_session() as session:
+        if list_type == "arcgis":
+            return await _extract_arcgis(list_url, session)
+        if list_type == "ca_dcc":
+            return await _extract_ca_dcc(list_url, session)
+        if list_type in ("lookup",):
+            return []  # dynamic search front ends — caller uses AI fallback
+        try:
+            resp = await session.get(list_url, timeout=60, allow_redirects=True)
+        except Exception:
+            return []
+        if resp.status_code >= 400:
+            return []
+
+        try:
+            # A URL ending in .pdf sometimes serves an HTML error/redirect page;
+            # trust the bytes, not the extension.
+            if list_type == "pdf" and resp.content[:5].startswith(b"%PDF"):
+                return _extract_pdf(resp.content)
+            if list_type == "az_dhs" and resp.content[:5].startswith(b"%PDF"):
+                return _extract_az_dhs(resp.content)
+            if list_type == "co_med":
+                return _extract_co_med(resp.text)
+            if list_type == "ma_ccc":
+                return _extract_ma_ccc(resp.text)
+            if list_type == "csv":
+                return _extract_csv(resp.text)
+            if list_type == "kml":
+                return _extract_kml(resp.content)
+            # html / unknown, or a mislabeled pdf that was really HTML: try the
+            # table extractor, then the non-table card/list fallback.
+            return _extract_html(resp.text) or _extract_address_blocks(resp.text)
+        except Exception:
+            return []
+
+
+# ── Browser-rendered HTML (opt-in) ───────────────────────────────────────────
+
+def _content_iframes(html: str) -> list[str]:
+    """Return http(s) iframe srcs that might embed a dispensary list/app."""
+    tree = HTMLParser(html)
+    urls: list[str] = []
+    for frame in tree.css("iframe"):
+        src = frame.attributes.get("src") or ""
+        if src.startswith("http") and not _JUNK_IFRAME_RE.search(src):
+            urls.append(src)
+    return urls
+
+
+def _extract_page(html: str) -> list[DispensaryRecord]:
+    """Tables first, then the non-table address-block fallback."""
+    return _extract_html(html) or _extract_address_blocks(html)
+
+
+async def extract_rendered(url: str, tab) -> list[DispensaryRecord]:
+    """Render a JS-driven page in Chrome and extract its dispensaries.
+
+    Tries the table extractor then the card/list extractor on the rendered DOM,
+    falling back to the largest content iframe when the top document yields
+    nothing (covers Tableau/ArcGIS/embedded-locator iframes).
+    """
+    from rung.browser import render_html
+
+    html = await render_html(tab, url)
+    if not html:
+        return []
+    records = _extract_page(html)
+    if records:
+        return records
+    for iframe_url in _content_iframes(html)[:2]:
+        records = _extract_page(await render_html(tab, iframe_url))
+        if records:
+            return records
+    return []
+
+
+async def _render_empty_targets(
+    targets: list,
+    extracted: dict[str, list[DispensaryRecord]],
+    methods: dict[str, str],
+) -> None:
+    """Render each still-empty target in one shared Chrome session, in place."""
+    from pydoll.browser.chromium import Chrome
+
+    from rung.browser import make_browser_options
+
+    async with Chrome(options=make_browser_options()) as browser:
+        tab = await browser.start()
+        for rec in targets:
+            try:
+                records = await extract_rendered(rec.list_url, tab)
+            except Exception:
+                records = []
+            if records:
+                extracted[rec.abbr] = records
+                methods[rec.abbr] = "render"
+
+
+# ── Orchestration ────────────────────────────────────────────────────────────
+
+@dataclass
+class ExtractResult:
+    abbr: str
+    name: str
+    list_type: str | None
+    count: int
+    method: str  # 'static' | 'render' | 'ai' | 'none'
+
+
+async def run_extract_states(
+    conn: db.DBConn,
+    only: set[str] | None = None,
+    use_ai: bool = False,
+    use_render: bool = False,
+) -> list[ExtractResult]:
+    """Extract dispensary records for every state with a discovered list URL.
+
+    Three tiers run in order of cost: static handlers concurrently; then, when
+    use_render is set, one shared Chrome renders JS-driven pages that came back
+    empty; then, when use_ai is set, the local-Ollama fallback. Each state's
+    existing rows are replaced atomically and only when extraction yields data,
+    so re-runs are idempotent and a dead URL never wipes prior good rows.
+    """
+    from rung.db import (
+        delete_dispensaries_for_state,
+        get_all_state_programs,
+        insert_dispensary,
+    )
+
+    targets = [
+        r for r in get_all_state_programs(conn)
+        if r.list_url and r.list_status in ("found", "override", "stored")
+        and (only is None or r.abbr in only)
+    ]
+
+    # Tier 1 — static extraction, concurrently.
+    async def _extract(rec):
+        records = await extract_records(rec.list_url, rec.list_type or "html")
+        return rec, records
+
+    raw = await asyncio.gather(*(_extract(r) for r in targets))
+    extracted: dict[str, list[DispensaryRecord]] = {rec.abbr: recs for rec, recs in raw}
+    methods: dict[str, str] = {
+        rec.abbr: ("static" if recs else "none") for rec, recs in raw
+    }
+
+    # Tier 2 — browser render of still-empty JS pages (one shared Chrome).
+    if use_render:
+        renderable = [
+            r for r in targets
+            if not extracted[r.abbr] and (r.list_type in (None, "html", "unknown"))
+        ]
+        if renderable:
+            await _render_empty_targets(renderable, extracted, methods)
+
+    # Tier 3 — AI fallback (per state) + persist.
+    results: list[ExtractResult] = []
+    for rec in targets:
+        records = extracted[rec.abbr]
+        method = methods[rec.abbr]
+        if not records and use_ai and rec.list_url:
+            try:
+                from rung.sources.ai_fallback import extract_with_ai
+                records = await extract_with_ai(rec.list_url, source_tag="ai")
+                method = "ai" if records else "none"
+            except Exception as exc:
+                # The AI tier is opt-in and best-effort, so one state's failure must not abort
+                # the run — but surface it (Ollama down, bad import, schema error) so a
+                # misconfigured tier isn't silently indistinguishable from a genuinely empty page.
+                print(f"  ai fallback failed for {rec.abbr}: {exc}")
+                method = "none"
+
+        # Replace this state's rows only when we actually extracted something.
+        # Drop non-operator junk rows (license-number/header/test stubs) so they never enter
+        # `dispensaries`. Filter BEFORE the guard below, so a junk-only roster counts as 0 real
+        # records and keeps the prior good rows rather than wiping them.
+        records = [record for record in records if not is_placeholder_name(record.name)]
+        # A transient failure or a list URL that has gone 404 yields 0 records;
+        # wiping the prior good rows in that case would be data loss.
+        if records:
+            delete_dispensaries_for_state(conn, rec.abbr)
+            for record in records:
+                record.state = rec.abbr  # scope rows to the state for idempotent replace
+                insert_dispensary(conn, record)
+            conn.commit()
+
+        results.append(
+            ExtractResult(rec.abbr, rec.name, rec.list_type, len(records), method)
+        )
+    return results
+
+
+def print_extract_report(results: list[ExtractResult]) -> None:
+    rows = sorted(results, key=lambda r: (-r.count, r.name))
+    sep = "-" * 70
+    print(sep)
+    print(f"{'State':<22} | {'Type':<8} | {'Method':<7} | Records")
+    print(sep)
+    total = 0
+    with_data = 0
+    for r in rows:
+        total += r.count
+        if r.count:
+            with_data += 1
+        print(f"{r.name:<22} | {(r.list_type or '-'):<8} | {r.method:<7} | {r.count}")
+    print(sep)
+    print(f"States with records: {with_data}/{len(results)} | Total records: {total}")
+    print(sep)

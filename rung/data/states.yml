@@ -1,0 +1,404 @@
+# US state cannabis program data.
+# programs: none | cbd_only | medical | recreational | both
+# program_term: the term to use in search queries for this state's program
+# agency: the regulatory agency name (used in search queries)
+# known_url: the agency's cannabis-program landing page. HEAD-verified before any
+#   search-engine fallback; a live page seeds best_url directly. Leave "" for states
+#   with no program or no reliably-known page (those fall back to search).
+
+- abbr: AK
+  name: Alaska
+  programs: both
+  program_term: cannabis
+  agency: Alcohol and Marijuana Control Office
+  known_url: https://www.commerce.alaska.gov/web/amco/
+
+- abbr: AL
+  name: Alabama
+  programs: medical
+  program_term: medical cannabis
+  agency: Alabama Medical Cannabis Commission
+  known_url: https://amcc.alabama.gov/
+
+- abbr: AR
+  name: Arkansas
+  programs: medical
+  program_term: medical marijuana
+  agency: Arkansas Department of Finance and Administration
+  known_url: https://www.dfa.arkansas.gov/alcoholic-beverage-control/medical-marijuana/
+
+- abbr: AZ
+  name: Arizona
+  programs: both
+  program_term: cannabis
+  agency: Arizona Department of Health Services
+  known_url: https://www.azdhs.gov/licensing/marijuana/index.php
+  # AZDHS publishes its licensed establishments as a borderless, word-wrapped PDF that the
+  # generic pdfplumber table path mangles; the az_dhs handler parses it by column x-position.
+  list_url: https://www.azdhs.gov/documents/licensing/medical-marijuana/applications/licensed-marijuana-establishments.pdf
+  list_type: az_dhs
+
+- abbr: CA
+  name: California
+  programs: both
+  program_term: cannabis
+  agency: Department of Cannabis Control
+  known_url: https://cannabis.ca.gov/
+  # DCC's licensed-retailers map is a paginated JSON API (no static list);
+  # the ca_dcc handler sweeps a statewide bbox for active retailers.
+  list_url: https://as-dcc-pub-cann-w-p-002.azurewebsites.net/licenses/RetailerLocationSearch
+  list_type: ca_dcc
+
+- abbr: CO
+  name: Colorado
+  programs: both
+  program_term: cannabis
+  agency: Marijuana Enforcement Division
+  known_url: https://sbg.colorado.gov/med
+  # CO MED publishes its licensed "Stores" list as a (monthly-updated) Google Sheet; the
+  # CSV export has DBA + street + zip. co_med prefers the DBA brand over the legal entity.
+  # NOTE: this sheet is the MEDICAL stores; retail stores are bootstrapped from the Dutchie pool.
+  list_url: https://docs.google.com/spreadsheets/d/1PqYThJJwGEsrwWvciu9vXosuC0BzAw4YtD03RvlSKzE/export?format=csv
+  list_type: co_med
+
+- abbr: CT
+  name: Connecticut
+  programs: both
+  program_term: cannabis
+  agency: Department of Consumer Protection
+  known_url: https://portal.ct.gov/cannabis
+  # CT publishes its licensed cannabis/medical retail locations as a Socrata dataset
+  # (DBA + street + city + zip); the CSV handler prefers the DBA brand.
+  list_url: https://internal-data.ct.gov/resource/42yd-3x3d.csv
+  list_type: csv
+
+- abbr: DC
+  name: District of Columbia
+  programs: both
+  program_term: cannabis
+  agency: Alcoholic Beverage and Cannabis Administration
+  known_url: https://abca.dc.gov/
+
+- abbr: DE
+  name: Delaware
+  programs: both
+  program_term: cannabis
+  agency: Delaware Marijuana Commissioner
+  known_url: https://omc.delaware.gov/
+
+- abbr: FL
+  name: Florida
+  programs: medical
+  program_term: medical marijuana
+  agency: Office of Medical Marijuana Use
+  known_url: https://knowthefactsmmj.com/
+
+- abbr: GA
+  name: Georgia
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: Georgia Access to Medical Cannabis Commission
+  known_url: ""
+
+- abbr: HI
+  name: Hawaii
+  programs: medical
+  program_term: medical cannabis
+  agency: Hawaii Department of Health
+  known_url: https://health.hawaii.gov/medicalcannabis/
+
+- abbr: IA
+  name: Iowa
+  programs: cbd_only
+  program_term: medical cannabidiol
+  agency: Iowa Department of Health and Human Services
+  known_url: ""
+
+- abbr: ID
+  name: Idaho
+  programs: none
+  program_term: ""
+  agency: ""
+  known_url: ""
+
+- abbr: IL
+  name: Illinois
+  programs: both
+  program_term: cannabis
+  agency: Department of Financial and Professional Regulation
+  known_url: https://idfpr.illinois.gov/
+  # IDFPR's licensed-dispensary roster (the crawler lands on a links page).
+  list_url: https://idfpr.illinois.gov/content/dam/soi/en/web/idfpr/forms/cannabis/all-cannabis-licenses.pdf
+
+- abbr: IN
+  name: Indiana
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: Indiana State Department of Health
+  known_url: ""
+
+- abbr: KS
+  name: Kansas
+  programs: none
+  program_term: ""
+  agency: ""
+  known_url: ""
+
+- abbr: KY
+  name: Kentucky
+  programs: medical
+  program_term: medical cannabis
+  agency: Cabinet for Health and Family Services
+  known_url: https://kymedcan.ky.gov/
+
+- abbr: LA
+  name: Louisiana
+  programs: medical
+  program_term: medical marijuana
+  agency: Louisiana Board of Pharmacy
+  known_url: https://www.pharmacy.la.gov/
+
+- abbr: MA
+  name: Massachusetts
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Control Commission
+  known_url: https://masscannabiscontrol.com/
+  # MA CCC publishes a geocoded SODA CSV of establishments that have commenced operations
+  # (all license types). ma_ccc keeps the active storefronts (Marijuana Retailer + MTC).
+  list_url: https://masscannabiscontrol.com/resource/l_licenses_commence_ops.csv
+  list_type: ma_ccc
+
+- abbr: MD
+  name: Maryland
+  programs: both
+  program_term: cannabis
+  agency: Maryland Cannabis Administration
+  known_url: https://cannabis.maryland.gov/
+
+- abbr: ME
+  name: Maine
+  programs: both
+  program_term: cannabis
+  agency: Office of Cannabis Policy
+  known_url: https://www.maine.gov/dafs/ocp/
+
+- abbr: MI
+  name: Michigan
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Regulatory Agency
+  known_url: https://www.michigan.gov/cra
+
+- abbr: MN
+  name: Minnesota
+  programs: both
+  program_term: cannabis
+  agency: Office of Cannabis Management
+  known_url: https://mn.gov/ocm/
+
+- abbr: MO
+  name: Missouri
+  programs: both
+  program_term: cannabis
+  agency: Division of Cannabis Regulation
+  known_url: https://cannabis.mo.gov/
+  # The licensed-facilities page embeds an ArcGIS Experience map; point straight
+  # at its feature service (the crawler otherwise grabs an unrelated PDF).
+  list_url: https://services6.arcgis.com/Bd4MACzvEukoZ9mR/arcgis/rest/services/DCR_Verified_Dispensary_Map_layer/FeatureServer/0
+
+- abbr: MS
+  name: Mississippi
+  programs: medical
+  program_term: medical marijuana
+  agency: Mississippi State Department of Health
+  known_url: https://www.mmcp.ms.gov/
+
+- abbr: MT
+  name: Montana
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Control Division
+  known_url: https://mtrevenue.gov/cannabis/
+
+- abbr: NC
+  name: North Carolina
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: North Carolina Department of Health and Human Services
+  known_url: ""
+
+- abbr: ND
+  name: North Dakota
+  programs: medical
+  program_term: medical marijuana
+  agency: North Dakota Department of Health and Human Services
+  known_url: https://www.hhs.nd.gov/
+
+- abbr: NE
+  name: Nebraska
+  programs: medical
+  program_term: medical cannabis
+  agency: Nebraska Department of Health and Human Services
+  known_url: https://mcc.nebraska.gov/
+
+- abbr: NH
+  name: New Hampshire
+  programs: medical
+  program_term: medical marijuana
+  agency: New Hampshire Department of Health and Human Services
+  known_url: https://www.dhhs.nh.gov/
+
+- abbr: NJ
+  name: New Jersey
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Regulatory Commission
+  known_url: https://www.nj.gov/cannabis/
+
+- abbr: NM
+  name: New Mexico
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Control Division
+  known_url: https://www.rld.nm.gov/cannabis/
+
+- abbr: NV
+  name: Nevada
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Compliance Board
+  known_url: https://ccb.nv.gov/
+
+- abbr: NY
+  name: New York
+  programs: both
+  program_term: cannabis
+  agency: Office of Cannabis Management
+  known_url: https://cannabis.ny.gov/
+  # OCM "Current OCM Licenses" Socrata dataset, shaped (SoQL $select) and filtered
+  # ($where) to active dispensary licenses so the generic CSV extractor reads it.
+  list_url: "https://data.ny.gov/resource/jskf-tt3q.csv?$select=entity_name%20as%20name%2C%20address_line_1%20as%20address%2C%20city%2C%20zip_code%2C%20business_website%20as%20website&$where=license_type%20like%20%27%25Dispensary%25%27%20AND%20license_status%3D%27Active%27&$limit=5000"
+  list_type: csv
+
+- abbr: OH
+  name: Ohio
+  programs: both
+  program_term: cannabis
+  agency: Division of Cannabis Control
+  known_url: https://com.ohio.gov/divisions-and-programs/cannabis-control/cannabis-control
+  # The crawler picks a portal stub; this is the page with the dispensary table.
+  list_url: https://com.ohio.gov/wps/portal/gov/com/divisions-and-programs/cannabis-control/about-dcc/licenses/dispensaries/dispensary-licenses
+
+- abbr: OK
+  name: Oklahoma
+  programs: medical
+  program_term: medical marijuana
+  agency: Oklahoma Medical Marijuana Authority
+  known_url: https://oklahoma.gov/omma.html
+  # Largest US dispensary market (~2,000 medical, mostly independents). The official OMMA
+  # roster moved behind a JS-gated MedPortal (Salesforce), so there is no static list_url —
+  # discovery is platform-sweep-driven: Dutchie-pool bootstrap (validated 2026-06-18: 9
+  # geo-anchors -> 327 Dutchie dispensaries) + Weedmaps/Leafly for the independent long tail.
+  # Bring-up queued to run after the mg backfill (avoids aggregator-IP contention).
+
+- abbr: OR
+  name: Oregon
+  programs: both
+  program_term: cannabis
+  agency: Oregon Liquor and Cannabis Commission
+  known_url: https://www.oregon.gov/olcc/marijuana/
+  # OLCC's CAMP feature service mixes all license types; filter to retailers
+  # (it also holds a handful of LABORATORY rows).
+  list_url: https://services.arcgis.com/uUvqNMGPm7axC2dD/arcgis/rest/services/dbo_CAMP_Public/FeatureServer/2?where=licenseType%3D%27RECREATIONAL%20RETAILER%27
+
+- abbr: PA
+  name: Pennsylvania
+  programs: medical
+  program_term: medical marijuana
+  agency: Pennsylvania Department of Health
+  known_url: https://www.pa.gov/agencies/health/programs/medical-marijuana.html
+
+- abbr: RI
+  name: Rhode Island
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Control Commission
+  known_url: https://dbr.ri.gov/
+
+- abbr: SC
+  name: South Carolina
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: South Carolina Department of Health and Environmental Control
+  known_url: ""
+
+- abbr: SD
+  name: South Dakota
+  programs: medical
+  program_term: medical marijuana
+  agency: South Dakota Department of Health
+  known_url: https://medcannabis.sd.gov/
+
+- abbr: TN
+  name: Tennessee
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: Tennessee Department of Health
+  known_url: ""
+
+- abbr: TX
+  name: Texas
+  programs: medical
+  program_term: compassionate use
+  agency: Texas Department of Public Safety
+  known_url: https://www.dps.texas.gov/section/compassionate-use-program
+
+- abbr: UT
+  name: Utah
+  programs: medical
+  program_term: medical cannabis
+  agency: Utah Department of Health and Human Services
+  known_url: https://medicalcannabis.utah.gov/
+
+- abbr: VA
+  name: Virginia
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Control Authority
+  known_url: https://www.cca.virginia.gov/
+
+- abbr: VT
+  name: Vermont
+  programs: both
+  program_term: cannabis
+  agency: Cannabis Control Board
+  known_url: https://ccb.vermont.gov/
+
+- abbr: WA
+  name: Washington
+  programs: both
+  program_term: cannabis
+  agency: Liquor and Cannabis Board
+  known_url: https://lcb.wa.gov/
+
+- abbr: WI
+  name: Wisconsin
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: Wisconsin Department of Health Services
+  known_url: ""
+
+- abbr: WV
+  name: West Virginia
+  programs: medical
+  program_term: medical cannabis
+  agency: West Virginia Department of Health and Human Resources
+  known_url: https://omc.wv.gov/
+
+- abbr: WY
+  name: Wyoming
+  programs: cbd_only
+  program_term: medical cannabis
+  agency: Wyoming Department of Health
+  known_url: ""

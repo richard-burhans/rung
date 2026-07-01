@@ -1,0 +1,105 @@
+# Canonical product TYPE (2nd taxonomy level under category_std) -> substring keywords.
+#
+# text.normalize_product_type(name, category, category_std) lowercases + strips the product NAME
+# (plus the raw category, for the platforms whose category carries the form) to alphanumerics, then
+# within the row's category_std returns the FIRST product type below (top-to-bottom = PRIORITY)
+# whose any keyword is a substring; no keyword match within a covered category -> that category's
+# `_defaults` entry if any, else "Unspecified"; a category not listed here -> None (not yet covered).
+# See docs/product_type_hierarchy.md.
+#
+# The NAME is the signal because it's the one field present on all 4.8M rows / every platform
+# (incl. Dutchie, which has no sub-category field). Priority resolves compound names: a
+# "Live Rosin Badder" is Live Rosin (method leads); a "Live Resin Cartridge" never reaches here as
+# Concentrate — its category_std is already Vape, so it matches Vape -> Cartridge.
+
+# Per-category fallback label when no keyword matches (instead of "Unspecified"). Only where the
+# unqualified product genuinely IS a known form: a flower with no Smalls/Shake/etc. qualifier is
+# whole Bud (~83% of flower); a plain pre-roll is a Single joint; a plain capsule is a Capsule.
+_defaults:
+  Flower: Bud
+  Pre-Roll: Single
+  Capsule: Capsule
+
+Vape:
+  Disposable: [disposable, allinone, all in one, aio]
+  Pod: [pod]
+  Cartridge: [cartridge, cart, "510", vape pen, vapepen, pax era]   # the default vape form
+
+Concentrate:
+  Live Rosin: [live rosin, liverosin]
+  Live Resin: [live resin, liquid live, liveresin]
+  Rosin: [rosin]                                    # non-"live" rosin (press / cold-cure)
+  Diamonds: [diamond, thca, crystalline]            # often "diamonds & sauce"
+  Sauce: [sauce, terp sauce, htfse, hcfse]
+  Sugar: [sugar]
+  Badder/Budder: [badder, budder]
+  Shatter: [shatter, pull n snap, pullnsnap]
+  Wax: [wax, honeycomb]
+  Crumble: [crumble]
+  Hash: [bubble hash, ice water, icewater, temple ball, templeball, dry sift, drysift, "hash"]
+  Kief: [kief]
+  RSO/Oil: [rso, rick simpson, ricksimpson, feco, applicator, syringe]
+  Distillate: [distillate, distilate]
+  Isolate: [isolate]
+  Moonrock: [moonrock, moon rock]
+
+Edible:
+  Gummies: [gummy, gummies, gummi, fruit chew, fruitchew, sour, pastille]
+  Chocolate: [chocolate, truffle, cocoa]
+  Baked Goods: [cookie, brownie, krispie, biscuit, baked, muffin, donut]
+  Hard Candy: [hard candy, lollipop, lozenge, caramel, taffy, drops]
+  Capsule: [softgel, capsule]
+  Troche: [troche]
+  Drink Mix: [drink mix, drinkmix, powder, elixir, shot, syrup]
+  Mint: [mints, breath mint]
+
+Flower:                         # default Bud (whole flower) — see _defaults above
+  Smalls: [smalls, small bud, small flower, popcorn, littles]
+  Shake/Trim: [shake, trim]
+  Ground: [ground flower, milled, pre ground, preground]
+  Infused: [infused, moonrock, moon rock]
+  Pre-Pack: [pre pack, prepack, pre packaged, prepackaged]
+
+Pre-Roll:                       # default Single — a plain pre-roll is one joint
+  # NB keywords are alnum-stripped, so avoid bare numerics ("2 " -> "2" matches any size/percent)
+  # and strain names ("diamond" is a strain, not an infusion marker).
+  Infused: [infused, hash hole, hashhole]
+  Blunt: [blunt, cannagar]
+  Pack: [pack]                  # multi-roll packs ("5-pack", "variety pack")
+
+Beverage:
+  Soda/Seltzer: [soda, seltzer, sparkling, carbonated]
+  Tea: [tea]
+  Coffee: [coffee, cold brew, espresso]
+  Lemonade/Juice: [lemonade, juice]
+  Tonic/Shot: [tonic, elixir, shot]
+  Mix: [drink mix, drinkmix, powder]
+
+Tincture:
+  Spray: [spray]
+  Sublingual: [sublingual, sub lingual, dissolvable]
+  Drops/Oral: [drops, dropper, oral, syringe]
+  RSO/FECO: [rso, feco, rick simpson]
+
+Topical:
+  Lotion/Cream: [lotion, cream, moisturizer]
+  Balm/Salve: [balm, salve, ointment]
+  Patch: [patch, transdermal]
+  Lube/Intimate: [lube, intimate, arousal, sensual]
+  Roll-On: [roll on, rollon, roller]
+  Bath: [bath, soak]
+  Stick: [stick]
+
+Capsule:                        # default Capsule (generic) — see _defaults above
+  Softgel: [softgel, soft gel, gel cap, gelcap, gels]
+  Tablet: [tablet]
+  Suppository: [suppositor]
+
+Accessory:
+  Battery: [battery, charger]
+  Grinder: [grinder]
+  Paper/Cone: [rolling paper, papers, cone]
+  Pipe/Bong: [pipe, bong, bowl, rig, bubbler, dabber]
+  Lighter: [lighter, torch]
+  Storage: [jar, bag, container, stash, humidor, pouch]
+  Apparel: [shirt, hat, hoodie, apparel, merch, sticker]

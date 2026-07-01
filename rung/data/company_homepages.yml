@@ -1,0 +1,78 @@
+# Explicit homepage overrides for the recon spider.
+# A non-null value always wins over DB derivation.
+# null means: derive from dispensaries.website using frequency voting.
+# Keys must match canonical_name in the companies table exactly.
+
+Apothecarium Dispensary: https://apothecarium.com
+Ascend Dispensary: https://www.letsascend.com
+Ayr Wellness: null
+Beyond Hello: https://www.beyond-hello.com
+Bloc Dispensary: https://blocdispensary.com
+Columbia Care: https://columbia.care
+Curaleaf: https://curaleaf.com
+Delta 9 Pittsburgh: https://www.delta9pa.com
+Ethos: https://ethoscannabis.com
+Fluent Care: https://getfluent.com
+Hive: https://thehivedispensary.com
+Insa: https://insa.com/pa/
+Keystone Integrated Care: https://www.sunnyside.shop/
+Keystone ReLeaf: https://keystonecannaremedies.com
+Liberty: https://libertycannabis.com
+Local Leaf by Penn Health Group: https://localleafpa.com
+Maitri Medicinals: https://maitrimedicinals.com
+MariMart: null
+Organic Remedies: https://organicremediespa.com
+RISE: https://risecannabis.com
+Restore Integrative Wellness Center: https://restoreiwc.com
+Standard Farms: null
+Sunnyside: https://sunnyside.shop
+Terra Pharm: https://terra-pharm.com
+Terrapin Care Station: null
+Trulieve: https://trulieve.com
+Verilife: https://verilife.com
+Vytal Options: null
+Zen Leaf: https://zenleafdispensaries.com
+
+# ── Illinois operators (multi-state expansion, seeded 2026-06-16). The IDFPR license
+#    PDF roster carries no websites, so recon can't derive homepages — seed the major
+#    operators here. Keys match IL's exact (sometimes inconsistent) canonical_name
+#    spellings. Curaleaf / RISE / Verilife / Zen Leaf already covered by the national
+#    entries above. Homepages live-probed before seeding (all return 200).
+"Sunnyside*": https://www.sunnyside.shop/
+ZenLeaf: https://zenleafdispensaries.com
+Ascend: https://www.letsascend.com
+Ivy Hall: https://www.ivyhalldispensary.com
+NuEra: https://nuera.com
+nuEra: https://nuera.com
+Terrabis: https://terrabis.co
+Windy City Cannabis: https://windycitycannabis.com
+EarthMed: https://www.earthmed.com
+Earthmed: https://www.earthmed.com
+High Profile: https://highprofilecannabis.com
+Revolution Dispensary: https://revolutioncannabis.com
+"Nature’s Care Company": https://naturescarecompany.com
+Mission: https://missiondispensaries.com
+
+# ── Maryland operators (multi-state expansion, seeded 2026-06-16). MD's html roster has no
+#    websites either. Curaleaf / RISE / Verilife / Zen Leaf / Trulieve already covered above.
+#    Homepages live-probed (all 200); Green Goods / Green Point / Remedy skipped (TLS errors).
+Story Cannabis: https://storycannabis.com
+The Apothecarium Dispensary: https://apothecarium.com
+Culta: https://culta.com
+Health for Life: https://www.healthforlifedispensaries.com
+Liberty Cannabis: https://libertycannabis.com
+gLeaf: https://gleaf.com
+Bloom Medicinals: https://bloommedicinals.com
+Mana: https://manasupply.com
+
+# ── Ohio non-Dutchie operators (seeded 2026-06-16). OH's Dutchie operators auto-attribute
+#    homeless via the geo-sweep (no homepage needed), so only seed the jane/sweed/cresco ones
+#    not already covered globally (Curaleaf/Beyond Hello/Sunnyside/Bloom/Zen Leaf/RISE/Trulieve).
+"GTI Ohio, LLC": https://risecannabis.com
+Klutch Cannabis: https://klutchcannabis.com
+Terrasana: https://www.terrasana.com
+
+# ── Florida non-Dutchie operators (seeded 2026-06-16). FL's 392-store Dutchie pool
+#    auto-attributes Ayr/Curaleaf/Parallel/Planet 13/GrowHealthy/Sanctuary/Jungle Boys/
+#    Cookies/Mint/Insa homeless; Trulieve covered by the global entry.
+"GTI (Rise Dispensaries)": https://risecannabis.com

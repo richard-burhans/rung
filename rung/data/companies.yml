@@ -1,0 +1,47 @@
+# Canonical company name -> list of known raw-data aliases.
+# Edit this file to add new aliases as dirty variants are discovered.
+# The seed_companies.py script builds a lookup table from this file.
+# Brands with no known aliases have an empty list.
+
+Apothecarium Dispensary:
+  - Keystone ReLeaf    # rebrand: keystonecannaremedies.com -> shop.apothecarium.com; its 3 PA stores (Allentown/Bethlehem/Stroudsburg) are Apothecarium's
+Ascend Dispensary: []
+Ayr Wellness: []
+Beyond Hello:
+  - Beyond/Hello       # slash used instead of space
+Bloc Dispensary:
+  - Bloc dispensary    # wrong capitalisation of 'dispensary'
+Columbia Care: []
+Curaleaf: []
+Dankley:                      # NY operator under multiple legal-entity / spelling variants
+  - DANKLEY                   # all-caps Weedmaps spelling (Queens store)
+  - Dankley LLC               # legal entity (dankleycanna.com) for the same 2 Dutchie/Weedmaps stores
+  - Diamond Star Group inc.   # legal entity (dankley.com) for the same 2 stores (85 Nassau St + 219-17 Hillside Ave)
+Ethos: []
+Fluent Care: []
+Hive: []
+Insa: []
+Liberty: []
+Local Leaf by Penn Health Group: []
+Maitri Medicinals: []
+MariMart: []
+Organic Remedies: []
+RISE:
+  - Rise               # wrong capitalisation
+Restore Integrative Wellness Center: []
+Standard Farms: []
+Sunnyside:
+  # Cresco's PA stores are licensed under several permit entities but all operate as the
+  # Sunnyside retail brand (one shop.sunnyside.shop store list). Without these the legal-entity
+  # roster rows seed as their own companies and each re-scrapes the whole Sunnyside list, so the
+  # locations triplicate; dedupe folds them by address but the address-less rows leak through.
+  - Delta 9                    # roster "Delta 9 Pittsburgh" (city stripped by extract_brand); not the CA "Delta 9 THC" operator
+  - Keystone Integrated Care   # roster entity in Beaver Falls; its roster website is literally sunnyside.shop
+Terra Pharm: []
+Terrapin Care Station: []
+Trulieve:
+  - Harvest of Whitehall   # Trulieve acquired Harvest HOC; harvesthoc.com redirects to trulieve.com and its 21 PA stores are the same physical Trulieve PA stores (identical addresses + Magento store-view codes), already handled via trulieve_rest — fold so the duplicate licensee collapses instead of yielding 21 menu-less rows
+Verilife:
+  - Verilfe            # transposition typo (missing 'i')
+Vytal Options: []
+Zen Leaf: []
