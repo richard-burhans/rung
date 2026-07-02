@@ -1,6 +1,8 @@
 """Tests for the Stage-3 store_products snapshot persistence: wholesale replace,
 the empty-result guard, and the menu-target query over company_stores."""
 
+import psycopg
+import pytest
 from conftest import pg_conn
 
 from rung import db
@@ -95,12 +97,14 @@ def test_modest_drop_is_not_treated_as_partial() -> None:
 
 def test_terpenes_and_variants_round_trip_as_json() -> None:
     conn = _conn()
+    # mg-dosed product: per-dose mg columns, no percent (the two units are mutually exclusive per
+    # cannabinoid — enforced by store_products_potency_unit_check, see the negative test below).
     record = _product(
         "Lemon Haze",
         terpenes=[{"name": "limonene", "value": 1.2}],
         variants=[{"option": "3.5g", "price": 35.0}],
         price=35.0,
-        thc=21.5,
+        thc=None,
         thc_mg=100.0,
         cbd_mg=5.0,
     )
@@ -114,7 +118,35 @@ def test_terpenes_and_variants_round_trip_as_json() -> None:
     assert row is not None
     assert row[0] == [{"name": "limonene", "value": 1.2}]
     assert row[1] == [{"option": "3.5g", "price": 35.0}]
-    assert (row[2], row[3], row[4], row[5]) == (35.0, 21.5, 100.0, 5.0)
+    assert (row[2], row[3], row[4], row[5]) == (35.0, None, 100.0, 5.0)
+
+
+def test_potency_unit_check_rejects_both_percent_and_mg_for_one_cannabinoid() -> None:
+    """store_products_potency_unit_check: a cannabinoid is a percent OR a per-dose mg, never both
+    (CLAUDE.md potency convention). The DB now enforces it — a direct write of both is rejected,
+    not silently stored (the gap audit finding H1, 2026-07-02)."""
+    conn = _conn()
+    base = (
+        "INSERT INTO store_products "
+        "(company_id, state, store_key, platform, external_id, source, scraped_at, {cols}) "
+        "VALUES (1, 'PA', 'sweedpos:42', 'sweedpos', '42', 'sweedpos_api', '2026-01-01T00:00:00Z', {vals})"
+    )
+    # thc + thc_mg together → rejected.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(base.format(cols="thc, thc_mg", vals="21.5, 100.0"))
+    conn.rollback()  # a failed statement poisons the transaction; reset before reusing the conn.
+    # cbd + cbd_mg together → rejected.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(base.format(cols="cbd, cbd_mg", vals="2.0, 10.0"))
+    conn.rollback()
+    # A percent-only row and an mg-only row are both fine (no violation raised).
+    conn.execute(base.format(cols="thc, cbd", vals="21.5, 0.5"))
+    conn.execute(
+        base.format(cols="thc_mg, cbd_mg", vals="100.0, 5.0").replace(
+            "'sweedpos:42'", "'sweedpos:43'"
+        )
+    )
+    conn.commit()
 
 
 def test_normalized_fields_round_trip_and_view_derives_price_per_g() -> None:

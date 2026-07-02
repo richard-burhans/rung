@@ -1,6 +1,37 @@
 """Tests for state_lists pure helpers (no network): link classify / score / harvest."""
 
-from rung.sources import state_lists as sl
+import ast
+from pathlib import Path
+
+from rung.sources import extract, state_lists as sl
+
+
+def test_classify_only_returns_handled_list_types() -> None:
+    """Contract 8 (static): every value ``_classify`` can return is in ``HANDLED_LIST_TYPES``.
+
+    The example-based test below pins the mapping; this one AST-extracts *every* string literal
+    ``_classify`` returns and asserts the whole set is a subset of what ``extract.extract_records``
+    dispatches on — so a new ``return "socrata"`` with no matching handler fails here, not silently
+    at scrape time. (The per-state custom types — ca_dcc/az_dhs/… — are added to the Literal, not
+    produced by ``_classify``, so they don't need to appear here.)
+    """
+    tree = ast.parse(Path(sl.__file__).read_text(encoding="utf-8"))
+    classify = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_classify"
+    )
+    returned = {
+        node.value.value
+        for node in ast.walk(classify)
+        if isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+    assert returned, "no literal returns found in _classify — extraction broke"
+    assert returned <= extract.HANDLED_LIST_TYPES, (
+        f"_classify returns list_type(s) with no extractor: {sorted(returned - extract.HANDLED_LIST_TYPES)}"
+    )
 
 
 def test_classify_maps_url_to_resource_type() -> None:

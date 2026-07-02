@@ -12,10 +12,12 @@ from pydantic import BaseModel
 
 from rung.models import DispensaryRecord
 
-# The local Ollama model SmartScraperGraph runs against. Override with the DISPENSARY_OLLAMA_MODEL
-# env var (e.g. a bigger model for hard pages, or one you've already pulled) — same env-var
-# override convention as http's DISPENSARY_IMPERSONATE.
-_OLLAMA_MODEL = os.environ.get("DISPENSARY_OLLAMA_MODEL") or "llama3.2"
+# The local Ollama model SmartScraperGraph runs against. Override with the RUNG_OLLAMA_MODEL env
+# var (legacy DISPENSARY_OLLAMA_MODEL still honored) — e.g. a bigger model for hard pages, or one
+# you've already pulled — the same env-var override convention as http's RUNG_IMPERSONATE.
+_OLLAMA_MODEL = (
+    os.environ.get("RUNG_OLLAMA_MODEL") or os.environ.get("DISPENSARY_OLLAMA_MODEL") or "llama3.2"
+)
 
 _GRAPH_CONFIG = {
     "llm": {

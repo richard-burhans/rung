@@ -130,6 +130,37 @@ def test_complete_only_succeeds_for_the_holding_worker() -> None:
     assert conn.execute("SELECT status FROM jobs WHERE id=%s", (job.id,)).fetchone() == ("done",)
 
 
+def test_reclaim_isolation_holds_across_two_live_connections() -> None:
+    # The same resurrection race as below, but the reclaim and the orphaned completion happen on
+    # SEPARATE connections — the real shape workers hit. Proves the worker-scoped complete() guard
+    # honours a reclaim COMMITTED by another connection, not just same-connection state.
+    conn_a = _conn()  # w1's connection
+    queue.enqueue(conn_a, "t", "k")
+    conn_a.commit()
+    conn_b = pg_conn_sharing(conn_a)  # w2's connection, same schema
+
+    job = queue.claim_next(conn_a, "t", "w1")
+    assert job is not None
+    conn_a.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours'")  # w1 looks stale
+    queue.requeue_stale(conn_a, "t")                      # claimed -> pending
+    conn_a.execute("UPDATE jobs SET scheduled_at = now()")  # clear the requeue jitter
+    conn_a.commit()                                       # w2 must see the freed row
+
+    reclaim = queue.claim_next(conn_b, "t", "w2")         # w2 reclaims on its OWN connection
+    assert reclaim is not None and reclaim.id == job.id
+
+    # w1's late completion (conn_a) must be a no-op now that w2 (conn_b) holds the reclaim.
+    assert queue.complete(conn_a, job.id, "done", worker="w1") is False
+    conn_a.commit()
+    assert queue.complete(conn_b, reclaim.id, "done", worker="w2") is True
+    conn_b.commit()
+
+    status, holder = conn_a.execute(
+        "SELECT status, claimed_by FROM jobs WHERE id = %s", (job.id,)
+    ).fetchone()
+    assert (status, holder) == ("done", "w2")  # w2 won; w1's orphaned write did not clobber it
+
+
 def test_requeued_reclaim_orphans_the_original_workers_completion() -> None:
     # The resurrection race: a slow-but-alive w1's claim is requeued (looks stale) and reclaimed by
     # w2; w1's late completion must be a no-op so the orphan rolls back rather than clobbering w2.

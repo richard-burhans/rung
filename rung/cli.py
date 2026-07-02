@@ -101,10 +101,18 @@ def find_lists(only: str, force: bool) -> None:
 @click.option("--only", default="", help="Comma-separated state abbrs to limit extraction (e.g. NY,CO).")
 @click.option("--render", is_flag=True, help="Render JS-driven pages in Chrome (pydoll) when static extraction yields nothing.")
 @click.option("--ai", is_flag=True, help="Use the AI fallback (needs local Ollama) when static extraction yields nothing.")
-def scrape_states(only: str, render: bool, ai: bool) -> None:
+@click.option(
+    "--record-history", is_flag=True,
+    help="Also append store-lifecycle history (state_roster observations into store_locations + "
+    "store_observations) alongside each non-empty state replace — the roster leg of the "
+    "open/close/acquired time series (cf. scrape-company-stores --record-history).",
+)
+def scrape_states(only: str, render: bool, ai: bool, record_history: bool) -> None:
     """Extract dispensary records from each state's discovered list URL."""
     abbrs = {a.strip().upper() for a in only.split(",") if a.strip()} or None
-    asyncio.run(_run_scrape_states(only=abbrs, use_ai=ai, use_render=render))
+    asyncio.run(_run_scrape_states(
+        only=abbrs, use_ai=ai, use_render=render, record_history=record_history,
+    ))
 
 
 @click.command("scrape-company-stores")
@@ -123,10 +131,19 @@ def scrape_states(only: str, render: bool, ai: bool) -> None:
     "a better rung a thin winner was shadowing. Slow (runs every rung incl. browser/AI); pair "
     "with --only for a targeted refresh.",
 )
-def scrape_company_stores_cmd(state: str, ai: bool, only: str, remax: bool) -> None:
+@click.option(
+    "--record-history", is_flag=True,
+    help="Also append store-lifecycle history (store_locations + append-only store_observations) "
+    "alongside the snapshot — start accumulating the open/close/acquired time series (the store-level "
+    "twin of scrape-menus --record-history).",
+)
+def scrape_company_stores_cmd(
+    state: str, ai: bool, only: str, remax: bool, record_history: bool
+) -> None:
     """Scrape each company's OWN site for its stores via the access-method registry."""
     asyncio.run(_run_company_stores(
         state=state.strip().upper(), use_ai=ai, only=_only_terms(only), remax=remax,
+        record_history=record_history,
     ))
 
 
@@ -367,7 +384,8 @@ async def _run_find_lists(only: set[str] | None = None, force: bool = False) -> 
 
 
 async def _run_scrape_states(
-    only: set[str] | None = None, use_ai: bool = False, use_render: bool = False
+    only: set[str] | None = None, use_ai: bool = False, use_render: bool = False,
+    record_history: bool = False,
 ) -> None:
     from rung.sources.extract import (
         print_extract_report,
@@ -378,7 +396,9 @@ async def _run_scrape_states(
     db.create_tables(conn)
     scope = f"{len(only)} states" if only else "all states with a discovered list URL"
     click.echo(f"Extracting dispensary records for {scope}…", err=True)
-    results = await run_extract_states(conn, only=only, use_ai=use_ai, use_render=use_render)
+    results = await run_extract_states(
+        conn, only=only, use_ai=use_ai, use_render=use_render, record_history=record_history,
+    )
     conn.close()
     print_extract_report(results)
 
@@ -390,7 +410,8 @@ def _only_terms(only: str) -> set[str] | None:
 
 
 async def _run_company_stores(
-    state: str, use_ai: bool = False, only: set[str] | None = None, remax: bool = False
+    state: str, use_ai: bool = False, only: set[str] | None = None, remax: bool = False,
+    record_history: bool = False,
 ) -> None:
     run_company_stores = _stage("company_stores.run")
     print_company_store_report = _stage("company_stores.print")
@@ -403,7 +424,9 @@ async def _run_company_stores(
     # Persistence happens inside run_company_stores, per claimed job, via the
     # guarded keep-the-best replace (db.replace_company_stores): a flaky low-yield
     # re-run can't clobber good data, and a concurrent run claims other companies.
-    results = await run_company_stores(conn, state, use_ai=use_ai, only=only, remax=remax)
+    results = await run_company_stores(
+        conn, state, use_ai=use_ai, only=only, remax=remax, record_history=record_history
+    )
     conn.close()
     print_company_store_report(results, state)
 
@@ -476,7 +499,7 @@ async def _run_worker(
             for abbr in states:
                 if run_company_stores is not None:
                     click.echo(f"[worker] draining company-stores for {abbr}…", err=True)
-                    results = await run_company_stores(conn, abbr)
+                    results = await run_company_stores(conn, abbr, record_history=record_history)
                     _stage("company_stores.print")(results, abbr)
                 if run_store_menus is not None:
                     click.echo(f"[worker] draining menus for {abbr}…", err=True)

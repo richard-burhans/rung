@@ -76,7 +76,9 @@ def test_scrape_company_stores_default_state_pa(monkeypatch) -> None:
     calls, fake = _recorder()
     monkeypatch.setattr(cli, "_run_company_stores", fake)
     CliRunner().invoke(cli.scrape_company_stores_cmd, [])
-    assert calls == [{"state": "PA", "use_ai": False, "only": None, "remax": False}]
+    assert calls == [
+        {"state": "PA", "use_ai": False, "only": None, "remax": False, "record_history": False}
+    ]
 
 
 def test_scrape_company_stores_remax_flag(monkeypatch) -> None:
@@ -119,7 +121,9 @@ def test_scrape_states_flags_default_off(monkeypatch) -> None:
     calls, fake = _recorder()
     monkeypatch.setattr(cli, "_run_scrape_states", fake)
     CliRunner().invoke(cli.scrape_states, ["--only", "or"])
-    assert calls[0] == {"only": {"OR"}, "use_ai": False, "use_render": False}
+    assert calls[0] == {
+        "only": {"OR"}, "use_ai": False, "use_render": False, "record_history": False,
+    }
 
 
 def test_bootstrap_dutchie_requires_state() -> None:
@@ -226,7 +230,7 @@ def test_worker_drains_each_state_both_stages(monkeypatch) -> None:
     _bind_test_conn(monkeypatch)
     seen: list[tuple[str, str]] = []
 
-    async def _fake_company(_conn, abbr):
+    async def _fake_company(_conn, abbr, **_kw):
         seen.append(("company", abbr))
         return []
 

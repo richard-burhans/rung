@@ -44,15 +44,22 @@ def test_ollama_model_defaults_and_honors_env(monkeypatch) -> None:
 
     from rung.sources import ai_fallback
 
+    monkeypatch.delenv("RUNG_OLLAMA_MODEL", raising=False)
     monkeypatch.delenv("DISPENSARY_OLLAMA_MODEL", raising=False)
     importlib.reload(ai_fallback)
     assert ai_fallback._OLLAMA_MODEL == "llama3.2"  # default
     assert ai_fallback._GRAPH_CONFIG["llm"]["model"] == "ollama/llama3.2"
 
-    monkeypatch.setenv("DISPENSARY_OLLAMA_MODEL", "llama3.1:70b")
+    monkeypatch.setenv("RUNG_OLLAMA_MODEL", "llama3.1:70b")
     importlib.reload(ai_fallback)
     assert ai_fallback._OLLAMA_MODEL == "llama3.1:70b"  # env override wins
     assert ai_fallback._GRAPH_CONFIG["llm"]["model"] == "ollama/llama3.1:70b"
+
+    # Legacy env var is still honored (backward-compat) when the new one is unset.
+    monkeypatch.delenv("RUNG_OLLAMA_MODEL", raising=False)
+    monkeypatch.setenv("DISPENSARY_OLLAMA_MODEL", "llama3.1:8b")
+    importlib.reload(ai_fallback)
+    assert ai_fallback._OLLAMA_MODEL == "llama3.1:8b"
 
     monkeypatch.delenv("DISPENSARY_OLLAMA_MODEL", raising=False)
     importlib.reload(ai_fallback)  # restore module state for other tests

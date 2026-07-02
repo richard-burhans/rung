@@ -102,6 +102,30 @@ def geo_key(
     return f"@{round(latitude, _GEO_PRECISION)},{round(longitude, _GEO_PRECISION)}|{zip5}"
 
 
+def location_key(
+    latitude: float | None, longitude: float | None,
+    address: str | None, zip_code: str | None,
+) -> str:
+    """The store-history physical-location identity: :func:`geo_key`, with a GUARDED
+    :func:`address_key` fallback; '' when the row can't identify a location.
+
+    The guard exists because some state rosters put a non-address in the address field —
+    MD stores a bare COUNTY ("Harford", no street, no zip; live-verified 2026-07-02: 119
+    MD roster rows collapsed to 23 county-level keys). An ungated ``address_key`` would
+    merge distinct stores into one pseudo-location and fabricate operator-change events.
+    So the address fallback requires BOTH a house-number-bearing address (a digit) and a
+    5-digit zip; anything weaker returns '' (unidentifiable — skip, don't guess). See
+    docs/store_history_design.md.
+    """
+    key = geo_key(latitude, longitude, zip_code)
+    if key:
+        return key
+    zip5 = (zip_code or "").strip()[:5]
+    if len(zip5) != 5 or not any(ch.isdigit() for ch in (address or "")):
+        return ""
+    return address_key(address, zip_code)
+
+
 # Same-operator cross-platform geocode-drift merge radius. The tight 11 m geo_key misses one case:
 # the SAME store geocoded > 11 m apart by two platforms (Weedmaps vs Dutchie). Measured nationwide, a
 # store's nearest same-operator cross-platform neighbour is either < ~100 m (the same rooftop) or km+

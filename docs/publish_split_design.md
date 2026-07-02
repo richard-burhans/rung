@@ -2,7 +2,7 @@
 
 **Status:** Phases 1–4a + 5 done on branch `refactor/publish-split-seam`. The two-package split is
 functionally complete and test-enforced: seam + CLI routing (1–2), honest-by-default HTTP (3a), the
-private overlay carved into `dispensary_scraper_intel` (3b), the dataset partitioned with a leak
+private overlay carved into `rung_intel` (3b), the dataset partitioned with a leak
 guard (4a), and the ARCHITECTURE/README/CLAUDE docs swept to the two-package structure (5).
 **Publishing — tooled (done).** `scripts/build_public_repo.py` assembles the public framework repo
 (the `rung` package + `examples/` + the framework tests + core docs, with a public-only
@@ -80,7 +80,7 @@ move is localized.
 | `sources/homepage_discovery.py` | Generic web-search homepage finder. |
 | `sources/dedupe.py` | Generic address/geo dedup algorithm. |
 
-### Private overlay (`dispensary_scraper_intel`)
+### Private overlay (`rung_intel`)
 
 | Module | Why private |
 |---|---|
@@ -137,13 +137,13 @@ A string-keyed registry of **proprietary stage implementations**, discovered at 
 - `load_plugins() -> list[str]` — idempotent; iterate the entry-point group, import+invoke each
   registrar (side-effect registration). Called once at CLI startup.
 - `StageNotAvailable` — raised by a stub when an unplugged proprietary stage is invoked, with a
-  `pip install dispensary-scraper-intel` hint.
+  `pip install rung-intel` hint.
 
 The private package declares in *its* `pyproject.toml`:
 
 ```toml
 [project.entry-points."rung.plugins"]
-intel = "dispensary_scraper_intel.intel_plugin:register_all"
+intel = "rung_intel.intel_plugin:register_all"
 ```
 
 `register_all()` calls `registry.register("company_stores.run", run_company_stores)`, etc. — the
@@ -177,7 +177,7 @@ gate and a `/pre-pr-audit`.
   the example demo plugin ships under `examples/` so an outside clone can prove the seam without the
   real overlay.)*
 - **Phase 3 — extract the private package — DONE:** the private modules moved into the sibling
-  `dispensary_scraper_intel/` package (flat) with its own `pyproject.toml` + entry point; public core
+  `rung_intel/` package (flat) with its own `pyproject.toml` + entry point; public core
   imports it only via the entry-point group; public tests run with the plugin **absent** (stubs)
   and **present** (real). The 3b execution map below records the as-run move.
 - **Phase 4 — assets + publish tooling — DONE (4a):** the proprietary `data/*.yml` moved into the
@@ -193,7 +193,7 @@ The 20 private modules and every reference to them, so the carve-out is mechanic
 **Move (20):** `company_stores`, `company_store_fetch`, `company_store_extractors`, `menus`,
 `menu_extractors`, `compare`, `recon`, `bootstrap`, `intel_plugin`, `dev/analyze`, and the platform
 helpers `dutchie`/`dutchie_plus`/`weedmaps`/`leafly`/`sweedpos`/`trulieve`/`cresco`/`curaleaf`/
-`fluent`/`hytiva` → into `dispensary_scraper_intel/` (flat; recommend dropping the `sources/`/`dev/`
+`fluent`/`hytiva` → into `rung_intel/` (flat; recommend dropping the `sources/`/`dev/`
 nesting).
 
 **References to rewrite (from the AST scan):**
@@ -207,11 +207,11 @@ nesting).
 - *Scripts (3, themselves private-side → move in Phase 4):* `escalation_gate.py`→weedmaps,
   `pool_gap_audit.py`→{company_store_extractors,dutchie,leafly,weedmaps}, `roster_scorecard.py`→compare.
 
-**Steps:** (1) create `dispensary_scraper_intel/` + its `pyproject.toml` (depends on
+**Steps:** (1) create `rung_intel/` + its `pyproject.toml` (depends on
 `rung`; **declares the `rung.plugins` entry point** — moved off the
 public pyproject) and a root `[tool.uv.workspace]` with both members; (2) `git mv` the 20 modules
 flat; (3) rewrite imports — `rung.sources.X` / `rung.<priv>` /
-`rung.dev.analyze` (X,priv ∈ private) → `dispensary_scraper_intel.X`; **leave
+`rung.dev.analyze` (X,priv ∈ private) → `rung_intel.X`; **leave
 `from rung import <public>` untouched**; (4) rewrite the 16 tests' + 3 scripts'
 private imports; (5) `uv sync` (workspace) → entry point rediscovered; (6) rework
 `test_import_layering.py` — its `PACKAGE_DIR` scan + PUBLIC/PRIVATE sets become a *cross-package*
@@ -239,14 +239,14 @@ The move is mechanical but NOT a blanket sed. Three things the high-level map mi
    import edge, so the invariant holds.
 2. **recon's public bare-import.** `recon.py` does `from rung.sources import
    homepage_discovery` — and homepage_discovery is **public** (stays in `sources/`). So a blanket
-   `from rung.sources import → dispensary_scraper_intel import` is WRONG. Rewrite only the
+   `from rung.sources import → rung_intel import` is WRONG. Rewrite only the
    per-private-name dotted forms (`rung.sources.<PRIV>`), and handle the 4 all-private
    bare blocks explicitly (`bootstrap`, `company_store_fetch`, `company_stores`, `menus`); leave recon's
    homepage_discovery line alone.
 3. **Selective import rewrites.** Most moved modules import only *public* modules (db/http/models/text/
    addresses/normalize/dedupe/ai_fallback/homepage_discovery/browser/access/queue/registry) which STAY
    `rung.*`. Only these have private→private edges to rewrite: `bootstrap` (dutchie,leafly,
-   weedmaps,company_store_extractors), `intel_plugin` (bootstrap,analyze→`dispensary_scraper_intel.analyze`,
+   weedmaps,company_store_extractors), `intel_plugin` (bootstrap,analyze→`rung_intel.analyze`,
    company_stores,compare,menus,recon), `company_store_fetch` (dutchie_plus,hytiva,company_store_extractors),
    `company_stores` (the 7-module bare block + company_store_extractors + company_store_fetch), `menus`
    (the 8-module bare block + menu_extractors). `compare`/`recon`/`menu_extractors`/`analyze`/`company_store_extractors`

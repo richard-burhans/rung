@@ -2,13 +2,14 @@
 
 The registry is the boundary between the public pipeline shell (``cli.py``) and the proprietary
 stage implementations (Stage-2/3 scraping catalogs, the comparison intel, platform recon) that
-ship in the private ``dispensary_scraper_intel`` overlay. The public core must run with those
+ship in the private ``rung_intel`` overlay. The public core must run with those
 stages *unplugged* — resolving an unplugged stage yields a stub that raises a clear, install-hinted
 error only when invoked — and a private package plugs the real implementations in via the
 ``rung.plugins`` entry-point group. See docs/publish_split_design.md.
 """
 
 import ast
+import importlib.metadata
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from rung import cli, registry
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CLI_PATH = _REPO_ROOT / "rung" / "cli.py"
-_PLUGIN_PATH = _REPO_ROOT / "dispensary_scraper_intel" / "dispensary_scraper_intel" / "intel_plugin.py"
+_PLUGIN_PATH = _REPO_ROOT / "rung_intel" / "rung_intel" / "intel_plugin.py"
 
 
 def _stage_names_resolved_by_cli() -> set[str]:
@@ -84,7 +85,7 @@ def test_unregistered_resolves_to_stub_that_raises_only_when_called() -> None:
         stub()
     message = str(exc.value)
     assert "missing-stage" in message
-    assert "dispensary-scraper-intel" in message  # carries the install hint
+    assert "rung-intel" in message  # carries the install hint
 
 
 def test_register_override_replaces() -> None:
@@ -191,6 +192,30 @@ def test_seam_name_contract_cli_resolves_exactly_what_the_overlay_registers() ->
     )
 
 
+def test_rung_plugins_entry_point_is_really_declared_and_loads() -> None:
+    """End-to-end packaging guard: the overlay's ``rung.plugins`` entry point must be declared in the
+    INSTALLED distribution metadata AND actually register the proprietary stages.
+
+    The ``load_plugins`` tests above monkeypatch ``importlib.metadata.entry_points``, so they cover the
+    discovery LOGIC but not the real ``[project.entry-points."rung.plugins"]`` stanza in the overlay's
+    pyproject. A deleted/typo'd stanza or a renamed ``register_all`` would leave every one of those
+    green while breaking the seam at runtime (every proprietary CLI verb → ``StageNotAvailable``). This
+    exercises the UNMONKEYPATCHED path so that packaging regression can't slip through."""
+    if not _PLUGIN_PATH.exists():
+        pytest.skip("overlay absent — public-repo build")
+    declared = {
+        ep.name for ep in importlib.metadata.entry_points(group=registry.ENTRY_POINT_GROUP)
+    }
+    assert "intel" in declared, (
+        f"the overlay's {registry.ENTRY_POINT_GROUP!r} entry point is not declared in the installed "
+        f"metadata (check rung_intel/pyproject.toml); found {sorted(declared)}"
+    )
+    loaded = registry.load_plugins(force=True)  # REAL discovery — no monkeypatch
+    assert "intel" in loaded
+    # the entry point's registrar actually plugged the proprietary stages in (not just discovered)
+    assert {"company_stores.run", "menus.run", "compare.run", "recon.run"} <= registry.registered_names()
+
+
 def test_overlay_absent_cli_proprietary_command_degrades_end_to_end(monkeypatch) -> None:
     # Drive a proprietary verb through the real CLI with the overlay unplugged: it must surface
     # StageNotAvailable (with the install hint), not ImportError or a silent no-op.
@@ -199,4 +224,4 @@ def test_overlay_absent_cli_proprietary_command_degrades_end_to_end(monkeypatch)
     result = CliRunner().invoke(cli.bootstrap_dutchie_cmd, ["--state", "PA"])
     assert result.exit_code != 0
     assert isinstance(result.exception, registry.StageNotAvailable)
-    assert "dispensary-scraper-intel" in str(result.exception)
+    assert "rung-intel" in str(result.exception)

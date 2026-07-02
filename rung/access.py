@@ -1,9 +1,9 @@
 """Cost-ranked access-method ladder with a persisted, self-healing winner.
 
-Every extraction target — a company's stores, a state's dispensary list, a state
-agency's landing page — can be reached several ways that differ in expense. This
-module runs the cheapest method that works, remembers it per target, and re-walks
-the ladder only when that winner fails or goes stale.
+Every extraction target — an entity's own site, a directory listing, an index or
+landing page — can be reached several ways that differ in expense. This module runs
+the cheapest method that works, remembers it per target, and re-walks the ladder only
+when that winner fails or goes stale.
 
 Persistence lives in the `access_methods` table
 (db.record_access_attempt / get_access_winner).

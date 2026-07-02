@@ -99,6 +99,17 @@ def test_geo_key_merges_same_rooftop_but_not_a_110m_neighbour() -> None:
     assert neighbour != near_a
 
 
+def test_location_key_prefers_coords_and_guards_the_address_fallback() -> None:
+    # Coords present → geo_key wins.
+    assert dedupe.location_key(40.7128, -74.006, "5 Main St", "10001") == "@40.7128,-74.006|10001"
+    # No coords, real street + zip → guarded address_key fallback.
+    assert dedupe.location_key(None, None, "5 Main St", "10001") == dedupe.address_key("5 Main St", "10001")
+    # No coords, a bare COUNTY (no house number) → unidentifiable, '' (don't fabricate a location).
+    assert dedupe.location_key(None, None, "Harford", "21001") == ""
+    # A real street but no 5-digit zip → also '' (the guard needs both).
+    assert dedupe.location_key(None, None, "5 Main St", None) == ""
+
+
 def _insert_geo(conn, company_id, canonical, name, address, zip_code, lat, lng) -> None:
     db.insert_company_store(
         conn,

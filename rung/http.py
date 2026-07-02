@@ -6,18 +6,21 @@ from curl_cffi.requests import AsyncSession
 # makes no attempt to defeat a target's bot detection, so running the published code with defaults
 # does not circumvent an access control (see docs/publish_split_design.md, "no target + no
 # evasion"). The private overlay enables it at plugin load (intel_plugin.register_all ->
-# set_impersonation), and a public user may opt in explicitly via the DISPENSARY_IMPERSONATE env
-# var (then health-check the profile against Cloudflare with the private check_impersonation tool).
+# set_impersonation), and a public user may opt in explicitly via the RUNG_IMPERSONATE env var
+# (legacy DISPENSARY_IMPERSONATE still honored), then health-check the profile against Cloudflare
+# with the private check_impersonation tool.
 # When off, make_session sends an honest, self-identifying User-Agent.
 #
 # The anti-throttle machinery (the adaptive 406 cooldown + the 406/429 retry + per-request proxy
 # rotation) is NOT here — it is private evasion know-how and lives in
-# dispensary_scraper_intel.aggregator_http (+ the overlay proxy pool). This module is the honest,
+# rung_intel.aggregator_http (+ the overlay proxy pool). This module is the honest,
 # generic session chokepoint only.
 HONEST_USER_AGENT = (
     "rung/0.1 (+https://github.com/richard-burhans/rung)"
 )
-_impersonate: str | None = os.environ.get("DISPENSARY_IMPERSONATE") or None
+_impersonate: str | None = (
+    os.environ.get("RUNG_IMPERSONATE") or os.environ.get("DISPENSARY_IMPERSONATE") or None
+)
 
 
 def set_impersonation(profile: str | None) -> None:
@@ -47,7 +50,7 @@ def make_session(proxy: str | None = None) -> AsyncSession:
     ``None`` (the default) goes direct. A tunnelling proxy composes with ``impersonate`` — the
     fingerprint travels end-to-end — but a TLS-terminating (MITM) proxy would defeat it. Forwarding a
     URL is generic; the pool that *picks/rotates/benches* URLs is private
-    (``dispensary_scraper_intel.proxy``).
+    (``rung_intel.proxy``).
 
     Usage::
 

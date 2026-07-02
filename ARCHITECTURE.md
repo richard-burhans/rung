@@ -31,6 +31,27 @@ Stages 2 and 3 route through a generic **access-method registry** (`access.py`):
 cost-ranked ladder of extraction methods per target, with a persisted winner and
 self-healing re-exploration.
 
+## Reusable engine vs the reference pipeline
+
+Within the public core, two concerns coexist — worth distinguishing for anyone reusing `rung`
+in a different domain:
+
+- **Reusable engine (domain-agnostic).** `access` (the cost-ranked method ladder), `queue` (the
+  `FOR UPDATE SKIP LOCKED` work queue), `registry` (the plugin seam), `rate_limit` (the cross-worker
+  token bucket), `http` (the honest session chokepoint), `browser` (the pydoll primitives), plus the
+  **generic-infra tables** in `db` (`jobs`, `access_methods`, `token_buckets`, `proxies`,
+  `proxy_tiers`). Reuse these for any scraping domain.
+- **Reference pipeline (the dispensary application that exercises the engine).** The Stage-1 roster
+  extractors (`sources/{extract, state_lists, state_search, homepage_discovery, ai_fallback,
+  dedupe}`), the **domain schema + records** (`db`'s `dispensaries`/`company_stores`/`store_products`/
+  `state_programs` tables + `models`), `seed_companies`, and the `cli` front-end.
+
+The boundary is **conceptual, not a clean package edge**: `db`/`models`/`text`/`normalize` are shared
+and domain-flavored — the engine imports `db` for its generic tables even though `db` also defines the
+domain ones. A physical `rung.engine`/`rung.pipeline` split would first have to decompose those shared
+modules (and would break public import paths), so it is deliberately deferred; the split lives as this
+documented grouping.
+
 ## Layers & abstractions
 
 **Base layer** (no internal deps — each imports only third-party libs):
@@ -38,7 +59,7 @@ self-healing re-exploration.
 | Module | Defines | Role |
 |---|---|---|
 | `models.py` | `DispensaryRecord`, `CompanyReconRecord`, `CompanyStoreRecord`, `StoreProductRecord`, `StateProgramRecord` | Canonical home of the **persisted** record dataclasses. |
-| `http.py` | `make_session()`, `set_impersonation()`/`current_impersonation()`, `HONEST_USER_AGENT` | The honest curl_cffi `AsyncSession` factory — the single session chokepoint (enforced by `tests/test_http.py`), nothing else. **Browser TLS impersonation is opt-in; the public default is honest** (a self-identifying `HONEST_USER_AGENT`, no fingerprint spoofing) so the published core circumvents nothing by default (`docs/publish_split_design.md`). The private overlay calls `set_impersonation(...)` at plugin load (the Chrome-profile choice + `DISPENSARY_IMPERSONATE` pin + the `check_impersonation` health-check live on the private side); a public user may opt in via `DISPENSARY_IMPERSONATE`. `make_session(proxy=…)` forwards a CONNECT-tunnel URL (generic); the pool that picks/rotates it is private. **The anti-throttle machinery is NOT here** — it is private (in the overlay); imports only third-party (no internal deps). |
+| `http.py` | `make_session()`, `set_impersonation()`/`current_impersonation()`, `HONEST_USER_AGENT` | The honest curl_cffi `AsyncSession` factory — the single session chokepoint (enforced by `tests/test_http.py`), nothing else. **Browser TLS impersonation is opt-in; the public default is honest** (a self-identifying `HONEST_USER_AGENT`, no fingerprint spoofing) so the published core circumvents nothing by default (`docs/publish_split_design.md`). The private overlay calls `set_impersonation(...)` at plugin load (the Chrome-profile choice + `RUNG_IMPERSONATE` pin + the `check_impersonation` health-check live on the private side); a public user may opt in via `RUNG_IMPERSONATE` (legacy `DISPENSARY_IMPERSONATE` still honored). `make_session(proxy=…)` forwards a CONNECT-tunnel URL (generic); the pool that picks/rotates it is private. **The anti-throttle machinery is NOT here** — it is private (in the overlay); imports only third-party (no internal deps). |
 | `browser.py` | `make_browser_options()`, `render_html()`, `get_script_value()` | pydoll/Chrome primitives (Playwright-installed Chromium). |
 | `text.py` | `extract_brand()`, `normalize_brand()`, `load_company_aliases()`, `normalize_category()`, `normalize_product_type()`, `normalize_strain_type()`, `is_placeholder_name()`, `readability_key()`, `normalize_terpene()`, `TERPENE_COLUMNS`, `terpene_floats()`, `dominant_terpene()`, `product_fingerprint()`, `as_dict()`, `name_of()` | Brand splitter + the spelling-insensitive operator key (`normalize_brand` folds "Zen Leaf"/"ZenLeaf"/"NuEra"/"nuEra" — the variants companies.yml doesn't alias) + the one companies.yml alias loader. All shared by seed + compare so folding is consistent. Also the three product-taxonomy normalizers, each a substring-keyword matcher over its own `data/*.yml` (alnum-normalized keys, YAML order = match priority): `normalize_category(raw, name)` → the canonical cross-platform product category (`data/category_aliases.yml` ordered keyword rules on the raw category + `data/category_name_overrides.yml` name-keyword overrides that correct platform-mislabeled forms — a capsule sold as an "edible"; no-match→`"Other"`; see `docs/category_taxonomy.md`); `normalize_product_type(name, category, category_std)` → the **2nd-level** product type *within* a `category_std` (`data/product_type_aliases.yml`, nested per category, matched off the name + raw category; per-category `_defaults` label else `"Unspecified"`, `None` for an uncovered category; see `docs/product_type_hierarchy.md`); and `normalize_strain_type` → the canonical lineage facet `Indica/Sativa/Hybrid/CBD` or `None` (`data/strain_aliases.yml`; conservative lineage-only keywords, no-match→`None`, *not* "Other"). Also `is_placeholder_name` — the one shared junk-row predicate (test/demo/equity-tag/no-data/bare-license/header) used by `extract`+`seed_companies`+`compare` so junk never enters `dispensaries`/`companies`. Beyond names, `text.py` also hosts the cross-platform **terpene** helpers (`normalize_terpene` canonicalization, `TERPENE_COLUMNS`, `terpene_floats`/`dominant_terpene` jsonb coercion) and the master-product **identity hash** `product_fingerprint` (brand+name+size+type, +mg dose for mg-dosed products), plus `readability_key` (shared by seed + compare). (`EN_DASH` is an internal constant.) |
 | `normalize.py` | `size_to_grams()`, `grams_to_label()`, `enrich_variants()`, `normalize_terpenes()`, `enrich_record()`, `PERCENT_MAX` | Product-data numeric normalizers (sizes/potency/terpene totals; the canonical terpene-name + identity helpers live in `text.py`); `grams_to_label` is the display inverse of `size_to_grams` (grams → "3.5g") used by the search export so one weight reads the same everywhere: a variant size label → grams (+ per-variant `price_per_g`) and a representative `size_g`, sized only for weight-sold categories (flower/pre-roll/vape/concentrate) so a dosed product's `mg` label can't yield a nonsense `$/g`; a raw terpene list → canonical `{Name: percent}` + `terp_total` (folds `text.normalize_terpene`, sums α+β-pinene, converts `mg/g`→`%`, repairs an impossible >40% total by dropping a lone spike or rescaling an unlabeled `mg/g` row). `enrich_record` stamps these onto a `StoreProductRecord` from the `menu_extractors._record` choke point (idempotent). Backs the `products_normalized` view. |
@@ -54,7 +75,12 @@ connection type alias every signature uses). Tables it creates: `dispensaries`,
 and the master-product
 DB `products` + `product_observations`
 (append-only price/potency/terpene history — the longitudinal substrate, written by
-`record_observations`)
+`record_observations`), and the store-lifecycle `store_locations` + `store_observations`
+(append-only open/close/acquired history keyed by a physical-location identity — the shared
+engine `record_location_observations` consumes `LocationObservation`s whose keys the callers
+compute, driven by the overlay `company_stores.record_store_observations` (`company_site` leg)
+and the core `extract.record_roster_observations` (`state_roster` leg); see
+`docs/store_history_design.md`)
 (+ the `products_normalized` VIEW — one row per product exposing the standardized
 fields: `category_std` (as `category`), `product_type_std` (as `product_type`), `strain_type_std`
 (as `strain_type`), `size_g`, derived
@@ -64,7 +90,8 @@ identity/price/timestamp passthrough columns
 (`id`/`company_id`/`state`/`store_key`/`platform`/`source`/`name`/`brand`/`price`/`scraped_at`);
 the combined cross-platform surface)
 (+ `ADD COLUMN IF NOT EXISTS` in-place column migrations for `company_stores`,
-`state_programs`, `store_products`, and `product_observations`). CRUD helpers for each.
+`state_programs`, `store_products`, and `product_observations`; `store_locations`/`store_observations`
+are additive, no migration). CRUD helpers for each.
 **Does not create `companies`** (owned by `seed_companies.py`). Imports `models` + `text`
 (the latter for `product_fingerprint`/`normalize_brand` in `record_observations`). The legacy `dispensaries.db` SQLite
 file is kept as the one-time migration source.
@@ -100,7 +127,7 @@ closes the two concurrency hazards in `docs/stage_contracts.md` §5 (concurrent
 atomic `INSERT … ON CONFLICT` refills from elapsed time then deducts iff enough remains, with
 Postgres `now()` as the authoritative clock. Generic infra (imports `db` only) for the shared-IP
 case where per-worker in-process limiters would multiply; the aggregator throttle *policy* (the
-adaptive 406 cooldown + the unified `backoff_action` governor) stays private in the overlay's
+adaptive 406 cooldown + the `backoff_delay` retry governor) stays private in the overlay's
 `aggregator_http`. See §3-4.
 
 **Generic mechanism:** `access.py` — the access-method registry.
@@ -124,7 +151,7 @@ logic, and recon). `cli.py` resolves those proprietary stages by name through
 implementations via the `rung.plugins` entry-point group, discovered once by
 `registry.load_plugins()`. With the overlay absent, an unplugged stage resolves to a stub that
 raises `StageNotAvailable` only when invoked, so the public CLI dispatches every verb either way.
-The overlay's bridge registrar (`dispensary_scraper_intel.intel_plugin.register_all`, the entry
+The overlay's bridge registrar (`rung_intel.intel_plugin.register_all`, the entry
 point) registers the proprietary stages and enables impersonation on load. **Full design + the
 public/private partition: [`docs/publish_split_design.md`](docs/publish_split_design.md).**
 
@@ -132,7 +159,7 @@ public/private partition: [`docs/publish_split_design.md`](docs/publish_split_de
 `rung/sources/` (`state_search`, `state_lists`, `extract`, `ai_fallback`,
 `homepage_discovery`, `dedupe` — Stage-1 government-roster extraction + shared dedup); the
 **proprietary** scrapers/catalogs/mappers/intel moved **flat into the overlay**
-`dispensary_scraper_intel/` (`company_stores`, `company_store_fetch`, `company_store_extractors`,
+`rung_intel/` (`company_stores`, `company_store_fetch`, `company_store_extractors`,
 `menus`, `menu_extractors`, `compare`, `recon`, `bootstrap`, and the per-platform recipes). The table below keeps the per-module detail; **[overlay]** marks the moved ones (write
 through the core's `db.py` or return records):
 
@@ -140,8 +167,8 @@ through the core's `db.py` or return records):
 |---|---|---|---|
 | `state_search.py` | Per-state program coverage + verified agency URL | `run_state_coverage`, `load_states`, `StateInfo`/`StateCoverage` | `state_programs` (non-list cols) |
 | `state_lists.py` | Crawl landing page → score links → find list resource | `run_find_lists`, `find_list_url`, `ListCandidate` | `state_programs.list_*` |
-| `extract.py` | Extract records from a list, dispatching on `list_type` (pdf/csv/kml/arcgis/lookup/html/ca_dcc/az_dhs/co_med/ma_ccc — the `ListType` Literal, with `HANDLED_LIST_TYPES = frozenset(get_args(ListType))` derived from it); opt-in `--render` and `--ai` tiers | `run_extract_states`, `extract_records`, `extract_rendered`, `HANDLED_LIST_TYPES` | `dispensaries` |
-| `ai_fallback.py` | scrapegraphai+Ollama extraction fallback (model via `DISPENSARY_OLLAMA_MODEL`, default `llama3.2`) | `extract_with_ai` | returns records |
+| `extract.py` | Extract records from a list, dispatching on `list_type` (pdf/csv/kml/arcgis/lookup/html/ca_dcc/az_dhs/co_med/ma_ccc — the `ListType` Literal, with `HANDLED_LIST_TYPES = frozenset(get_args(ListType))` derived from it); opt-in `--render` and `--ai` tiers; `--record-history` also appends the `state_roster` leg of the store-lifecycle history via `record_roster_observations` (physical-location identity from `dedupe.geo_key`/`address_key`, only on a non-empty extraction) | `run_extract_states`, `record_roster_observations`, `ExtractResult`, `print_extract_report`, `extract_records`, `extract_rendered`, `HANDLED_LIST_TYPES` | `dispensaries`; `store_locations`/`store_observations` via `db.record_location_observations` when `--record-history` |
+| `ai_fallback.py` | scrapegraphai+Ollama extraction fallback (model via `RUNG_OLLAMA_MODEL`, legacy `DISPENSARY_OLLAMA_MODEL` honored, default `llama3.2`) | `extract_with_ai` | returns records |
 | `recon.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `homepage_discovery.py` | Opt-in (`recon --discover`) web-search of a no-homepage operator → filter aggregators/social → rank by brand↔domain → validate via `recon._probe_one`. Reuses `state_search` backends; probe injected to avoid a cycle | `discover_homepage`, `build_discovery_queries`, `rank_candidates`, `make_backends` | none (caller persists via recon) |
 | `company_stores.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
@@ -163,7 +190,7 @@ through the core's `db.py` or return records):
 | `curaleaf.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `fluent.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `hytiva.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
-| `dedupe.py` | Collapse duplicate stores (cross- & intra-company) by physical address, coordinate cell (~11 m), **or platform handle** (`platform:external_id` — folds an address-less duplicate of the same store), **plus a same-operator ~100 m geo-merge** for cross-platform geocode drift (scoped to one `canonical_name` — never across operators); pick canonical operator; **keep the richest-menu handle per rooftop** (Dutchie/first-party > Weedmaps/Leafly) as the surviving menu-scrape row; carry a folded sibling's coords onto a kept row that lacks them; stamp `storefront_name`; **realign `store_products.company_id`** onto each handle's kept row so menus scraped under a since-folded alias re-attribute to the operator. **Full design: [`docs/dedupe_design.md`](docs/dedupe_design.md).** | `run_dedupe`, `normalize_address`, `address_key`, `geo_key`, `pick_canonical` | `company_stores.canonical_company_id` + `storefront_name` + coords; `store_products.company_id`; **commits** |
+| `dedupe.py` | Collapse duplicate stores (cross- & intra-company) by physical address, coordinate cell (~11 m), **or platform handle** (`platform:external_id` — folds an address-less duplicate of the same store), **plus a same-operator ~100 m geo-merge** for cross-platform geocode drift (scoped to one `canonical_name` — never across operators); pick canonical operator; **keep the richest-menu handle per rooftop** (Dutchie/first-party > Weedmaps/Leafly) as the surviving menu-scrape row; carry a folded sibling's coords onto a kept row that lacks them; stamp `storefront_name`; **realign `store_products.company_id`** onto each handle's kept row so menus scraped under a since-folded alias re-attribute to the operator. **Full design: [`docs/dedupe_design.md`](docs/dedupe_design.md).** | `run_dedupe`, `DedupeReport`, `print_dedupe_report`, `normalize_address`, `address_key`, `geo_key`, `pick_canonical` | `company_stores.canonical_company_id` + `storefront_name` + coords; `store_products.company_id`; **commits** |
 | `compare.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 
 **Derived / front-end:**
@@ -178,7 +205,7 @@ through the core's `db.py` or return records):
 ## Dependency direction (acyclic)
 
 ```
-  PUBLIC CORE  (rung)            ┊   PRIVATE OVERLAY  (dispensary_scraper_intel)
+  PUBLIC CORE  (rung)            ┊   PRIVATE OVERLAY  (rung_intel)
                                                ┊
   cli.py ──registry.resolve(stage)──▶ stub ◀──┊── intel_plugin   (rung.plugins entry point)
    ┌───────┬────────────┬────────┐             ┊      company_stores · menus · compare · recon · bootstrap
@@ -195,13 +222,14 @@ through the core's `db.py` or return records):
 `cli.py` reaches the overlay's stages through `registry.resolve(name)` — a **runtime** lookup, not a
 static import — and the overlay registers them via the `rung.plugins` entry point; so
 there is no `core → overlay` import edge. The per-module edges below are unchanged by the move (each
-module imports the same things); the moved ones now simply live in `dispensary_scraper_intel/` and
+module imports the same things); the moved ones now simply live in `rung_intel/` and
 import the core across the package boundary.
 
 Edges (confirmed): `db→{models, text}` (the latter for `product_fingerprint`/`normalize_brand`
 in `record_observations`); `access→db`; `company_stores→{access, db, queue, http, models,
 company_store_fetch, company_store_extractors, dutchie_plus, curaleaf, dutchie, fluent,
-leafly, proxy_store, proxy_tiers, sweedpos, weedmaps}` (proxy_store/proxy_tiers back the
+leafly, proxy_store, proxy_tiers, sweedpos, weedmaps, dedupe (geo_key/address_key for the
+store-history location identity)}` (proxy_store/proxy_tiers back the
 per-company session rotation on the company's platform tier, mirroring Stage-3 `menus`);
 `company_store_fetch→{models, addresses, dedupe (normalize_address), ai_fallback,
 company_store_extractors, dutchie_plus, hytiva}`;
@@ -215,7 +243,8 @@ number/normalization helpers, acyclic);
 aggregator-sweep helpers `weedmaps`/`leafly` → **overlay `aggregator_http` only** (private HTTP
 helpers; lean — they reach no heavier catalog); `aggregator_http→proxy` (both overlay);
 `dedupe→{db, models}`;
-`compare→{db, dedupe, text}`; `extract→{addresses, browser, db, http, models, ai_fallback}`;
+`compare→{db, dedupe, text}`; `extract→{addresses, browser, db, http, models, ai_fallback, dedupe
+(geo_key/address_key for the roster store-history leg)}`;
 `recon→{http, models, text, homepage_discovery (lazy, --discover only)}`;
 `homepage_discovery→{models, text, state_search}` (probe injected from recon, no recon import);
 `state_lists→{db, http, state_search}`;
@@ -236,7 +265,7 @@ proprietary tiers the carve-out moved out of the public tree: the per-platform p
 internal imports, the two aggregator sweeps (`weedmaps`/`leafly`) import **only** the overlay's
 `aggregator_http` (and at most public `http`), and the overlay's internal import graph is acyclic.
 Across the **package boundary** (`docs/publish_split_design.md`): the public core imports **nothing**
-from `dispensary_scraper_intel`, the public package holds **exactly** the public module set (nothing
+from `rung_intel`, the public package holds **exactly** the public module set (nothing
 proprietary leaks back in), and the overlay depends on the core. A companion **data leak guard**
 keeps the core's `data/` to public/shared files only — the proprietary slugs/chains/tokens/store-ids
 live with the overlay. Together: the contract that lets the open-source core ship and run without the
@@ -314,6 +343,21 @@ overlay (its proprietary stages then resolve to registry stubs).
   target types), but Stage 1 (`extract.py`) keeps its own ad-hoc `list_type` dispatch +
   render/ai tiers. This is a **standing decision, not a roadmap gap**: Stage 1 is
   deliberately left off the registry (a standing decision); do not re-litigate.
+- **Stage 3 picks proxies in-process (per-store rotation); Stage 2 uses the durable
+  `proxy_store` (per-host health).** `menus.run_store_menus` calls `ProxyPool.acquire(host=store_key)`
+  — sticky **per-store** IP rotation (one exit per store, spread across many; the VT 51/51-validated
+  pattern) with in-process quarantine. `company_stores.run_company_stores` instead calls
+  `proxy_store.claim_proxy(conn, host, …)` — durable cross-worker health keyed by the company's
+  **network host**. The asymmetry is deliberate, for two reasons: (1) a store's proxy key is
+  `platform:external_id`, not a network host — *all* of a platform's stores share one host
+  (`dutchie.com`), so `proxy_store`'s per-host model would either fragment health per store_key
+  (useless) or collapse every store onto the single "healthiest" IP (killing the rotation);
+  (2) under the documented fleet topology (`docs/worker_fleet_deployment.md`: **one distinct egress
+  IP per worker** for the per-store-session rungs Dutchie/Jane/Sweed, aggregators rotating
+  per-request inside `get_json_retry`), workers don't share IPs, so there is no cross-worker ban to
+  coordinate — the in-process quarantine suffices. Durable per-*platform-host* health would only add
+  value under a shared multi-IP-pool config; if that topology is ever adopted, revisit (audit M1,
+  2026-07-02).
 - **`seed_companies.py` owns the `companies` table** while sharing the DB via
   `db.get_connection()`.
 - **`extract.py`'s `--render`/`--ai` and `company_stores`' `browser_render`/`ai_llm`

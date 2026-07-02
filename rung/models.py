@@ -101,7 +101,8 @@ class StoreProductRecord:
     cbd: float | None = None
     # Per-dose milligram potency for mg-dosed products (edibles, tinctures, beverages)
     # where the platform publishes mg instead of a percent. Kept separate from thc/cbd so
-    # the percent columns stay a single clean unit; a product carries one form or the other.
+    # the percent columns stay a single clean unit; a product carries one form or the other
+    # — enforced in the DB by store_products_potency_unit_check (a cannabinoid is percent OR mg).
     thc_mg: float | None = None
     cbd_mg: float | None = None
     terpenes: list[dict] | None = None  # [{"name": ..., "value": ...}] as published
@@ -118,6 +119,31 @@ class StoreProductRecord:
     # prices etc. stay here, platform-shaped; `price` above is the cross-variant low.
     # normalize.enrich_variants also stamps each variant's size_g/price_per_g here.
     variants: list[dict] | None = None
+
+
+@dataclass(frozen=True)
+class LocationObservation:
+    """One store-lifecycle observation: what was seen at a physical location in one pass.
+
+    The unit the shared history engine (``db.record_location_observations``) consumes.
+    ``location_key`` is the stable physical-location identity (``dedupe.geo_key`` /
+    ``address_key``) — computed by the CALLER, since the key builders live above ``db``
+    in the layering. ``operator`` is the raw scraped name (canonicalized at read — see
+    docs/store_history_design.md); ``platform``/``external_id`` are the menu handle when
+    the source carries one (the state roster doesn't).
+    """
+
+    location_key: str
+    state: str
+    latitude: float | None = None
+    longitude: float | None = None
+    address: str | None = None
+    city: str | None = None
+    zip_code: str | None = None
+    operator: str | None = None
+    storefront_name: str | None = None
+    platform: str | None = None
+    external_id: str | None = None
 
 
 @dataclass

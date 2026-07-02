@@ -50,6 +50,11 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
 - **Out:** `dispensaries`, **replace-by-state**: `DELETE WHERE state = ?` then inserts — and the
   delete runs ONLY when extraction yielded ≥1 record, so a transient zero-yield never wipes prior
   good rows. Append via `db.insert_dispensary` (db.py); commit per state.
+  - `store_locations` + `store_observations` via `extract.record_roster_observations` **only under
+    `--record-history`** — the `state_roster` leg of the store-lifecycle history (same shared engine,
+    `db.record_location_observations`, as Stage 2's `company_site` leg), appended inside the same
+    non-empty-replace commit. A failed extraction records nothing, so observed absence stays a real
+    signal. See `docs/store_history_design.md`.
 - **Re-run:** idempotent per state.
 
 ### seed-companies — `seed_companies.py`
@@ -78,6 +83,12 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
     committed immediately** (access.py). Load-bearing for crash recovery: a killed run
     leaves a frozen ladder snapshot; the next run resumes from the stored winner.
   - `jobs`: enqueues one `company_stores` job per company, then claims them (see §5).
+  - `store_locations` + `store_observations` via `company_stores.record_store_observations` **only
+    under `--record-history`** — the store-lifecycle twin of Stage 3's `product_observations`. Reads
+    back the company's just-replaced rows, resolves a physical-location identity
+    (`dedupe.geo_key`/`address_key`), and APPENDS an observation (operator/storefront/handle) when it
+    changed or once/day as a heartbeat. Same transaction as the replace + job completion.
+    Append-only; see `docs/store_history_design.md`.
 - **Scoped re-scrape:** `--only "<term>[,<term>]"` (`run_company_stores(only=…)`) narrows to companies
   whose canonical name contains a term or whose id matches. It enqueues + **`claim_target`s only
   those** targets (not `claim_next`), so a focused debug run never claims or fails a concurrent

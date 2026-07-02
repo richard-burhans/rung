@@ -17,6 +17,7 @@ the AI extractor (ai_fallback.extract_with_ai), which is only attempted on reque
 
 import asyncio
 import csv
+import datetime
 import io
 import re
 import xml.etree.ElementTree as ET
@@ -36,7 +37,8 @@ from rung.addresses import (
     extract_address_blocks as _extract_address_blocks,
 )
 from rung.http import make_session
-from rung.models import DispensaryRecord
+from rung.models import DispensaryRecord, LocationObservation
+from rung.sources.dedupe import location_key
 from rung.text import is_placeholder_name
 
 # Header synonyms, longest/most-specific first so "zip code" beats "code" etc.
@@ -832,11 +834,40 @@ class ExtractResult:
     method: str  # 'static' | 'render' | 'ai' | 'none'
 
 
+def record_roster_observations(
+    conn: db.DBConn, state: str, records: list[DispensaryRecord],
+    *, now: datetime.datetime | None = None,
+) -> int:
+    """Append store-lifecycle history from a state's just-extracted roster. Caller commits.
+
+    The Stage-1 ``state_roster`` twin of the overlay's ``company_site`` capture: build one
+    :class:`LocationObservation` per physical location (``dedupe.geo_key``, ``address_key``
+    fallback — the roster is only partially geocoded, so the address key carries more weight
+    here) and hand them to the shared engine (``db.record_location_observations``). Runs only
+    on a NON-EMPTY extraction — a failed roster fetch records nothing, so a store's observed
+    absence stays a real signal rather than an artifact of a dead list URL. Roster rows carry
+    no menu handle; the state-registered name goes in ``operator`` (raw, canonicalized at
+    read). See docs/store_history_design.md. Returns observation rows appended.
+    """
+    observations: dict[str, LocationObservation] = {}
+    for record in records:
+        key = location_key(record.latitude, record.longitude, record.address, record.zip_code)
+        if not key or key in observations:
+            continue  # unidentifiable (e.g. MD's county-only rows), or a duplicate rooftop row
+        observations[key] = LocationObservation(
+            location_key=key, state=state, latitude=record.latitude,
+            longitude=record.longitude, address=record.address, city=record.city,
+            zip_code=record.zip_code, operator=record.name,
+        )
+    return db.record_location_observations(conn, "state_roster", observations, now=now)
+
+
 async def run_extract_states(
     conn: db.DBConn,
     only: set[str] | None = None,
     use_ai: bool = False,
     use_render: bool = False,
+    record_history: bool = False,
 ) -> list[ExtractResult]:
     """Extract dispensary records for every state with a discovered list URL.
 
@@ -845,6 +876,10 @@ async def run_extract_states(
     empty; then, when use_ai is set, the local-Ollama fallback. Each state's
     existing rows are replaced atomically and only when extraction yields data,
     so re-runs are idempotent and a dead URL never wipes prior good rows.
+
+    ``record_history`` (opt-in): also append store-lifecycle history
+    (``state_roster`` observations) alongside each non-empty state replace, in the
+    same commit — see :func:`record_roster_observations`.
     """
     from rung.db import (
         delete_dispensaries_for_state,
@@ -907,6 +942,9 @@ async def run_extract_states(
             for record in records:
                 record.state = rec.abbr  # scope rows to the state for idempotent replace
                 insert_dispensary(conn, record)
+            if record_history:
+                # Store-lifecycle history from the fresh roster, same commit as the replace.
+                record_roster_observations(conn, rec.abbr, records)
             conn.commit()
 
         results.append(

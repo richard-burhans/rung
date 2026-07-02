@@ -11,13 +11,14 @@ from pydoll.browser.options import ChromiumOptions
 def _resolve_chrome_path() -> Path | None:
     """Locate a Chromium binary without hardcoding a user/version-specific path.
 
-    Order: an explicit ``DISPENSARY_CHROME_PATH`` override → Playwright's bundled Chromium
+    Order: an explicit ``RUNG_CHROME_PATH`` override (legacy ``DISPENSARY_CHROME_PATH`` still
+    honored) → Playwright's bundled Chromium
     under ``$PLAYWRIGHT_BROWSERS_PATH`` or ``~/.cache/ms-playwright``
     (``chromium-*/chrome-linux64/chrome``, any build) → None. When None, `make_browser_options`
     leaves `binary_location` unset and pydoll falls back to its own `/usr/bin/google-chrome`
     probe. Installed via `uv run playwright install chromium`.
     """
-    override = os.environ.get("DISPENSARY_CHROME_PATH")
+    override = os.environ.get("RUNG_CHROME_PATH") or os.environ.get("DISPENSARY_CHROME_PATH")
     if override and Path(override).is_file():
         return Path(override)
     roots: list[Path] = []

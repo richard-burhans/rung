@@ -32,7 +32,7 @@ def clean(value: str | None) -> str | None:
     return stripped or None
 
 
-def node_text(el) -> str:
+def _node_text(el) -> str:
     """Normalized element text with spaces between child nodes (selectolax joins
     child text with no separator otherwise, fusing a name into its address)."""
     return " ".join(el.text(separator=" ").split())
@@ -51,12 +51,12 @@ def extract_address_blocks(html: str) -> list[DispensaryRecord]:
     records: list[DispensaryRecord] = []
     seen: set[tuple[str | None, str | None]] = set()
     for el in tree.css("p, li, td, address, article, section, div"):
-        text = node_text(el)
+        text = _node_text(el)
         matches = list(BLOCK_ADDRESS_RE.finditer(text))
         if not matches:
             continue
         # Keep only the tightest container: skip if a child element holds an address.
-        if any(BLOCK_ADDRESS_RE.search(node_text(c)) for c in el.iter(include_text=False)):
+        if any(BLOCK_ADDRESS_RE.search(_node_text(c)) for c in el.iter(include_text=False)):
             continue
         name_el = el.css_first(NAME_ELEMENT_SEL)
         name = clean(name_el.text()) if name_el is not None else None

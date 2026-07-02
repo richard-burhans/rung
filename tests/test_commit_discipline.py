@@ -11,13 +11,23 @@ into a write helper (which would break the per-claim atomicity the queue relies 
 import ast
 from pathlib import Path
 
-_DB_PATH = Path(__file__).resolve().parents[1] / "rung" / "db.py"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_DB_PATH = _REPO_ROOT / "rung" / "db.py"
+_INTEL_DIR = _REPO_ROOT / "rung_intel" / "rung_intel"
 
 # Function-name prefixes that denote a low-level write helper (the caller owns the commit).
 _WRITE_PREFIXES = ("insert_", "upsert_", "set_", "delete_", "replace_", "record_", "clear_")
 
+# The distributed-policy modules that document "caller commits" (like the db.py helpers): the write
+# helper only stages the row; the orchestrator owns the transaction. Same contract, different home.
+_CALLER_COMMITS_MODULES = (
+    _REPO_ROOT / "rung" / "rate_limit.py",
+    _INTEL_DIR / "proxy_store.py",
+    _INTEL_DIR / "proxy_tiers.py",
+)
 
-def _calls_commit(node: ast.FunctionDef) -> bool:
+
+def _calls_commit(node: ast.AST) -> bool:
     """Whether a function body contains a ``<something>.commit()`` call."""
     return any(
         isinstance(sub, ast.Call)
@@ -39,4 +49,21 @@ def test_db_write_helpers_do_not_commit() -> None:
     assert not offenders, (
         "Low-level db write helper commits — the caller owns the transaction boundary "
         f"(cross-cutting contract 2): {offenders}"
+    )
+
+
+def test_distributed_policy_helpers_leave_commit_to_caller() -> None:
+    """The cross-worker policy modules (rate_limit / proxy_store / proxy_tiers) each document
+    'caller commits' — the same two-tier discipline as db.py, just outside it. A stray commit in,
+    say, ``proxy_store.report_proxy`` would break the caller's per-claim atomicity and pass green,
+    since ``test_db_write_helpers_do_not_commit`` scans only db.py."""
+    offenders = [
+        f"{path.name}::{node.name}"
+        for path in _CALLER_COMMITS_MODULES
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _calls_commit(node)
+    ]
+    assert not offenders, (
+        "distributed-policy helper commits — the caller owns the transaction boundary "
+        f"(these modules document 'caller commits'): {offenders}"
     )

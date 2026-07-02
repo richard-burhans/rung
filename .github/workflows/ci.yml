@@ -70,7 +70,7 @@ jobs:
         run: uv tool run ruff check rung/ tests/
 
       - name: Type-check (ty)
-        run: uv tool run ty check rung/
+        run: uv tool run ty check rung/ rung_intel/ scripts/
 
       - name: Tests + coverage (pytest)
         run: uv run pytest

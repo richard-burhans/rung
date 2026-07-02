@@ -1,6 +1,6 @@
 """Guard tests: the public/private package boundary + the public package's internal layering.
 
-After the Phase-3b carve-out the proprietary modules live in the sibling ``dispensary_scraper_intel``
+After the Phase-3b carve-out the proprietary modules live in the sibling ``rung_intel``
 package. The load-bearing contract is now a **package boundary**: the public ``rung``
 core must import NOTHING from that overlay — that's what lets the open-source core ship and run on
 its own (its proprietary stages then resolve to registry stubs). Within the public package the
@@ -17,8 +17,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_DIR = REPO_ROOT / "rung"
-INTEL_DIR = REPO_ROOT / "dispensary_scraper_intel" / "dispensary_scraper_intel"
-INTEL_PKG = "dispensary_scraper_intel"
+INTEL_DIR = REPO_ROOT / "rung_intel" / "rung_intel"
+INTEL_PKG = "rung_intel"
 
 # ── Public-package tiers (by import direction; see ARCHITECTURE.md) ───────────────────────────
 BASE = frozenset({"models", "http", "browser", "text", "addresses", "normalize"})  # tier 0
@@ -90,7 +90,7 @@ def _overlay_imports() -> dict[str, dict[str, set[str]]]:
     """overlay module stem -> {'core': {public stems imported}, 'overlay': {overlay stems imported}}.
 
     The overlay reaches the core via ``from rung[.sources] import …`` and its siblings via
-    ``from dispensary_scraper_intel import …``; ``importlib.resources.files("rung")`` is a
+    ``from rung_intel import …``; ``importlib.resources.files("rung")`` is a
     string arg, not an import edge, so the pure helpers stay zero-internal-import."""
     pub, ov = _public_stems(), _overlay_stems()
     out: dict[str, dict[str, set[str]]] = {}
@@ -157,7 +157,7 @@ def _imported_roots(path: Path) -> set[str]:
 # ── The publishable boundary ──────────────────────────────────────────────────────────────────
 
 def test_public_core_imports_nothing_from_the_private_overlay() -> None:
-    """No public-core module may import ``dispensary_scraper_intel`` — the contract that lets the
+    """No public-core module may import ``rung_intel`` — the contract that lets the
     open-source core ship and run without the overlay (proprietary stages → registry stubs). The
     CLI reaches the overlay's stages through ``registry.resolve`` (a runtime lookup) and the overlay
     is discovered via the ``rung.plugins`` entry point — neither is a static import."""
@@ -220,7 +220,7 @@ PUBLIC_DATA = frozenset({
     "strain_aliases.yml",
 })
 # Keep PRIVATE_DATA in lockstep with scripts/build_public_repo.py:PRIVATE_DATA (the publish leak
-# guard) and the actual files in dispensary_scraper_intel/.../data/ — the two are independent copies.
+# guard) and the actual files in rung_intel/.../data/ — the two are independent copies.
 PRIVATE_DATA = frozenset({
     "dutchie_chains.yml", "dutchie_plus_tokens.yml", "grower_brands.yml",
     "jane_store_ids.yml", "leafly_slugs.yml", "weedmaps_slugs.yml",

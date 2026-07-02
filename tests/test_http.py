@@ -22,7 +22,7 @@ PACKAGE_DIR: Path = REPO_ROOT / "rung"
 SCRIPTS_DIR: Path = REPO_ROOT / "scripts"
 # The private overlay (Phase-3b carve-out) also routes all networking through make_session, so the
 # chokepoint guard must cover it too.
-INTEL_DIR: Path = REPO_ROOT / "dispensary_scraper_intel"
+INTEL_DIR: Path = REPO_ROOT / "rung_intel"
 
 # Session factories may only be CALLED inside this module; every other module receives a
 # session as a parameter.

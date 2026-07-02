@@ -31,12 +31,17 @@ the correct unit of control).
 1. `requeue_stale`/`reap_expired` opportunistically at startup (recover crashed-run claims).
 2. `claim_next(conn, task_type, worker_id, target_prefix=…)` — SKIP LOCKED, so workers partition.
 3. Run the Stage-2 (`scrape-company-stores`) or Stage-3 (`scrape-menus`) catalog for the target,
-   acquiring a proxy via `proxy_tiers.pool_for_platform` → `proxy_store.claim_proxy`.
+   acquiring a proxy from the platform's tier pool (`proxy_tiers.pool_for_platform`). Stage 2 then
+   claims the healthiest exit for the company's network host via `proxy_store.claim_proxy` (durable
+   cross-worker health); Stage 3 instead pins one exit **per store** in-process
+   (`ProxyPool.acquire(host=store_key)`) — per-store rotation, not per-host claiming. This is
+   deliberate given one-IP-per-worker (see ARCHITECTURE.md "Known asymmetries" / audit M1).
 4. The per-worker heartbeat is **automatic**: the runner launches `queue.heartbeat_forever(worker_id)`
    on its own connection for the life of the batch, extending all of this process's in-flight leases
    (no per-job `bump_heartbeat` call needed in the loop).
 5. `complete(conn, job_id, status, worker=worker_id)` (only if still the holder) — commit atomically
-   with the data writes. On failure, `report_proxy(ok=False)` so a banned IP is benched.
+   with the data writes. On failure, the proxy is benched — Stage 2 via `proxy_store.report_proxy(ok=False)`
+   (durable), Stage 3 via the in-process `ProxyPool.report(ok=False)` (per the asymmetry in step 3).
 
 ## Bring-up steps
 1. **Provision proxies** — populate the per-tier pools: `DISPENSARY_PROXIES_DATACENTER` /

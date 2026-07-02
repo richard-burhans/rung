@@ -3,7 +3,7 @@
 The open-source core ships the framework — the work queue, the Postgres layer, the
 access-method *engine* (``access.run_target``), and the generic state-coverage extractors — plus
 runnable stubs for the proprietary stages (Stage-2/3 scraping catalogs, the roster-comparison
-intel, platform recon). Those proprietary stages live in the private ``dispensary_scraper_intel``
+intel, platform recon). Those proprietary stages live in the private ``rung_intel``
 overlay and register their real implementations here via the ``rung.plugins``
 entry-point group, discovered once at startup by :func:`load_plugins`.
 
@@ -22,7 +22,7 @@ ENTRY_POINT_GROUP = "rung.plugins"
 
 #: The pip distribution that provides the proprietary stages, named in the stub error so an
 #: operator who hits an unplugged stage knows exactly what to install.
-INTEL_DISTRIBUTION = "dispensary-scraper-intel"
+INTEL_DISTRIBUTION = "rung-intel"
 
 StageImpl = Callable[..., Any]
 
