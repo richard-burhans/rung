@@ -16,8 +16,7 @@ Domain-specific catalogs plug in via the `rung.plugins` entry point; this repo i
 - **Stage 3 — listings:** `scrape-menus` snapshots each handled location's catalog into
   `store_products`, routed to a per-platform rung supplied by the plugin overlay. `--max-age-hours N`
   freshness-gates re-scrapes.
-- **Fleet:** `worker` is the distributed entrypoint (one process per egress IP). See
-  `docs/worker_fleet_deployment.md`.
+- **Fleet:** `worker` is the distributed entrypoint (one process per egress IP).
 
 ## Core concepts
 

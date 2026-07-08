@@ -89,7 +89,7 @@ Commands (see `pyproject.toml [project.scripts]`), run via `uv run <command>`:
   standard fields. `--max-age-hours N` refreshes only stale snapshots, so a daily cron's same-day
   re-runs are cheap no-ops. Per-platform catalogs are supplied by the plugin overlay.
 - **Fleet** — `worker` is the distributed entrypoint (one process per egress IP; reaps crashed
-  leases, then drains the queue). See [`docs/worker_fleet_deployment.md`](docs/worker_fleet_deployment.md).
+  leases, then drains the queue).
 
 Every `store_products` row keeps its platform-shaped raw fields **and** standardized ones stamped at
 scrape time (canonical category/type, lineage facet, per-variant size→grams and price-per-unit, and a

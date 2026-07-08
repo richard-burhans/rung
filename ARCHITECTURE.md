@@ -127,7 +127,7 @@ each Stage-2/3 runner keeps its process's in-flight leases fresh with `heartbeat
 worker's claims in one statement so it never interleaves with a consumer's `run_target`
 transaction), reaps at startup, and the `reap-jobs` CLI is the standalone reaper (the `worker` CLI packages
 reap-at-start + both Stage-2/3 consumers + an optional poll loop as the single fleet entrypoint —
-one process per egress IP, `docs/worker_fleet_deployment.md`); `reap_expired`
+one process per egress IP); `reap_expired`
 re-queues an expired-lease (dead-worker) claim through a `FOR UPDATE SKIP LOCKED` subquery so
 concurrent reapers don't collide (`requeue_stale` is the coarser claimed_at-age fallback) — see
  §4-5. The per-run companion to the durable `access_methods` registry;
@@ -370,9 +370,9 @@ overlay (its proprietary stages then resolve to registry stubs).
   `platform:external_id`, not a network host — *all* of a platform's stores share one host
   (`dutchie.com`), so `proxy_store`'s per-host model would either fragment health per store_key
   (useless) or collapse every store onto the single "healthiest" IP (killing the rotation);
-  (2) under the documented fleet topology (`docs/worker_fleet_deployment.md`: **one distinct egress
+  (2) under the documented fleet topology — **one distinct egress
   IP per worker** for the per-store-session rungs Dutchie/Jane/Sweed, aggregators rotating
-  per-request inside `get_json_retry`), workers don't share IPs, so there is no cross-worker ban to
+  per-request inside `get_json_retry` — workers don't share IPs, so there is no cross-worker ban to
   coordinate — the in-process quarantine suffices. Durable per-*platform-host* health would only add
   value under a shared multi-IP-pool config; if that topology is ever adopted, revisit (audit M1,
   2026-07-02).
