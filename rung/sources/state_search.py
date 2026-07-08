@@ -1,4 +1,5 @@
-"""Batch search for cannabis dispensary coverage across all US states + DC.
+"""Batch search for cannabis dispensary coverage across all US states + DC
+(+ any Canadian provinces curated in states.yml).
 
 Run order per state:
   1. If a URL is stored in the DB (or curated in states.yml), verify it with a HEAD
@@ -55,6 +56,7 @@ class StateInfo:
     known_url: str = ""  # curated agency landing page; HEAD-verified before search
     list_url: str = ""   # optional curated dispensary-list URL; overrides crawl discovery
     list_type: str = ""  # optional explicit type for list_url (e.g. ca_dcc); else inferred
+    country: str = "US"  # ISO-3166 alpha-2; Canadian provinces carry country: CA in states.yml
 
 
 @dataclass
@@ -80,6 +82,7 @@ def load_states() -> list[StateInfo]:
             known_url=s.get("known_url", ""),
             list_url=s.get("list_url", ""),
             list_type=s.get("list_type", ""),
+            country=s.get("country", "US"),
         )
         for s in raw
     ]
@@ -346,6 +349,7 @@ def _coverage_to_record(
         check_status=check_status,
         searched_at=now if cov.queries_tried else None,
         error=cov.error,
+        country=cov.state.country,
     )
 
 

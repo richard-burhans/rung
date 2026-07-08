@@ -371,3 +371,66 @@ AL:
   - [30.6954, -88.0399]   # Mobile
   - [34.7304, -86.5861]   # Huntsville
   - [33.2098, -87.5692]   # Tuscaloosa
+
+# Canada — provinces sweep identically (Dutchie serves Canadian stores; a single Toronto
+# anchor returned 1,082 ON stores, verified 2026-07-04, docs/canada_expansion.md F1).
+# The abbr must be quoted: bare ON is a YAML 1.1 boolean.
+"ON":
+  - [43.6532, -79.3832]   # Toronto (covers Hamilton/Niagara/Barrie/K-W overlap)
+  - [45.4215, -75.6972]   # Ottawa
+  - [44.2312, -76.4860]   # Kingston (Toronto–Ottawa gap)
+  - [42.9849, -81.2453]   # London
+  - [42.3149, -83.0364]   # Windsor (far southwest)
+  - [46.4917, -80.9930]   # Sudbury
+  - [46.3091, -79.4608]   # North Bay
+  - [46.5136, -84.3358]   # Sault Ste. Marie
+  - [48.4758, -81.3305]   # Timmins (northeast)
+  - [48.3809, -89.2477]   # Thunder Bay
+  - [49.7670, -94.4894]   # Kenora (far west)
+
+AB:
+  - [51.0447, -114.0719]  # Calgary
+  - [53.5461, -113.4938]  # Edmonton
+  - [52.2681, -113.8112]  # Red Deer
+  - [49.6942, -112.8328]  # Lethbridge
+  - [50.0405, -110.6764]  # Medicine Hat
+  - [55.1707, -118.7947]  # Grande Prairie (northwest)
+  - [56.7267, -111.3790]  # Fort McMurray (northeast)
+
+BC:
+  - [49.2827, -123.1207]  # Vancouver
+  - [48.4284, -123.3656]  # Victoria
+  - [49.8880, -119.4960]  # Kelowna
+  - [50.6745, -120.3273]  # Kamloops
+  - [53.9171, -122.7497]  # Prince George
+  - [49.1659, -123.9401]  # Nanaimo
+  - [49.5122, -115.7694]  # Cranbrook (southeast)
+  - [54.5182, -128.6032]  # Terrace (northwest)
+
+SK:
+  - [50.4452, -104.6189]  # Regina
+  - [52.1332, -106.6700]  # Saskatoon
+  - [50.2881, -107.7939]  # Swift Current (southwest)
+  - [52.7575, -108.2861]  # North Battleford
+  - [53.2001, -105.7677]  # Prince Albert (north)
+  - [50.3936, -102.9860]  # Yorkton (east)
+  - [49.6386, -105.9930]  # Assiniboia / Weyburn belt (far south)
+
+MB:
+  - [49.8951, -97.1384]   # Winnipeg
+  - [49.8880, -99.9500]   # Brandon
+  - [49.0140, -98.3072]   # Morden / Winkler (south)
+  - [51.1494, -100.0503]  # Dauphin (west-central)
+  - [53.8250, -101.2436]  # Flin Flon / The Pas (north)
+  - [55.7435, -97.8558]   # Thompson (far north)
+
+# US territory — Puerto Rico (Weedmaps pool, verified 161 listings 2026-07-05). Anchors
+# span the archipelago; the metro San Juan cluster carries most stores.
+PR:
+  - [18.4655, -66.1057]   # San Juan
+  - [18.2341, -66.0356]   # Caguas
+  - [18.0111, -66.6141]   # Ponce (south)
+  - [18.2013, -67.1397]   # Mayagüez (west)
+  - [18.4506, -66.7320]   # Arecibo (north-central)
+  - [18.4277, -67.1547]   # Aguadilla (northwest)
+  - [18.1494, -65.8272]   # Humacao (east)

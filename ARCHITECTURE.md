@@ -54,7 +54,9 @@ documented grouping.
 
 ## Layers & abstractions
 
-**Base layer** (no internal deps — each imports only third-party libs):
+**Base layer** (no *upward* deps — each imports only third-party libs or lower base modules:
+`addresses`→`models`, `normalize`→`models`/`text`; enforced by `test_import_layering.py`, which
+forbids importing outside the base layer, not base→base edges):
 
 | Module | Defines | Role |
 |---|---|---|
@@ -85,13 +87,23 @@ and the core `extract.record_roster_observations` (`state_roster` leg); see
 fields: `category_std` (as `category`), `product_type_std` (as `product_type`), `strain_type_std`
 (as `strain_type`), `size_g`, derived
 `price_per_g`, percent/mg potency, `terp_total`, `terpenes_std`, `cannabinoids_std` (minor
-cannabinoids `{NAME: %}` — CBN/CBG/CBC from Jane/Hytiva/Cresco/Weedmaps) — alongside the
+cannabinoids `{NAME: %}` — CBN/CBG/CBC from Jane/Hytiva/Cresco/Weedmaps), and `currency`
+(derived via a `LEFT JOIN state_programs` — `CAD` for CA-province stores, else `USD`; prices
+stay numeric in native currency so cross-country analyses partition, D2) — alongside the
 identity/price/timestamp passthrough columns
 (`id`/`company_id`/`state`/`store_key`/`platform`/`source`/`name`/`brand`/`price`/`scraped_at`);
 the combined cross-platform surface)
 (+ `ADD COLUMN IF NOT EXISTS` in-place column migrations for `company_stores`,
-`state_programs`, `store_products`, and `product_observations`; `store_locations`/`store_observations`
+`state_programs`, `store_products`, `product_observations`, and `jobs` (`_migrate_jobs` adds
+`lease_until`/`last_heartbeat`); `store_locations`/`store_observations`
 are additive, no migration). CRUD helpers for each.
+A companion **materialized view `product_latest`** (one row per distinct product — its latest
+observation — over `product_observations` ⋈ `products`, same measurement column names as
+`store_products`) backs the `--source current|history` dual-view analyses. Unlike the
+`products_normalized` VIEW it is **script-owned** (built + `REFRESH`ed `CONCURRENTLY` out-of-band by
+the daily history sweep — a `REFRESH` can't run inside `create_tables`' transaction), **not** created
+by `db.create_tables`; it is a read-path analysis cache, not pipeline-persisted truth. Being a
+matview (like `products_normalized`), it is outside Contract 3's table-ownership rule.
 **Does not create `companies`** (owned by `seed_companies.py`). Imports `models` + `text`
 (the latter for `product_fingerprint`/`normalize_brand` in `record_observations`). The legacy `dispensaries.db` SQLite
 file is kept as the one-time migration source.
@@ -167,7 +179,7 @@ through the core's `db.py` or return records):
 |---|---|---|---|
 | `state_search.py` | Per-state program coverage + verified agency URL | `run_state_coverage`, `load_states`, `StateInfo`/`StateCoverage` | `state_programs` (non-list cols) |
 | `state_lists.py` | Crawl landing page → score links → find list resource | `run_find_lists`, `find_list_url`, `ListCandidate` | `state_programs.list_*` |
-| `extract.py` | Extract records from a list, dispatching on `list_type` (pdf/csv/kml/arcgis/lookup/html/ca_dcc/az_dhs/co_med/ma_ccc — the `ListType` Literal, with `HANDLED_LIST_TYPES = frozenset(get_args(ListType))` derived from it); opt-in `--render` and `--ai` tiers; `--record-history` also appends the `state_roster` leg of the store-lifecycle history via `record_roster_observations` (physical-location identity from `dedupe.geo_key`/`address_key`, only on a non-empty extraction) | `run_extract_states`, `record_roster_observations`, `ExtractResult`, `print_extract_report`, `extract_records`, `extract_rendered`, `HANDLED_LIST_TYPES` | `dispensaries`; `store_locations`/`store_observations` via `db.record_location_observations` when `--record-history` |
+| `extract.py` | Extract records from a list, dispatching on `list_type` (pdf/csv/kml/arcgis/lookup/html/ca_dcc/az_dhs/co_med/ma_ccc/on_agco/ab_aglc/bc_lcrb/sk_slga — the `ListType` Literal, with `HANDLED_LIST_TYPES = frozenset(get_args(ListType))` derived from it); opt-in `--render` and `--ai` tiers; `--record-history` also appends the `state_roster` leg of the store-lifecycle history via `record_roster_observations` (physical-location identity from `dedupe.geo_key`/`address_key`, only on a non-empty extraction) | `run_extract_states`, `record_roster_observations`, `ExtractResult`, `print_extract_report`, `extract_records`, `extract_rendered`, `HANDLED_LIST_TYPES` | `dispensaries`; `store_locations`/`store_observations` via `db.record_location_observations` when `--record-history` |
 | `ai_fallback.py` | scrapegraphai+Ollama extraction fallback (model via `RUNG_OLLAMA_MODEL`, legacy `DISPENSARY_OLLAMA_MODEL` honored, default `llama3.2`) | `extract_with_ai` | returns records |
 | `recon.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `homepage_discovery.py` | Opt-in (`recon --discover`) web-search of a no-homepage operator → filter aggregators/social → rank by brand↔domain → validate via `recon._probe_one`. Reuses `state_search` backends; probe injected to avoid a cycle | `discover_homepage`, `build_discovery_queries`, `rank_candidates`, `make_backends` | none (caller persists via recon) |
@@ -190,7 +202,7 @@ through the core's `db.py` or return records):
 | `curaleaf.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `fluent.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `hytiva.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
-| `dedupe.py` | Collapse duplicate stores (cross- & intra-company) by physical address, coordinate cell (~11 m), **or platform handle** (`platform:external_id` — folds an address-less duplicate of the same store), **plus a same-operator ~100 m geo-merge** for cross-platform geocode drift (scoped to one `canonical_name` — never across operators); pick canonical operator; **keep the richest-menu handle per rooftop** (Dutchie/first-party > Weedmaps/Leafly) as the surviving menu-scrape row; carry a folded sibling's coords onto a kept row that lacks them; stamp `storefront_name`; **realign `store_products.company_id`** onto each handle's kept row so menus scraped under a since-folded alias re-attribute to the operator. **Full design: [`docs/dedupe_design.md`](docs/dedupe_design.md).** | `run_dedupe`, `DedupeReport`, `print_dedupe_report`, `normalize_address`, `address_key`, `geo_key`, `pick_canonical` | `company_stores.canonical_company_id` + `storefront_name` + coords; `store_products.company_id`; **commits** |
+| `dedupe.py` | Collapse duplicate stores (cross- & intra-company) by physical address, coordinate cell (~11 m), **or platform handle** (`platform:external_id` — folds an address-less duplicate of the same store), **plus a same-operator ~100 m geo-merge** for cross-platform geocode drift (scoped to one `canonical_name` — never across operators); pick canonical operator; **keep the richest-menu handle per rooftop** (Dutchie/first-party > Weedmaps/Leafly) as the surviving menu-scrape row; carry a folded sibling's coords onto a kept row that lacks them; stamp `storefront_name`; **realign `store_products.company_id`** onto each handle's kept row so menus scraped under a since-folded alias re-attribute to the operator. **Full design: [`docs/dedupe_design.md`](docs/dedupe_design.md).** | `run_dedupe`, `DedupeReport`, `print_dedupe_report`, `normalize_address`, `address_key`, `geo_key`, `location_key`, `physical_key`, `pick_canonical` | `company_stores.canonical_company_id` + `storefront_name` + coords; `store_products.company_id`; **commits** |
 | `compare.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 
 **Derived / front-end:**
@@ -245,12 +257,14 @@ helpers; lean — they reach no heavier catalog); `aggregator_http→proxy` (bot
 `dedupe→{db, models}`;
 `compare→{db, dedupe, text}`; `extract→{addresses, browser, db, http, models, ai_fallback, dedupe
 (geo_key/address_key for the roster store-history leg)}`;
-`recon→{http, models, text, homepage_discovery (lazy, --discover only)}`;
+`recon→{db (type-only: the `db.DBConn` annotation; recon stays read-only), http, models, text,
+homepage_discovery (lazy, --discover only)}`;
 `homepage_discovery→{models, text, state_search}` (probe injected from recon, no recon import);
 `state_lists→{db, http, state_search}`;
 `state_search→{browser, db, http, models}`; `seed_companies→{db, text}`. No module imports
-`cli.py`; nothing in the base/`addresses` layer imports upward. Post-carve-out the one remaining
-intra-`sources` (public) edge is `state_lists→state_search`; `compare→dedupe` is now a **cross-package**
+`cli.py`; nothing in the base/`addresses` layer imports upward. Post-carve-out the intra-`sources`
+(public) edges are `state_lists→state_search`, `homepage_discovery→state_search`, and
+`extract→dedupe` (eager) + `extract→ai_fallback` (lazy); `compare→dedupe` is now a **cross-package**
 edge (overlay `compare` → public `dedupe`), and `company_stores→{company_store_fetch,
 company_store_extractors, dutchie, dutchie_plus}` are **intra-overlay** edges — the `ai_fallback` edge
 moved into `company_store_fetch` (a lazy import) during the Stage-2 split, and `company_stores` no longer
@@ -331,10 +345,14 @@ overlay (its proprietary stages then resolve to registry stubs).
    operator but stamps each store's storefront brand.
 8. **Two type vocabularies (intentional).** `source_type` (`pdf|map|html|api`) describes
    the agency evidence URL; `list_type` (`pdf|csv|kml|arcgis|lookup|html|ca_dcc|az_dhs|co_med|
-   ma_ccc` — the `extract.ListType` Literal) is what `extract.py` dispatches on. The
-   per-state custom handlers (`ca_dcc`/`az_dhs`/`co_med`/`ma_ccc`) are added to the Literal,
-   not produced by `state_lists._classify`, so the contract-8 test still guards
+   ma_ccc|on_agco|ab_aglc|bc_lcrb|sk_slga` — the `extract.ListType` Literal) is what `extract.py` dispatches on. The
+   per-state custom handlers (`ca_dcc`/`az_dhs`/`co_med`/`ma_ccc`/`on_agco`/`ab_aglc`/`bc_lcrb`/`sk_slga`) are added to the
+   Literal, not produced by `state_lists._classify`, so the contract-8 test still guards
    `_classify`'s output ⊆ `HANDLED_LIST_TYPES`.
+9. **Canadian provinces are states (D1).** Province rows ride the same `state` TEXT
+   column everywhere (2-letter codes don't collide with USPS); `states.yml` /
+   `state_programs.country` (`US`/`CA`, default `US`) is the only marker, used to
+   partition exports/analyses and derive currency — see.
 
 ## Known asymmetries (intentional)
 
@@ -362,6 +380,13 @@ overlay (its proprietary stages then resolve to registry stubs).
   `db.get_connection()`.
 - **`extract.py`'s `--render`/`--ai` and `company_stores`' `browser_render`/`ai_llm`
   rungs are opt-in / last-resort** by cost.
+- **Jane has no standalone platform module** (every other handled platform does —
+  `dutchie`/`dutchie_plus`/`weedmaps`/`leafly`/`sweedpos`/`trulieve`/`cresco`/`curaleaf`/`fluent`/`hytiva`).
+  Jane's payload is pure JSON, so its only pure surface is the `menu_extractors.jane_hit_records`
+  mapper (which *is* modularized like every platform); the Algolia fetch/paging lives inline in
+  `menus.py` (mirroring SweedPOS, whose menu fetch is also inline while `sweedpos.py` holds only
+  pure parsers) and store discovery in `company_store_fetch._jane_stores`. Extracting a `jane.py`
+  for the Algolia constants + query helpers is a possible parity refactor, not a gap. (audit 2026-07-07)
 - **Two physical-store keys, each with a coordinate fallback.** `dedupe.address_key` = full
   normalized address + zip (intra-source dedup; named `address_key`, not `store_key`, to stay distinct
   from the `{platform}:{external_id}` menu handle Stage 3 calls `store_key`); `compare._match_key` = house number +
@@ -380,6 +405,12 @@ overlay (its proprietary stages then resolve to registry stubs).
   `dedupe.physical_key(record)` is the record-level convenience that layers these — coordinate
   cell → `address_key` street+zip → platform handle — used to dedupe the same physical store
   across the Dutchie/Weedmaps/Leafly bootstrap pools (`bootstrap.py`).
+  `dedupe.location_key` is the distinct **store-history** identity — `geo_key` with a *guarded*
+  `address_key` fallback that **rejects county-only rows** (MD's 119→23 keys) so a coarse roster
+  address can't fabricate an operator-change event. It is the public symbol both store-history legs
+  import (`extract.record_roster_observations` and `company_stores.record_store_observations`); the
+  edge/tier annotations name `geo_key`/`address_key` (its internals) for brevity, but `location_key`
+  is the actual boundary-crossing key.
 
 ## Reference index
 

@@ -66,16 +66,33 @@ def normalize_address(address: str | None) -> str:
     return " ".join(tokens)
 
 
+# A Canadian postal code, with or without the interior space (AGCO emits "P3E4M8",
+# operator sites "P3E 4M8"). Uppercased input only — zip_key() uppercases first.
+_CA_POSTAL_RE = re.compile(r"^[A-Z]\d[A-Z] ?\d[A-Z]\d$")
+
+
+def zip_key(zip_code: str | None) -> str:
+    """Canonical postal identity for match keys: a US ZIP truncated to its 5 digits,
+    a Canadian postal code folded to its 6-char no-space uppercase form. '' if empty.
+
+    One helper so every key builder (here and the overlay's compare matcher) folds
+    "P3E 4M8" and "P3E4M8" to the same key; naive ``[:5]`` truncation would split them
+    ("P3E 4" vs "P3E4M") and lose the last, most local character."""
+    raw = (zip_code or "").strip().upper()
+    if _CA_POSTAL_RE.match(raw):
+        return raw.replace(" ", "")
+    return raw[:5]
+
+
 def address_key(address: str | None, zip_code: str | None) -> str:
-    """A physical-store identity: normalized address + 5-digit zip. '' if unusable.
+    """A physical-store identity: normalized address + zip/postal key. '' if unusable.
 
     Named ``address_key`` (not ``store_key``) to keep it distinct from the unrelated
     ``{platform}:{external_id}`` menu handle that Stage 3 calls ``store_key`` everywhere."""
     normalized = normalize_address(address)
     if not normalized:
         return ""
-    zip5 = (zip_code or "").strip()[:5]
-    return f"{normalized}|{zip5}"
+    return f"{normalized}|{zip_key(zip_code)}"
 
 
 # ~11 m grid cell (4 decimal places of lat/lng). Deliberately TIGHT: only the same rooftop
@@ -89,7 +106,7 @@ _GEO_PRECISION = 4
 def geo_key(
     latitude: float | None, longitude: float | None, zip_code: str | None
 ) -> str:
-    """A physical-store identity from COORDINATES: an ~11 m cell + 5-digit zip; '' if no coords.
+    """A physical-store identity from COORDINATES: an ~11 m cell + zip/postal key; '' if no coords.
 
     The fallback to :func:`address_key`: the same rooftop scraped with divergent address text
     (``US-50`` vs ``U.S. 50``, casing, a legal-entity suffix, a missing ``Dr``) shares a cell
@@ -98,8 +115,7 @@ def geo_key(
     """
     if latitude is None or longitude is None:
         return ""
-    zip5 = (zip_code or "").strip()[:5]
-    return f"@{round(latitude, _GEO_PRECISION)},{round(longitude, _GEO_PRECISION)}|{zip5}"
+    return f"@{round(latitude, _GEO_PRECISION)},{round(longitude, _GEO_PRECISION)}|{zip_key(zip_code)}"
 
 
 def location_key(
@@ -114,14 +130,13 @@ def location_key(
     MD roster rows collapsed to 23 county-level keys). An ungated ``address_key`` would
     merge distinct stores into one pseudo-location and fabricate operator-change events.
     So the address fallback requires BOTH a house-number-bearing address (a digit) and a
-    5-digit zip; anything weaker returns '' (unidentifiable — skip, don't guess). See
-    docs/store_history_design.md.
+    full zip/postal code; anything weaker returns '' (unidentifiable — skip, don't guess).
+    See docs/store_history_design.md.
     """
     key = geo_key(latitude, longitude, zip_code)
     if key:
         return key
-    zip5 = (zip_code or "").strip()[:5]
-    if len(zip5) != 5 or not any(ch.isdigit() for ch in (address or "")):
+    if len(zip_key(zip_code)) < 5 or not any(ch.isdigit() for ch in (address or "")):
         return ""
     return address_key(address, zip_code)
 

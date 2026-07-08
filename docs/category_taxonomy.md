@@ -53,7 +53,7 @@ A raw string can hit several keywords; the first canonical wins:
 The current priority is: Pre-Roll, Vape, Capsule, Concentrate, Tincture, Beverage, Edible,
 Topical, Flower, Accessory.
 
-## Coverage (by product volume, ~4.8M rows)
+## Coverage (by product volume, ~5.5M rows)
 
 Vape ~24% · Pre-Roll ~20% · Flower ~17% · Edible ~15% · Concentrate ~9% · Accessory ~9% ·
 Other **~2.1%** · Beverage ~0.8% · Tincture ~0.6% · Topical ~0.5% · Capsule ~0.45%.
@@ -98,7 +98,7 @@ Two deliberate differences from `category_std`:
   → Indica; only `…-Hybrid` carries the explicit `hybrid` token → Hybrid. Bare `Mixed` / `Blend`
   with no lineage word → `None`.
 
-Distribution across the dataset (~4.8M rows): **Hybrid ~29% · Indica ~16% · Sativa ~9% ·
+Distribution across the dataset (~5.5M rows): **Hybrid ~29% · Indica ~16% · Sativa ~9% ·
 CBD ~0.6% · None ~45%**.
 
 Extend it the same way as the category taxonomy (dry-run `scripts/backfill_strain_std.py`, inspect

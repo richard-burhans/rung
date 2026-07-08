@@ -1,10 +1,12 @@
-# US state cannabis program data.
+# State/province cannabis program data (US states + DC, then Canadian provinces).
 # programs: none | cbd_only | medical | recreational | both
 # program_term: the term to use in search queries for this state's program
 # agency: the regulatory agency name (used in search queries)
 # known_url: the agency's cannabis-program landing page. HEAD-verified before any
 #   search-engine fallback; a live page seeds best_url directly. Leave "" for states
 #   with no program or no reliably-known page (those fall back to search).
+# country: ISO-3166 alpha-2, default US. Canadian provinces ride the same rows —
+#   their 2-letter codes don't collide with USPS codes (docs/canada_expansion.md D1).
 
 - abbr: AK
   name: Alaska
@@ -402,3 +404,94 @@
   program_term: medical cannabis
   agency: Wyoming Department of Health
   known_url: ""
+
+# ── US territories ────────────────────────────────────────────────────────────
+# Territories ride the same `state` column with their own 2-letter codes (no collision)
+# and `country: US` (USD, so no CAD treatment). Puerto Rico has a real medical market. It was
+# brought up as a platform-pool bootstrap (Weedmaps/Leafly, 161 listings live 2026-07-05; Dutchie
+# doesn't serve PR, 0 pool, verified) because no scrapeable roster was known — but the PR Dept. of
+# Health publishes one: the *Registro de Establecimientos con Licencia* (Dec 2024,
+# salud.pr.gov /CMS/DOWNLOAD/8114, 324 dispensary licenses). It's a layout PDF, so it's parsed
+# out-of-band into `scripts/data/pr_licensed_dispensaries.csv` and loaded by
+# `scripts/ingest_pr_roster.py` (source=pr_health_registry) rather than via a states.yml handler.
+# The `name` must be "Puerto Rico" — the Weedmaps/Leafly directory filter keys on the full state name.
+
+- abbr: PR
+  name: Puerto Rico
+  programs: medical
+  program_term: medical cannabis
+  agency: Departamento de Salud de Puerto Rico
+  known_url: https://www.salud.pr.gov/CMS/143
+
+# ── Canada ────────────────────────────────────────────────────────────────────
+# Provinces own cannabis retail (the federal Cannabis Act licenses supply only), so
+# each province's regulator roster is the exact analog of a US state list. Rosters
+# are open government data; cite the regulator (docs/canada_expansion.md §1).
+
+# NOTE: the abbr must be quoted — YAML 1.1 parses bare ON/OFF/YES/NO as booleans.
+- abbr: "ON"
+  name: Ontario
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Alcohol and Gaming Commission of Ontario
+  known_url: https://www.agco.ca/en/cannabis/status-current-cannabis-retail-store-applications
+  # AGCO's store map is an ArcGIS Experience app whose FeatureServer layers are
+  # date-stamped and rotate on republish (Authorized_to_open_20250620 …); the on_agco
+  # handler resolves the current "Authorized To Open" layer from this stable app item
+  # at runtime instead of pinning the dated URL (docs/canada_expansion.md §2).
+  # 1,866 stores, 100% coords, 72% website-filled (verified live 2026-07-04).
+  list_url: https://experience.arcgis.com/experience/86b8b6c8725a4a6484ce60fbd0447ca6
+  list_type: on_agco
+
+- abbr: AB
+  name: Alberta
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Alberta Gaming, Liquor and Cannabis
+  known_url: https://aglc.ca/cannabis
+  # AGLC publishes its full cannabis-licensee report as a direct legacy .xls download
+  # (no auth, OLE2). The ab_aglc handler parses it with xlrd and keeps only Alberta
+  # retail sites — the report also lists out-of-province supplier/producer sites.
+  # No website or coordinate columns (handles/coords come from Stage 2 + the pools).
+  list_url: https://aglc.ca/cannabis/cannabis-licensee-report/EXCEL
+  list_type: ab_aglc
+
+- abbr: BC
+  name: British Columbia
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Liquor and Cannabis Regulation Branch
+  known_url: https://justice.gov.bc.ca/lcrb/
+  # LCRB's public store map is backed by an open JSON API (app is open-source:
+  # bcgov/jag-lcrb-carla-public, Apache-2.0) — one bare list, coords + postal included.
+  # isOpen=false rows (licensed, not yet open) are kept, like ON's authorized-to-open.
+  list_url: https://justice.gov.bc.ca/lcrb/api/establishments/map
+  list_type: bc_lcrb
+
+- abbr: SK
+  name: Saskatchewan
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Saskatchewan Liquor and Gaming Authority
+  known_url: https://www.slga.com/cannabis/cannabis-permits/cannabis-retailing
+  # SLGA posts its authorized-retailers list as a date-stamped .xlsx download that rotates
+  # monthly; the sk_slga handler resolves the current retailers-excel link from this page at
+  # runtime, parses it (openpyxl), and keeps only Active retailers. Carries some websites.
+  list_url: https://www.slga.com/cannabis/cannabis-permits/authorized-saskatchewan-cannabis-sellers-and-distributors
+  list_type: sk_slga
+
+- abbr: MB
+  name: Manitoba
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Liquor, Gaming and Cannabis Authority of Manitoba
+  known_url: https://lgcamb.ca/cannabis/store-list/
+  # LGCA publishes its licensed stores as a Google My Maps layer; the KML export (stable
+  # map id) gives name + coordinates per store, parsed by the generic kml handler.
+  list_url: https://www.google.com/maps/d/u/0/kml?mid=1jTYtNQgB0CVC27Bn_xIsFGeVuCh_KCdR&forcekml=1
+  list_type: kml

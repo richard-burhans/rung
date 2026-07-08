@@ -79,6 +79,19 @@ def test_store_key_combines_address_and_zip() -> None:
     assert dedupe.address_key("", "17011") == ""
 
 
+def test_zip_key_folds_canadian_postal_forms_and_truncates_us() -> None:
+    # The spaced and unspaced Canadian forms key identically (naive [:5] would split them).
+    assert dedupe.zip_key("P3E 4M8") == dedupe.zip_key("P3E4M8") == "P3E4M8"
+    assert dedupe.zip_key("m5v 2t6") == "M5V2T6"      # case-folded
+    assert dedupe.zip_key("17011-1234") == "17011"    # US zip+4 still truncates to 5
+    assert dedupe.zip_key(None) == ""
+
+
+def test_location_key_accepts_canadian_postal_in_the_address_fallback() -> None:
+    key = dedupe.location_key(None, None, "435 Yonge St", "P3E 4M8")
+    assert key == dedupe.address_key("435 Yonge St", "P3E4M8") != ""
+
+
 def test_geo_key_cells_to_rooftop_and_needs_coords() -> None:
     # 4-decimal cell + zip; coordinates that agree to ~11 m share a cell.
     assert dedupe.geo_key(40.12345, -75.67891, "19103-2200") == "@40.1234,-75.6789|19103"

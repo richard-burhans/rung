@@ -44,13 +44,13 @@ classification is an *input signal* mapped into it, not the taxonomy itself (exa
 
 Each platform classifies differently, and — critically — the rich platform sub-category fields are
 **only in ~40% of the data and are not stored in our DB** (we kept only the top category). The one
-field that is **universal across all 4.8M rows and every platform is the product `name`.** So the
+field that is **universal across all ~5.5M rows and every platform is the product `name`.** So the
 hierarchy is built as **keyword rules over the name** (like `category_aliases.yml`), which gives
 **uniform national coverage including Dutchie** (46% of data, no sub-category field). The platform
 sub-category fields become **ground-truth validation** and an optional precision boost if captured
 later.
 
-### Where the sub-category signal lives (national, by share of 4.78M products)
+### Where the sub-category signal lives (national, by share of ~5.5M products)
 
 | Platform | Share | Field | Use |
 |---|---|---|---|
@@ -60,7 +60,7 @@ later.
 | Jane | 2% | `root_subtype` / `kind_subtype` | ground truth |
 | Trulieve / SweedPOS / Cresco | ~5% | `subcategory` / `kind_subtype` / `sub_category` | capture later |
 
-## Empirical sizing (name keywords over all 4.8M rows)
+## Empirical sizing (name keywords over all ~5.5M rows)
 
 - **Vape:** Cartridge ≈ 426k · Disposable/AIO ≈ 372k · Pod ≈ small · **~215k name no form** (~25%).
 - **Edible:** **Gummies ≈ 384k (dominant)** · Chocolate ≈ 64k · Baked ≈ 19k · other (mints/troches/

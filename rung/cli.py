@@ -51,6 +51,34 @@ def bootstrap_dutchie_cmd(state: str) -> None:
     asyncio.run(_run())
 
 
+@click.command("check-dutchie-hash")
+def check_dutchie_hash_cmd() -> None:
+    """Report whether Dutchie's ConsumerDispensaries persisted-query hash is still live.
+
+    The directory sweep self-heals past a rotated hash (full-query fallback), so this is a
+    health signal, not a hard dependency. Run it from the host/worker egress — from a
+    Cloudflare-blocked network every verdict reads as `blocked`. Exit code is 0 only when the
+    pinned hash is `live`, so a cron can alert on drift.
+    """
+    check = _stage("dutchie.hash_health")
+    report = asyncio.run(check())
+    verdict = report["verdict"]
+    persisted, full = report["persisted"], report["full_query"]
+    click.echo(f"dutchie ConsumerDispensaries @ {report['anchor']}: {verdict.upper()}")
+    click.echo(f"  persisted hash : {persisted['outcome']} ({persisted['count']} stores)")
+    click.echo(f"  full-query     : {full['outcome']} ({full['count']} stores)")
+    messages = {
+        "live": "Pinned hash is current — nothing to do.",
+        "stale_hash": "Hash rotated; sweeps run on the full-query fallback. Refresh "
+        "CONSUMER_DISPENSARIES_HASH from a live storefront XHR to restore the cheap path.",
+        "blocked": "Cloudflare is challenging this egress — re-run from the host/worker.",
+        "down": "Neither request style returned data — the endpoint or schema may have changed.",
+    }
+    click.echo(f"  -> {messages.get(verdict, '')}")
+    if verdict != "live":
+        raise SystemExit(1)
+
+
 @click.command("bootstrap-pools")
 @click.option("--state", required=True, help="State to additively capture pool stores for (e.g. NY).")
 def bootstrap_pools_cmd(state: str) -> None:
@@ -84,7 +112,8 @@ def bootstrap_pools_cmd(state: str) -> None:
 @click.option("--failed-only", is_flag=True, help="Only re-search states where the stored URL is dead or was never found.")
 @click.option("--force", is_flag=True, help="Skip URL verification and search every state.")
 def search_states(failed_only: bool, force: bool) -> None:
-    """Search for cannabis dispensary program coverage across all US states + DC."""
+    """Search for dispensary program coverage across every states.yml jurisdiction
+    (US states + DC + Canadian provinces)."""
     asyncio.run(_run_search_states(failed_only=failed_only, force=force))
 
 
@@ -364,7 +393,7 @@ async def _run_search_states(failed_only: bool = False, force: bool = False) -> 
 
     conn = db.get_connection()
     db.create_tables(conn)
-    scope = "failed/unchecked states" if failed_only else "all 51 jurisdictions"
+    scope = "failed/unchecked states" if failed_only else "all jurisdictions"
     click.echo(f"Checking {scope}…", err=True)
     results = await run_state_coverage(conn, failed_only=failed_only, force=force)
     conn.close()

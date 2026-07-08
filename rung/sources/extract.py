@@ -23,9 +23,11 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Literal, get_args
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
+import openpyxl
 import pdfplumber
+import xlrd
 from selectolax.parser import HTMLParser
 
 from rung import db
@@ -497,14 +499,41 @@ def _extract_kml(content: bytes) -> list[DispensaryRecord]:
             desc = _clean(placemark.findtext(f"{_KML_NS}description"))
             if desc and _STREET_RE.search(desc):
                 address = desc
+        latitude, longitude = _kml_point(placemark)
         records.append(
             DispensaryRecord(
                 source="kml", name=name, address=address,
                 city=data.get("city"), state=data.get("state"),
                 zip_code=data.get("zip_code"), phone=data.get("phone"),
+                latitude=latitude, longitude=longitude,
             )
         )
     return records
+
+
+def _kml_point(placemark) -> tuple[float | None, float | None]:
+    """A placemark's ``<Point>`` coordinates as (lat, lng), or (None, None).
+
+    KML encodes a point as ``lng,lat[,alt]`` (whitespace-padded in Google My Maps
+    exports). A 0,0 placeholder or out-of-range value is dropped."""
+    point = placemark.find(f"{_KML_NS}Point")
+    if point is None:
+        return None, None
+    raw = _clean(point.findtext(f"{_KML_NS}coordinates"))
+    if not raw:
+        return None, None
+    parts = raw.split(",")
+    if len(parts) < 2:
+        return None, None
+    try:
+        longitude, latitude = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None, None
+    if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+        return None, None
+    if latitude == 0 and longitude == 0:
+        return None, None
+    return latitude, longitude
 
 
 # ── ArcGIS ───────────────────────────────────────────────────────────────────
@@ -530,6 +559,17 @@ _ARCGIS_PAGE_SIZE = 2000
 _ARCGIS_PAGE_CAP = 25  # ≤50k features — far above any state's dispensary roster
 
 
+def _arcgis_float(attrs: dict, *names: str) -> float | None:
+    """A numeric attribute picked like :func:`_arcgis_attr`; None when absent/non-numeric."""
+    raw = _arcgis_attr(attrs, *names)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _arcgis_record(feat: dict) -> DispensaryRecord | None:
     """One ArcGIS feature → a DispensaryRecord, or None when it carries no usable name."""
     attrs = feat.get("attributes") or {}
@@ -538,13 +578,25 @@ def _arcgis_record(feat: dict) -> DispensaryRecord | None:
     )
     if not name:
         return None
+    # Roster layers often carry lat/lng as plain attributes (Ontario's AGCO does, 100%
+    # filled); a coordinate outside the valid range (or a 0,0 placeholder) is dropped.
+    latitude = _arcgis_float(attrs, "latitude")
+    longitude = _arcgis_float(attrs, "longitude")
+    if (
+        latitude is None or longitude is None
+        or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180)
+        or (latitude == 0 and longitude == 0)
+    ):
+        latitude = longitude = None
     return DispensaryRecord(
         source="arcgis", name=name,
         address=_arcgis_attr(attrs, "address", "addr", "street"),
         city=_arcgis_attr(attrs, "city", "town"),
-        state=_arcgis_attr(attrs, "state"),
+        state=_arcgis_attr(attrs, "state", "province"),
         zip_code=_arcgis_attr(attrs, "zip", "postal"),
         phone=_arcgis_attr(attrs, "phone", "tel"),
+        website=_arcgis_attr(attrs, "website", "web", "url"),
+        latitude=latitude, longitude=longitude,
     )
 
 
@@ -580,6 +632,226 @@ async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]
         if page == _ARCGIS_PAGE_CAP - 1:
             print(f"  arcgis: hit page cap ({_ARCGIS_PAGE_CAP}) — layer may be truncated")
     return records
+
+
+# ── Ontario AGCO cannabis-store map (list_type='on_agco') ────────────────────
+
+# A 32-hex ArcGIS item id anywhere in the configured URL.
+_ARCGIS_ITEM_ID_RE = re.compile(r"\b[0-9a-f]{32}\b")
+
+
+async def _extract_on_agco(url: str, session) -> list[DispensaryRecord]:
+    """Extract Ontario's roster from AGCO's ArcGIS Experience app.
+
+    AGCO republishes its layers under date-stamped service names
+    (``Authorized_to_open_20250620``), so a pinned FeatureServer URL rotates dead on
+    every update; the stable entry point is the Experience-app item. Resolve the app's
+    data sources at runtime and query the "Authorized To Open" layer — its siblings
+    (Application_in_progress / Cancelled_Authorizations / Public_Notice) are other
+    lifecycle stages, not the open-store roster.
+    """
+    match = _ARCGIS_ITEM_ID_RE.search(url)
+    if not match:
+        return []
+    try:
+        data = (
+            await session.get(
+                f"https://www.arcgis.com/sharing/rest/content/items/{match.group(0)}/data?f=json",
+                timeout=30,
+            )
+        ).json()
+    except Exception:
+        return []
+    for source in (data.get("dataSources") or {}).values():
+        if not isinstance(source, dict):
+            continue
+        for child in (source.get("childDataSourceJsons") or {}).values():
+            layer_url = child.get("url") or ""
+            if "authorized_to_open" in layer_url.lower():
+                return await _query_arcgis_layer(layer_url, session)
+    return []
+
+
+# ── Alberta AGLC cannabis-licensee report (list_type='ab_aglc') ──────────────
+
+# The report's stable header names (verified live 2026-07-04); parsed by name so a
+# column reorder doesn't silently shift fields.
+_AGLC_FIELDS = {
+    "name": "Establishment Name",
+    "city": "Site City Name",
+    "address": "Site Address Line 1",
+    "address2": "Site Address Line 2",
+    "province": "Site Province Abbrev",
+    "zip_code": "Site Postal Code",
+    "phone": "Telephone Number",
+}
+
+
+def _xls_text(cell) -> str | None:
+    """A cell's value as clean text. Numeric cells (phone numbers, license ids) come
+    back as floats from xlrd — fold 2508842774.0 → '2508842774'."""
+    if cell.ctype == xlrd.XL_CELL_NUMBER:
+        return str(int(cell.value))
+    return _clean(str(cell.value))
+
+
+def _aglc_record(values: dict[str, str | None]) -> DispensaryRecord | None:
+    """One AGLC report row → a record, keeping only Alberta retail sites.
+
+    The licensee report also lists out-of-province supplier/producer sites (ON/BC/QC…,
+    152 of 955 rows on the 2026-07-04 pull) — those are not Alberta stores, and the
+    persist path would otherwise stamp them state=AB.
+    """
+    if values.get("province") != "AB":
+        return None
+    name = values.get("name")
+    if not name:
+        return None
+    address = values.get("address")
+    if values.get("address2"):
+        address = f"{address}, {values['address2']}" if address else values["address2"]
+    return DispensaryRecord(
+        source="ab_aglc", name=name, address=address,
+        city=values.get("city"), state="AB",
+        zip_code=values.get("zip_code"), phone=values.get("phone"),
+    )
+
+
+def _extract_ab_aglc(content: bytes) -> list[DispensaryRecord]:
+    """Extract Alberta's roster from AGLC's licensee report (legacy OLE2 .xls).
+
+    Direct download (no auth): aglc.ca/cannabis/cannabis-licensee-report/EXCEL.
+    Header row 0, one licensee per row; no website or coordinate columns exist
+    (menu handles and coords come from Stage 2 / the pool bootstrap).
+    """
+    book = xlrd.open_workbook(file_contents=content)
+    sheet = book.sheets()[0]
+    if sheet.nrows < 2:
+        return []
+    header = [_clean(str(sheet.cell_value(0, c))) for c in range(sheet.ncols)]
+    columns = {field: header.index(col) for field, col in _AGLC_FIELDS.items() if col in header}
+    if "name" not in columns:
+        return []
+    records = []
+    for r in range(1, sheet.nrows):
+        values = {field: _xls_text(sheet.cell(r, c)) for field, c in columns.items()}
+        record = _aglc_record(values)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+# ── Saskatchewan SLGA cannabis retailers (list_type='sk_slga') ───────────────
+
+# The SLGA retailers spreadsheet's stable header names (verified live 2026-07-04).
+_SLGA_FIELDS = {
+    "name": "Operating Name",
+    "city": "City",
+    "address": "Street Address",
+    "website": "Website",
+    "status": "StatusDesc",
+}
+# The download link on the SLGA page is date-stamped (…-excel--june-30.xlsx) and rotates,
+# so resolve the current retailers .xlsx href from the page rather than pinning it.
+_SLGA_XLSX_RE = re.compile(r'href="([^"]*cannabis-retailers-excel[^"]*\.xlsx)"', re.IGNORECASE)
+
+
+def _slga_record(values: dict[str, str | None]) -> DispensaryRecord | None:
+    """One SLGA spreadsheet row → a record, keeping only active retailers."""
+    if (values.get("status") or "").strip().lower() != "active":
+        return None
+    name = values.get("name")
+    if not name:
+        return None
+    website = values.get("website")
+    if website and website.strip().upper() in ("N/A", "NA", "-"):
+        website = None
+    return DispensaryRecord(
+        source="sk_slga", name=name, address=values.get("address"),
+        city=values.get("city"), state="SK", website=website,
+    )
+
+
+def _extract_slga_xlsx(content: bytes) -> list[DispensaryRecord]:
+    """Parse the SLGA cannabis-retailers .xlsx (header row 0, one retailer per row)."""
+    import io
+
+    book = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+    sheet = book.worksheets[0]
+    rows = sheet.iter_rows(values_only=True)
+    header = [_clean(str(c)) if c is not None else None for c in next(rows, [])]
+    columns = {field: header.index(col) for field, col in _SLGA_FIELDS.items() if col in header}
+    if "name" not in columns:
+        return []
+    records = []
+    for row in rows:
+        values = {
+            field: (_clean(str(row[i])) if i < len(row) and row[i] is not None else None)
+            for field, i in columns.items()
+        }
+        record = _slga_record(values)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+async def _extract_sk_slga(url: str, session) -> list[DispensaryRecord]:
+    """Extract Saskatchewan's roster from SLGA's authorized-retailers page.
+
+    Resolves the date-stamped retailers .xlsx link from the page at runtime (the URL
+    rotates on each monthly update), downloads it, and parses the active retailers.
+    """
+    try:
+        page = (await session.get(url, timeout=30)).text
+    except Exception:
+        return []
+    match = _SLGA_XLSX_RE.search(page)
+    if not match:
+        return []
+    xlsx_url = urljoin(url, match.group(1))
+    try:
+        resp = await session.get(xlsx_url, timeout=60)
+    except Exception:
+        return []
+    if resp.status_code >= 400 or resp.content[:4] != b"PK\x03\x04":
+        return []
+    return _extract_slga_xlsx(resp.content)
+
+
+# ── British Columbia LCRB establishments map (list_type='bc_lcrb') ────────────
+
+def _bc_lcrb_record(obj: dict) -> DispensaryRecord | None:
+    """One LCRB establishment object → a record.
+
+    The open JSON API behind justice.gov.bc.ca/lcrb/map (the app is open-source,
+    bcgov/jag-lcrb-carla-public): name/addressStreet/addressCity/addressPostal/
+    latitude/longitude/phone/isOpen. Licensed-but-not-yet-open rows (isOpen=false)
+    are kept, mirroring Ontario's authorized-to-open roster.
+    """
+    name = _clean(obj.get("name"))
+    if not name:
+        return None
+    return DispensaryRecord(
+        source="bc_lcrb", name=name,
+        address=_clean(obj.get("addressStreet")),
+        city=_clean(obj.get("addressCity")),
+        state="BC",
+        zip_code=_clean(obj.get("addressPostal")),
+        phone=_clean(obj.get("phone")),
+        latitude=obj.get("latitude"), longitude=obj.get("longitude"),
+    )
+
+
+async def _extract_bc_lcrb(url: str, session) -> list[DispensaryRecord]:
+    """Fetch BC's roster from the LCRB map API (a bare JSON list, no paging/auth)."""
+    try:
+        payload = (await session.get(url, timeout=60)).json()
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [rec for obj in payload if isinstance(obj, dict)
+            if (rec := _bc_lcrb_record(obj)) is not None]
 
 
 async def _extract_arcgis(url: str, session) -> list[DispensaryRecord]:
@@ -715,7 +987,10 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 # The list_type vocabulary this dispatcher understands. `state_lists._classify` (the
 # producer) must stay a subset of this — guarded by test_list_type_vocabulary_consistent
 # so the two never drift. Any other value falls through to the html parser.
-ListType = Literal["pdf", "csv", "kml", "arcgis", "ca_dcc", "az_dhs", "co_med", "ma_ccc", "lookup", "html"]
+ListType = Literal[
+    "pdf", "csv", "kml", "arcgis", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
+    "on_agco", "ab_aglc", "bc_lcrb", "sk_slga", "lookup", "html",
+]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
 
 
@@ -730,6 +1005,12 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
             return await _extract_arcgis(list_url, session)
         if list_type == "ca_dcc":
             return await _extract_ca_dcc(list_url, session)
+        if list_type == "on_agco":
+            return await _extract_on_agco(list_url, session)
+        if list_type == "bc_lcrb":
+            return await _extract_bc_lcrb(list_url, session)
+        if list_type == "sk_slga":
+            return await _extract_sk_slga(list_url, session)
         if list_type in ("lookup",):
             return []  # dynamic search front ends — caller uses AI fallback
         try:
@@ -746,6 +1027,9 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
                 return _extract_pdf(resp.content)
             if list_type == "az_dhs" and resp.content[:5].startswith(b"%PDF"):
                 return _extract_az_dhs(resp.content)
+            # OLE2 magic — an .xls URL sometimes serves an HTML error page; trust the bytes.
+            if list_type == "ab_aglc" and resp.content[:4] == b"\xd0\xcf\x11\xe0":
+                return _extract_ab_aglc(resp.content)
             if list_type == "co_med":
                 return _extract_co_med(resp.text)
             if list_type == "ma_ccc":

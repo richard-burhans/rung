@@ -65,17 +65,23 @@ def _internal_edges() -> dict[str, set[str]]:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         deps: set[str] = set()
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom):
-                continue
-            mod = node.module or ""
-            if node.level:  # relative import
-                targets = ([mod.split(".")[-1]] if mod else [a.name for a in node.names])
-            elif mod in ("rung", "rung.sources"):
-                targets = [a.name for a in node.names]          # names are submodules
-            elif mod.startswith("rung."):
-                targets = [mod.split(".")[-1]]                  # deeper path: names are symbols
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if node.level:  # relative import
+                    targets = ([mod.split(".")[-1]] if mod else [a.name for a in node.names])
+                elif mod in ("rung", "rung.sources"):
+                    targets = [a.name for a in node.names]          # names are submodules
+                elif mod.startswith("rung."):
+                    targets = [mod.split(".")[-1]]                  # deeper path: names are symbols
+                else:
+                    continue                                        # third-party / the overlay
+            elif isinstance(node, ast.Import):
+                # plain `import rung.db` / `import rung.sources.dedupe` — the submodule stem is the
+                # trailing component (mirrors _imported_roots so this form can't slip the guard).
+                targets = [a.name.split(".")[-1] for a in node.names
+                           if a.name.split(".")[0] == "rung" and "." in a.name]
             else:
-                continue                                        # third-party / the overlay
+                continue
             deps.update(t for t in targets if t in stems)
         deps.discard(path.stem)
         edges[path.stem] = deps
@@ -99,18 +105,27 @@ def _overlay_imports() -> dict[str, dict[str, set[str]]]:
         core: set[str] = set()
         overlay: set[str] = set()
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or node.level:
-                continue
-            mod = node.module or ""
-            root = mod.split(".")[0]
-            if root == "rung":
-                names = ([a.name for a in node.names]
-                         if mod in ("rung", "rung.sources")
-                         else [mod.split(".")[-1]])
-                core.update(n for n in names if n in pub)
-            elif root == INTEL_PKG:
-                names = ([a.name for a in node.names] if mod == INTEL_PKG else [mod.split(".")[-1]])
-                overlay.update(n for n in names if n in ov)
+            if isinstance(node, ast.ImportFrom) and not node.level:
+                mod = node.module or ""
+                root = mod.split(".")[0]
+                if root == "rung":
+                    names = ([a.name for a in node.names]
+                             if mod in ("rung", "rung.sources")
+                             else [mod.split(".")[-1]])
+                    core.update(n for n in names if n in pub)
+                elif root == INTEL_PKG:
+                    names = ([a.name for a in node.names] if mod == INTEL_PKG else [mod.split(".")[-1]])
+                    overlay.update(n for n in names if n in ov)
+            elif isinstance(node, ast.Import):
+                # plain `import rung.X` / `import rung_intel.X` — trailing component is the module stem.
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    if len(parts) < 2:
+                        continue
+                    if parts[0] == "rung" and parts[-1] in pub:
+                        core.add(parts[-1])
+                    elif parts[0] == INTEL_PKG and parts[-1] in ov:
+                        overlay.add(parts[-1])
         overlay.discard(path.stem)
         out[path.stem] = {"core": core, "overlay": overlay}
     return out

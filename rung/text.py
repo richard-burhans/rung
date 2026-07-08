@@ -372,6 +372,9 @@ def normalize_strain_type(raw: str | None) -> str | None:
 TERPENE_COLUMNS = (
     "Myrcene", "Limonene", "Caryophyllene", "Pinene", "Linalool",
     "Terpinolene", "Humulene", "Ocimene", "Bisabolol",
+    # Sesquiterpene alcohols tied to the Indica label's genetics (Watts 2021); widely reported
+    # (guaiol ~63k / eudesmol ~4k flower) but previously dropped — see analysis #75.
+    "Guaiol", "Eudesmol",
 )
 _TERPENE_KEYS = tuple((canon, canon.lower()) for canon in TERPENE_COLUMNS)
 

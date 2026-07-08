@@ -78,6 +78,16 @@ def test_normalize_terpenes_folds_aliases_and_sums_pinene():
     assert total == 2.4
 
 
+def test_normalize_terpenes_tracks_sesquiterpene_alcohols():
+    # Guaiol/eudesmol (Watts 2021 Indica markers) are tracked; isomers fold to one canonical (#75).
+    std, _ = normalize_terpenes([
+        {"name": "Guaiol", "value": 0.3},
+        {"name": "Beta-Eudesmol", "value": 0.2},
+        {"name": "alpha eudesmol", "value": 0.1},  # folds into Eudesmol
+    ])
+    assert std == {"Guaiol": 0.3, "Eudesmol": 0.3}  # eudesmol isomers summed; sorted desc
+
+
 def test_normalize_terpenes_converts_mg_per_gram():
     # Trulieve syringes publish terpenes in mg/g; mg/g ÷ 10 = %.
     std, total = normalize_terpenes([{"name": "Limonene", "value": 20.0, "unit": "mg/g"}])

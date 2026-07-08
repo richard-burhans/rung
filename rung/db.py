@@ -411,19 +411,27 @@ CREATE INDEX IF NOT EXISTS store_observations_location ON store_observations (lo
 # representative size, and the folded terpenes). The raw platform-shaped columns
 # (category/terpenes/variants) stay on store_products; this view is what callers query for
 # apples-to-apples comparison across platforms and states.
+#
+# `currency` is derived (not stored per-row): the store's country determines it — every
+# CA-province store is CAD, every US store USD — via state_programs.country, a total mapping,
+# so a per-row column would only duplicate it (design decision D2, docs/canada_expansion.md).
+# `price`/`price_per_g` stay numeric in their native currency; any cross-country price analysis
+# MUST partition or convert by this column, never pool CAD with USD.
 _CREATE_PRODUCTS_NORMALIZED_VIEW = """
 CREATE OR REPLACE VIEW products_normalized AS
 SELECT
-    id, company_id, state, store_key, platform, source, external_product_id,
-    name, brand, category_std AS category, strain_type_std AS strain_type,
-    price, size_g,
-    CASE WHEN size_g > 0 AND price IS NOT NULL
-         THEN round((price / size_g)::numeric, 2) END AS price_per_g,
-    thc, cbd, thc_mg, cbd_mg, terp_total, terpenes_std,
-    scraped_at,
-    product_type_std AS product_type,
-    cannabinoids_std  -- appended last: CREATE OR REPLACE VIEW only allows adding columns at the end
-FROM store_products
+    sp.id, sp.company_id, sp.state, sp.store_key, sp.platform, sp.source, sp.external_product_id,
+    sp.name, sp.brand, sp.category_std AS category, sp.strain_type_std AS strain_type,
+    sp.price, sp.size_g,
+    CASE WHEN sp.size_g > 0 AND sp.price IS NOT NULL
+         THEN round((sp.price / sp.size_g)::numeric, 2) END AS price_per_g,
+    sp.thc, sp.cbd, sp.thc_mg, sp.cbd_mg, sp.terp_total, sp.terpenes_std,
+    sp.scraped_at,
+    sp.product_type_std AS product_type,
+    sp.cannabinoids_std,  -- appended: CREATE OR REPLACE VIEW only allows adding columns at the end
+    CASE WHEN prog.country = 'CA' THEN 'CAD' ELSE 'USD' END AS currency
+FROM store_products sp
+LEFT JOIN state_programs prog ON prog.abbr = sp.state
 """
 
 _INSERT_STORE_PRODUCT = """
@@ -1368,7 +1376,8 @@ CREATE TABLE IF NOT EXISTS state_programs (
     list_url      TEXT,
     list_type     TEXT,
     list_found_at TEXT,
-    list_status   TEXT
+    list_status   TEXT,
+    country       TEXT NOT NULL DEFAULT 'US'
 )
 """
 
@@ -1379,13 +1388,14 @@ _STATE_PROGRAM_ADDED_COLUMNS = {
     "list_type": "TEXT",
     "list_found_at": "TEXT",
     "list_status": "TEXT",
+    "country": "TEXT NOT NULL DEFAULT 'US'",
 }
 
 _UPSERT_STATE_PROGRAM = """
 INSERT INTO state_programs
   (abbr, name, programs, program_term, agency, best_url, source_type,
-   all_gov_urls, last_checked, check_status, searched_at, error)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+   all_gov_urls, last_checked, check_status, searched_at, error, country)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 ON CONFLICT (abbr) DO UPDATE SET
   best_url     = excluded.best_url,
   source_type  = excluded.source_type,
@@ -1393,7 +1403,8 @@ ON CONFLICT (abbr) DO UPDATE SET
   last_checked = excluded.last_checked,
   check_status = excluded.check_status,
   searched_at  = excluded.searched_at,
-  error        = excluded.error
+  error        = excluded.error,
+  country      = excluded.country
 """
 
 
@@ -1414,6 +1425,7 @@ def upsert_state_program(conn: DBConn, record: StateProgramRecord) -> None:
             record.check_status,
             record.searched_at,
             record.error,
+            record.country,
         ),
     )
 
@@ -1423,7 +1435,7 @@ def get_state_program(conn: DBConn, abbr: str) -> StateProgramRecord | None:
     row = conn.execute(
         "SELECT abbr, name, programs, program_term, agency, best_url, source_type, "
         "all_gov_urls, last_checked, check_status, searched_at, error, "
-        "list_url, list_type, list_found_at, list_status "
+        "list_url, list_type, list_found_at, list_status, country "
         "FROM state_programs WHERE abbr = %s",
         (abbr,),
     ).fetchone()
@@ -1437,7 +1449,7 @@ def get_all_state_programs(conn: DBConn) -> list[StateProgramRecord]:
     rows = conn.execute(
         "SELECT abbr, name, programs, program_term, agency, best_url, source_type, "
         "all_gov_urls, last_checked, check_status, searched_at, error, "
-        "list_url, list_type, list_found_at, list_status "
+        "list_url, list_type, list_found_at, list_status, country "
         "FROM state_programs ORDER BY name"
     ).fetchall()
     return [_row_to_state_program(row) for row in rows]
@@ -1446,7 +1458,7 @@ def get_all_state_programs(conn: DBConn) -> list[StateProgramRecord]:
 def _row_to_state_program(row: tuple) -> StateProgramRecord:
     abbr, name, programs, program_term, agency, best_url, source_type, \
         all_gov_urls_json, last_checked, check_status, searched_at, error, \
-        list_url, list_type, list_found_at, list_status = row
+        list_url, list_type, list_found_at, list_status, country = row
     all_gov_urls: list[str] = []
     if all_gov_urls_json:
         with contextlib.suppress(ValueError, TypeError):
@@ -1468,6 +1480,7 @@ def _row_to_state_program(row: tuple) -> StateProgramRecord:
         list_type=list_type,
         list_found_at=list_found_at,
         list_status=list_status,
+        country=country or "US",
     )
 
 

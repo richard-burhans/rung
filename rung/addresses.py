@@ -12,12 +12,18 @@ from selectolax.parser import HTMLParser
 
 from rung.models import DispensaryRecord
 
-ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
+# US 5-digit ZIP (optional +4) or a Canadian postal code (A1A 1A1, with or without
+# the space — Ontario's AGCO roster emits "P3E4M8"). Uppercase-only for the postal
+# letters: provinces publish them uppercased and it keeps prose from false-matching.
+ZIP_RE = re.compile(r"\b(?:\d{5}(?:-\d{4})?|[A-Z]\d[A-Z] ?\d[A-Z]\d)\b")
 STREET_RE = re.compile(r"\d{1,6}\s+[A-Za-z0-9.\- ]+")
 PHONE_RE = re.compile(r"\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}")
 # A full "street, city, ST 12345" address, for card/list (non-table) pages.
+# The state group matches Canadian province codes too (ON/BC/…), the zip group
+# either ZIP shape or a Canadian postal code.
 BLOCK_ADDRESS_RE = re.compile(
-    r"(\d{1,6}[^,\n]{2,60}?),\s*([A-Za-z .'\-]{2,40}?),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)"
+    r"(\d{1,6}[^,\n]{2,60}?),\s*([A-Za-z .'\-]{2,40}?),\s*([A-Z]{2})\s+"
+    r"(\d{5}(?:-\d{4})?|[A-Z]\d[A-Z] ?\d[A-Z]\d)"
 )
 NAME_ELEMENT_SEL = "a, h1, h2, h3, h4, h5, h6, strong, b"
 # Zero-width space, ZWNJ, ZWJ, BOM — sometimes embedded in scraped cells.

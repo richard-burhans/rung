@@ -10,17 +10,24 @@ import re as _re
 from rung.sources.extract import (
     _ARCGIS_PAGE_SIZE,
     _ARCGIS_SERVICE_RE,
+    _aglc_record,
     _arcgis_attr,
+    _arcgis_record,
+    _bc_lcrb_record,
     _ca_dcc_record,
     _clean,
     _extract_address_blocks,
+    _extract_bc_lcrb,
     _extract_csv,
     _extract_html,
+    _extract_kml,
+    _extract_on_agco,
     _header_map,
     _infer_name_column,
     _location_fraction,
     _match_field,
     _query_arcgis_layer,
+    _slga_record,
     _split_name_address,
 )
 
@@ -273,7 +280,180 @@ def test_arcgis_attr_recognizes_dispensary_field():
     assert _arcgis_attr(attrs, "phone") is None
 
 
-# ── CA DCC record mapping ────────────────────────────────────────────────────
+# The AGCO (Ontario) roster's field shape — Province, no-space PostalCode, Website,
+# and lat/lng as plain attributes (docs/canada_expansion.md §2).
+_AGCO_ATTRS = {
+    "PremisesName": "True North Cannabis Co.", "StreetAddress": "435 Yonge St",
+    "City": "Toronto", "Province": "ON", "PostalCode": "M5B1T3",
+    "Website": "https://truenorthcannabisco.com", "Latitude": 43.6606, "Longitude": -79.3832,
+    "ApplicationStatus": "Authorized to Open",
+}
+
+
+def test_arcgis_record_maps_province_website_and_coords():
+    rec = _arcgis_record({"attributes": _AGCO_ATTRS})
+    assert rec is not None
+    assert rec.name == "True North Cannabis Co."
+    assert rec.state == "ON"
+    assert rec.zip_code == "M5B1T3"
+    assert rec.website == "https://truenorthcannabisco.com"
+    assert rec.latitude == 43.6606 and rec.longitude == -79.3832
+
+
+def test_arcgis_record_drops_invalid_or_placeholder_coords():
+    rec = _arcgis_record({"attributes": {"Name": "X", "Latitude": 0, "Longitude": 0}})
+    assert rec.latitude is None and rec.longitude is None
+    rec = _arcgis_record({"attributes": {"Name": "X", "Latitude": 143.0, "Longitude": -79.0}})
+    assert rec.latitude is None and rec.longitude is None
+
+
+class _FakeAgcoSession:
+    """Serves the Experience-app item data, then the resolved layer's query."""
+
+    def __init__(self):
+        self.urls = []
+
+    async def get(self, url, timeout=None):
+        self.urls.append(url)
+        if "/sharing/rest/content/items/" in url:
+            return _FakeArcgisResp({"dataSources": {"dataSource_1": {
+                "type": "WEB_MAP",
+                "childDataSourceJsons": {
+                    "in_progress": {"url": "https://svc/rest/services/Application_in_progress_20250620/FeatureServer/0"},
+                    "authorized": {"url": "https://svc/rest/services/Authorized_to_open_20250620/FeatureServer/0"},
+                    "cancelled": {"url": "https://svc/rest/services/Cancelled_Authorizations_20250620/FeatureServer/0"},
+                },
+            }}})
+        return _FakeArcgisResp({"features": [{"attributes": _AGCO_ATTRS}]})
+
+
+def test_on_agco_resolves_the_authorized_layer_from_the_app_item():
+    session = _FakeAgcoSession()
+    records = asyncio.run(_extract_on_agco(
+        "https://experience.arcgis.com/experience/86b8b6c8725a4a6484ce60fbd0447ca6", session
+    ))
+    assert len(records) == 1 and records[0].state == "ON"
+    # The date-stamped layer was resolved at runtime, and only the authorized layer queried.
+    assert any("Authorized_to_open" in u for u in session.urls)
+    assert not any("in_progress" in u or "Cancelled" in u for u in session.urls)
+
+
+def test_on_agco_without_an_item_id_returns_nothing():
+    assert asyncio.run(_extract_on_agco("https://agco.ca/no-item-here", _FakeAgcoSession())) == []
+
+
+# ── Alberta AGLC record mapping ──────────────────────────────────────────────
+
+def _aglc_row(**over):
+    base = {
+        "name": "13th Floor Cannabis", "city": "AIRDRIE",
+        "address": "1005-401 COOPERS BLVD SW", "address2": None,
+        "province": "AB", "zip_code": "T4B 4J3", "phone": "4039601313",
+    }
+    base.update(over)
+    return base
+
+
+def test_aglc_record_maps_alberta_retail_row():
+    rec = _aglc_record(_aglc_row())
+    assert rec is not None
+    assert rec.name == "13th Floor Cannabis" and rec.state == "AB"
+    assert rec.address == "1005-401 COOPERS BLVD SW"
+    assert rec.zip_code == "T4B 4J3" and rec.phone == "4039601313"
+
+
+def test_aglc_record_drops_out_of_province_licensee_sites():
+    # The report lists out-of-province supplier/producer sites — not Alberta stores.
+    assert _aglc_record(_aglc_row(province="BC")) is None
+    assert _aglc_record(_aglc_row(province="ON")) is None
+    assert _aglc_record(_aglc_row(name=None)) is None
+
+
+def test_aglc_record_joins_address_lines():
+    rec = _aglc_record(_aglc_row(address2="UNIT 4"))
+    assert rec.address == "1005-401 COOPERS BLVD SW, UNIT 4"
+
+
+# ── BC LCRB record mapping ───────────────────────────────────────────────────
+
+_BC_OBJ = {
+    "id": "2ca5208f", "addressCity": "100 Mile House", "addressPostal": "V0K2E0",
+    "addressStreet": "355 Birch Avenue", "name": "Club Cannabis",
+    "license": "450228", "phone": "2503952545",
+    "latitude": 51.64324, "longitude": -121.29551, "isOpen": True,
+}
+
+
+def test_bc_lcrb_record_maps_establishment():
+    rec = _bc_lcrb_record(_BC_OBJ)
+    assert rec is not None
+    assert rec.name == "Club Cannabis" and rec.state == "BC"
+    assert rec.zip_code == "V0K2E0"
+    assert rec.latitude == 51.64324 and rec.longitude == -121.29551
+
+
+def test_bc_lcrb_keeps_not_yet_open_and_drops_nameless():
+    assert _bc_lcrb_record({**_BC_OBJ, "isOpen": False}) is not None  # licensed = roster
+    assert _bc_lcrb_record({**_BC_OBJ, "name": ""}) is None
+
+
+def test_extract_bc_lcrb_parses_the_bare_list():
+    class _Session:
+        async def get(self, url, timeout=None):
+            return _FakeArcgisResp([_BC_OBJ, {"name": ""}, "junk"])
+
+    records = asyncio.run(_extract_bc_lcrb("https://x/api/establishments/map", _Session()))
+    assert len(records) == 1 and records[0].name == "Club Cannabis"
+
+
+# ── Saskatchewan SLGA record mapping ─────────────────────────────────────────
+
+def _slga_row(**over):
+    base = {
+        "name": "Wiid Boutique Inc. - Regina", "city": "Regina",
+        "address": "4554 Albert St", "website": "www.wiidsk.ca", "status": "Active",
+    }
+    base.update(over)
+    return base
+
+
+def test_slga_record_maps_active_retailer():
+    rec = _slga_record(_slga_row())
+    assert rec is not None
+    assert rec.name == "Wiid Boutique Inc. - Regina" and rec.state == "SK"
+    assert rec.city == "Regina" and rec.website == "www.wiidsk.ca"
+
+
+def test_slga_record_drops_inactive_and_nameless_and_na_website():
+    assert _slga_record(_slga_row(status="Cancelled")) is None
+    assert _slga_record(_slga_row(status="Suspended")) is None
+    assert _slga_record(_slga_row(name=None)) is None
+    assert _slga_record(_slga_row(website="N/A")).website is None  # placeholder website dropped
+
+
+# ── KML point coordinates (Manitoba's Google My Maps export) ─────────────────
+
+_MB_KML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b'<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+    b'<Placemark><name>Altona Motor Hotel</name>'
+    b'<Point><coordinates>\n  -97.555997,49.103839,0\n  </coordinates></Point></Placemark>'
+    b'<Placemark><name>No Coords Store</name></Placemark>'
+    b'<Placemark><name>Null Island</name>'
+    b'<Point><coordinates>0,0,0</coordinates></Point></Placemark>'
+    b'</Document></kml>'
+)
+
+
+def test_kml_parses_point_coordinates():
+    records = _extract_kml(_MB_KML)
+    assert len(records) == 3
+    by_name = {r.name: r for r in records}
+    # lng,lat order in KML → (lat, lng) on the record
+    assert by_name["Altona Motor Hotel"].latitude == 49.103839
+    assert by_name["Altona Motor Hotel"].longitude == -97.555997
+    assert by_name["No Coords Store"].latitude is None       # no <Point> → no coords
+    assert by_name["Null Island"].latitude is None            # 0,0 placeholder dropped
 
 def _ca_lic(**over):
     base = {

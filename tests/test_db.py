@@ -72,6 +72,38 @@ def test_create_tables_builds_the_partial_pending_claim_index() -> None:
 
 # ── snapshot freshness ────────────────────────────────────────────────────────
 
+def test_products_normalized_derives_currency_from_country() -> None:
+    conn = _conn()
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="ON", name="Ontario", programs="recreational", program_term="cannabis",
+        agency="AGCO", country="CA"))
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="PA", name="Pennsylvania", programs="medical", program_term="medical",
+        agency="DOH"))  # country defaults to US
+    for state in ("ON", "PA"):
+        db.insert_store_product(conn, StoreProductRecord(
+            company_id=1, state=state, store_key="s", platform="p",
+            external_id="1", source="s", name="x", price=10.0))
+    conn.commit()
+    cur = dict(conn.execute(
+        "SELECT state, currency FROM products_normalized WHERE state = ANY(%s)",
+        (["ON", "PA"],)).fetchall())
+    assert cur == {"ON": "CAD", "PA": "USD"}
+
+
+def test_products_normalized_currency_defaults_usd_for_unregistered_state() -> None:
+    # A store_products row whose state has no state_programs row (e.g. a bootstrap-only
+    # jurisdiction) still gets a currency — the LEFT JOIN yields NULL country → USD.
+    conn = _conn()
+    db.insert_store_product(conn, StoreProductRecord(
+        company_id=1, state="ZZ", store_key="s", platform="p",
+        external_id="1", source="s", name="x", price=5.0))
+    conn.commit()
+    row = conn.execute(
+        "SELECT currency FROM products_normalized WHERE state = 'ZZ'").fetchone()
+    assert row[0] == "USD"
+
+
 def test_latest_snapshot_times_returns_max_per_store_key() -> None:
     conn = _conn()
     for store_key in ("A", "A", "B"):
@@ -311,3 +343,16 @@ def test_get_all_state_programs_round_trips_ordered_by_name() -> None:
     pa = next(p for p in programs if p.abbr == "PA")
     assert pa.programs == "medical" and pa.best_url == "https://pa.gov"
     assert pa.source_type == "pdf"
+
+
+def test_state_program_country_round_trips_and_defaults_to_us() -> None:
+    conn = _conn()
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="ON", name="Ontario", programs="recreational", program_term="cannabis",
+        agency="AGCO", country="CA"))
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="PA", name="Pennsylvania", programs="medical", program_term="medical",
+        agency="DOH"))
+    conn.commit()
+    assert db.get_state_program(conn, "ON").country == "CA"
+    assert db.get_state_program(conn, "PA").country == "US"   # default when unspecified

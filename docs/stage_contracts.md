@@ -33,7 +33,7 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
 ## 2. Per-stage contracts
 
 ### search-states — `sources/state_search.py`
-- **In:** `states.yml` (51 jurisdictions; `known_url` seeds).
+- **In:** `states.yml` (57 jurisdictions — 50 states + DC + PR + 5 Canadian provinces; `known_url` seeds).
 - **Out:** `state_programs` upsert — all columns EXCEPT `list_*` (`db.upsert_state_program`,
   db.py). Status: `check_status` ok|failed|never, `error`, `searched_at`.
 - **Re-run:** per-state upserts, committed in batches; `--failed-only` re-processes
@@ -63,14 +63,14 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
   Insert-if-absent on `(canonical_name, state)`; never deletes.
 - **Re-run:** additive only.
 
-### recon — `sources/recon.py`
+### recon — `rung_intel/recon.py`
 - **In:** `companies.id/canonical_name` (per state); `dispensaries.name/website` (homepage
   derivation); `company_homepages.yml` overrides.
 - **Out:** `company_recon` full-row upsert per company (`db.upsert_recon`, db.py). Failure is a
   row with `error` set; success has `error IS NULL` + `platform`/`confidence`.
 - **Re-run:** re-probes and overwrites; safe.
 
-### scrape-company-stores — `sources/company_stores.py`
+### scrape-company-stores — `rung_intel/company_stores.py`
 - **In:** `db.get_recon_companies_for_state` (db.py): recon rows with `error IS NULL AND
   homepage_url IS NOT NULL`; `access_methods` per-target winner + hints; platform YAMLs.
 - **Out:**
@@ -96,7 +96,7 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
 - **Re-run:** cached winner skips re-discovery; failure triggers a ladder re-walk (see
   `access_methods_design.md`).
 
-### scrape-menus — `sources/menus.py` (Stage 3)
+### scrape-menus — `rung_intel/menus.py` (Stage 3)
 - **In:** `db.get_menu_stores_for_state` — canonical `company_stores` rows carrying a Stage-2
   scrape handle (`platform` + `external_id`), DISTINCT ON the handle; the discovery `source`
   column routes the menu rung (it says which platform minted the external_id); the company's

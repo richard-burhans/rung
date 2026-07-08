@@ -18,6 +18,14 @@ def test_zip_re_matches_five_and_nine_digit() -> None:
     assert addr.ZIP_RE.search("no zip here 123") is None
 
 
+def test_zip_re_matches_canadian_postal_codes() -> None:
+    # Both the spaced form and AGCO's unspaced roster form; lowercase prose doesn't match.
+    assert addr.ZIP_RE.search("Sudbury ON P3E 4M8").group() == "P3E 4M8"
+    assert addr.ZIP_RE.search("Sudbury ON P3E4M8").group() == "P3E4M8"
+    assert addr.ZIP_RE.fullmatch("M5V 2T6") is not None
+    assert addr.ZIP_RE.search("no postal here a1a 1a1") is None
+
+
 def test_phone_re_matches_common_formats() -> None:
     for raw in ("(412) 555-0100", "412-555-0100", "412.555.0100", "4125550100"):
         assert addr.PHONE_RE.search(raw) is not None
@@ -27,6 +35,12 @@ def test_block_address_re_captures_groups() -> None:
     m = addr.BLOCK_ADDRESS_RE.search("100 Liberty Ave, Pittsburgh, PA 15222")
     assert m is not None
     assert m.groups() == ("100 Liberty Ave", "Pittsburgh", "PA", "15222")
+
+
+def test_block_address_re_captures_canadian_address() -> None:
+    m = addr.BLOCK_ADDRESS_RE.search("435 Yonge St, Toronto, ON M5B 1T3")
+    assert m is not None
+    assert m.groups() == ("435 Yonge St", "Toronto", "ON", "M5B 1T3")
 
 
 def test_extract_address_blocks_one_record_per_address() -> None:

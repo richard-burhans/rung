@@ -6,7 +6,8 @@ class DispensaryRecord:
     """One dispensary location from any scrape source."""
 
     source: str  # pdf | csv | kml | arcgis | html | lookup | ca_dcc | az_dhs | co_med |
-    # ma_ccc (static list handlers) · ai (AI fallback)
+    # ma_ccc | ab_aglc | sk_slga | bc_lcrb (static list handlers; on_agco delegates to arcgis) ·
+    # ai (AI fallback)
     name: str | None = None
     address: str | None = None
     city: str | None = None
@@ -148,9 +149,9 @@ class LocationObservation:
 
 @dataclass
 class StateProgramRecord:
-    """Coverage record for one US state's cannabis dispensary program."""
+    """Coverage record for one state's (or Canadian province's) cannabis dispensary program."""
 
-    abbr: str            # two-letter state code
+    abbr: str            # two-letter state/province code (USPS and CA codes don't collide)
     name: str
     programs: str        # 'none' | 'cbd_only' | 'medical' | 'recreational' | 'both'
     program_term: str
@@ -165,6 +166,9 @@ class StateProgramRecord:
     # Dispensary-list resource discovered by crawling the landing page (best_url).
     list_url: str | None = None         # URL of the dispensary list/locator resource
     list_type: str | None = None        # the extract.ListType vocabulary: html|pdf|csv|kml|arcgis|lookup
-    # (from state_lists._classify) OR a per-state custom-handler type from states.yml (az_dhs/ca_dcc/co_med/ma_ccc)
+    # (from state_lists._classify) OR a per-state custom-handler type from states.yml
+    # (az_dhs/ca_dcc/co_med/ma_ccc/on_agco/ab_aglc/bc_lcrb/sk_slga)
     list_found_at: str | None = None    # ISO-8601 UTC — when the list URL was discovered
     list_status: str | None = None      # 'found' | 'override' | 'none'
+    country: str = "US"                 # ISO-3166 alpha-2 (US | CA) — lets exports/analyses
+    # partition by country / derive currency without a hardcoded province set (canada_expansion D1/D2)
