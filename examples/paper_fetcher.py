@@ -15,6 +15,9 @@ open-access PDFs, one at a time.
 
     DATABASE_URL=postgresql://rung:rung@localhost:5432/rung \
       uv run python examples/paper_fetcher.py 10.1371/journal.pone.0282396 10.1038/s41598-018-22755-2
+
+    # or a batch — one DOI/title per line:
+    uv run python examples/paper_fetcher.py --from dois.txt
 """
 
 from __future__ import annotations
@@ -87,24 +90,51 @@ def _url_for(host: str, doi: str) -> str | None:
     return None
 
 
+async def _download_pdf(url: str, doi: str, host: str) -> access.MethodResult:
+    """GET a URL via the honest session; succeed only if a real PDF comes back."""
+    async with http.make_session() as session:
+        try:
+            resp = await session.get(url)
+        except Exception:
+            return [], None, None
+    content = resp.content if hasattr(resp, "content") else b""
+    if content[:5] != b"%PDF-" or len(content) < 20_000:
+        return [], None, None           # HTML block page / gated / missing → this rung "fails"
+    OUT_DIR.mkdir(exist_ok=True)
+    out = OUT_DIR / (doi.replace("/", "_") + ".pdf")
+    out.write_bytes(content)
+    return [Fetched(doi=doi, host=host, path=str(out))], url, None
+
+
 def _make_fetcher(host: str):
     async def _fetch(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
         url = _url_for(host, doi)
         if url is None:
             return [], None, None
-        out = OUT_DIR / (doi.replace("/", "_") + ".pdf")
-        async with http.make_session() as session:
-            try:
-                resp = await session.get(url)
-            except Exception:
-                return [], None, None
-        content = resp.content if hasattr(resp, "content") else b""
-        if content[:5] != b"%PDF-" or len(content) < 20_000:
-            return [], None, None       # HTML block page / gated / missing → this rung "fails"
-        OUT_DIR.mkdir(exist_ok=True)
-        out.write_bytes(content)
-        return [Fetched(doi=doi, host=host, path=str(out))], url, None
+        return await _download_pdf(url, doi, host)
     return _fetch
+
+
+def _pmcid_for_doi(doi: str) -> str | None:
+    """Ask Europe PMC for the PMCID backing a DOI (any PMC-indexed OA paper), or None."""
+    import json
+    url = ("https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&pageSize=1"
+           "&query=" + urllib.parse.quote(f'DOI:"{doi}"'))
+    try:
+        with urllib.request.urlopen(url, timeout=25) as resp:  # Europe PMC: public read-only API
+            r = json.load(resp)["resultList"]["result"][0]
+    except Exception:
+        return None
+    return r.get("pmcid")
+
+
+async def _fetch_europepmc(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
+    """Broad fallback rung: resolve the DOI to a PMCID and pull the OA PDF from Europe PMC
+    (serves the same PDFs US PMC blocks — so this covers most biomedical open access)."""
+    pmcid = _pmcid_for_doi(doi)
+    if not pmcid:
+        return [], None, None
+    return await _download_pdf(f"https://europepmc.org/articles/{pmcid}?pdf=render", doi, "europepmc")
 
 
 # arXiv is cost 0 (cheapest); the OA journals are cost 1; PMC/publisher would be higher (omitted here
@@ -115,6 +145,9 @@ CATALOG = [
     access.AccessMethod("nature", cost_rank=1, run=_make_fetcher("nature")),
     access.AccessMethod("bmc", cost_rank=1, run=_make_fetcher("bmc")),
     access.AccessMethod("frontiers", cost_rank=1, run=_make_fetcher("frontiers")),
+    # Europe PMC needs a DOI→PMCID lookup (an extra request), so it is the costlier broad fallback —
+    # but it covers most biomedical OA, so it runs when the direct-journal rungs decline.
+    access.AccessMethod("europepmc", cost_rank=3, run=_fetch_europepmc),
 ]
 
 
@@ -146,14 +179,21 @@ async def run(conn: db.DBConn, queries: list[str]) -> dict[str, tuple[str | None
 
 
 def main() -> None:
-    queries = sys.argv[1:] or [
-        "10.1371/journal.pone.0282396",   # "Uncomfortably high" — PLOS
-        "10.1038/s41598-018-22755-2",     # Jikomes & Zoorob — Nature Sci Reports
-        "10.3389/fpls.2021.699530",       # chemotypic markers — Frontiers
-    ]
+    args = sys.argv[1:]
+    if args and args[0] == "--from":
+        # batch mode: one DOI/title per line (blank lines + '#' comments ignored)
+        queries = [ln.strip() for ln in Path(args[1]).read_text(encoding="utf-8").splitlines()
+                   if ln.strip() and not ln.lstrip().startswith("#")]
+    else:
+        queries = args or [
+            "10.1371/journal.pone.0282396",   # "Uncomfortably high" — PLOS
+            "10.1038/s41598-018-22755-2",     # Jikomes & Zoorob — Nature Sci Reports
+            "10.3389/fpls.2021.699530",       # chemotypic markers — Frontiers
+        ]
     conn = db.get_connection()
     results = asyncio.run(run(conn, queries))
-    print("Fetched (doi: winning host → file):")
+    got = sum(1 for _w, p in results.values() if p)
+    print(f"Fetched {got}/{len(results)} (doi: winning host → file):")
     for doi, (winner, path) in results.items():
         print(f"  {doi}: {winner or 'NONE'} -> {path or '(no OA host worked — paywalled/to-get)'}")
 
