@@ -1,5 +1,7 @@
 # Store history — tracking dispensary lifecycle (open / close / acquired)
 
+> **Reference application (dispensary dataset).** This document describes the reference pipeline that ships with `rung`, not the generic engine. If you are building your own domain, see [`build-your-own-domain.md`](build-your-own-domain.md) — you define your own equivalents.
+
 Status: **design + Phase 0 (company-site capture) + Phase 0.5 (roster capture) — 2026-07-02.**
 
 ## Why

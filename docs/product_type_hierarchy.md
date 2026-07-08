@@ -1,5 +1,7 @@
 # Product-type hierarchy (`product_type_std`)
 
+> **Reference application (dispensary dataset).** This document describes the reference pipeline that ships with `rung`, not the generic engine. If you are building your own domain, see [`build-your-own-domain.md`](build-your-own-domain.md) — you define your own equivalents.
+
 **Status:** BUILT 2026-06-24 (leaf-level, name-driven) for **all categories** — Vape, Concentrate,
 Edible, Flower, Pre-Roll, Beverage, Tincture, Topical, Capsule, Accessory.
 `store_products.product_type_std` is stamped at scrape time (`menu_extractors._record` →

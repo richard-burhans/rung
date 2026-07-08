@@ -19,7 +19,7 @@ from rung.models import (
 
 type DBConn = psycopg.Connection
 
-_DEFAULT_DATABASE_URL = "postgresql://dispensary:dispensary@localhost:5432/dispensaries"
+_DEFAULT_DATABASE_URL = "postgresql://rung:rung@localhost:5432/rung"
 
 _CREATE_DISPENSARIES = """
 CREATE TABLE IF NOT EXISTS dispensaries (

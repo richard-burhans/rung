@@ -1,5 +1,7 @@
 # Deduplication design (`sources/dedupe.py`)
 
+> **Reference application (dispensary dataset).** This document describes the reference pipeline that ships with `rung`, not the generic engine. If you are building your own domain, see [`build-your-own-domain.md`](build-your-own-domain.md) — you define your own equivalents.
+
 ## Why
 The dataset captures each store from several angles — a company's own site, the Dutchie pool, the
 Weedmaps/Leafly directories — and the same operator often appears under multiple **legal entities**

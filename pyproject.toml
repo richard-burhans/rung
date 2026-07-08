@@ -1,8 +1,12 @@
 [project]
 name = "rung"
 version = "0.1.0"
+description = "A cost-ranked web-scraping framework — run the cheapest access method that works, persist the winner per target, and self-heal, over a Postgres work queue with a plugin seam for per-domain catalogs."
+readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
+keywords = ["scraping", "web-scraping", "crawler", "data-extraction", "postgres", "work-queue", "plugin-framework", "distributed"]
+authors = [{ name = "Richard Burhans" }]
 dependencies = [
     "click>=8.0",
     "curl-cffi>=0.15.0",
@@ -15,11 +19,10 @@ dependencies = [
     "pyyaml>=6.0.3",
     "scrapegraphai>=2.1.3",
     "selectolax>=0.3",
-    # Legacy .xls (OLE2) reader for Alberta's AGLC licensee report (xlrd 2.x is
-    # deliberately .xls-only — exactly the format AGLC serves).
+    # Legacy .xls (OLE2) reader for roster spreadsheets served in the old Excel format
+    # (xlrd 2.x is deliberately .xls-only).
     "xlrd>=2.0",
-    # Modern .xlsx reader for Saskatchewan's SLGA cannabis-retailers spreadsheet
-    # (xlrd 2.x dropped .xlsx; openpyxl is the standard reader).
+    # Modern .xlsx reader for roster spreadsheets (xlrd 2.x dropped .xlsx; openpyxl is the standard).
     "openpyxl>=3.1",
 ]
 

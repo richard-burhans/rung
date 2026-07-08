@@ -1,5 +1,5 @@
 """Shared test DB plumbing: every pg_conn() call returns a connection scoped to a
-fresh throwaway schema in the dispensaries_test database, so tests get the same
+fresh throwaway schema in the rung_test database, so tests get the same
 isolation the old in-memory SQLite connections gave. Schemas are dropped after
 each test; a session-start sweep clears leftovers from crashed runs."""
 
@@ -14,7 +14,7 @@ from rung import db
 
 _TEST_URL = os.environ.get(
     "DATABASE_URL_TEST",
-    "postgresql://dispensary:dispensary@localhost:5432/dispensaries_test",
+    "postgresql://rung:rung@localhost:5432/rung_test",
 )
 _open_conns: list[db.DBConn] = []
 

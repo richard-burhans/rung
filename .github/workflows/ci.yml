@@ -4,7 +4,7 @@ name: CI
 # push to main, so the gate is enforced in the cloud — not only by the local pre-push
 # hook, which a --no-verify push or a fresh clone can bypass. Uses a Postgres service
 # container (the tests need a real Postgres; conftest.py
-# hands out a throwaway schema per test in the dispensaries_test database).
+# hands out a throwaway schema per test in the rung_test database).
 
 on:
   pull_request:
@@ -25,13 +25,13 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: dispensary
-          POSTGRES_PASSWORD: dispensary
-          POSTGRES_DB: dispensaries
+          POSTGRES_USER: rung
+          POSTGRES_PASSWORD: rung
+          POSTGRES_DB: rung
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U dispensary -d dispensaries"
+          --health-cmd "pg_isready -U rung -d rung"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -39,7 +39,7 @@ jobs:
     env:
       # conftest.py reads DATABASE_URL_TEST (default points at the same host:port);
       # set it explicitly so the source of truth is visible in the workflow.
-      DATABASE_URL_TEST: postgresql://dispensary:dispensary@localhost:5432/dispensaries_test
+      DATABASE_URL_TEST: postgresql://rung:rung@localhost:5432/rung_test
 
     steps:
       - uses: actions/checkout@v7
@@ -60,11 +60,11 @@ jobs:
         run: uv sync --extra analysis
 
       - name: Create the pytest database
-        # The service provisions `dispensaries`; tests run inside `dispensaries_test`
+        # The service provisions `rung`; tests run inside `rung_test`
         # (here we create it directly).
         env:
-          PGPASSWORD: dispensary
-        run: psql -h localhost -U dispensary -d dispensaries -c 'CREATE DATABASE dispensaries_test;'
+          PGPASSWORD: rung
+        run: psql -h localhost -U rung -d rung -c 'CREATE DATABASE rung_test;'
 
       - name: Lint (ruff)
         run: uv tool run ruff check rung/ tests/

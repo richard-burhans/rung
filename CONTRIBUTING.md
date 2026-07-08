@@ -1,11 +1,13 @@
 # Contributing
 
-Thanks for your interest. This repo is the **open-source core** of a cannabis-dispensary data
-framework — the extraction engine, the work queue, the Postgres layer, the CLI, the generic
-government-roster extractors, and a plugin seam. The proprietary scraping catalogs, recipes, and
-datasets are *not* part of this repo; they plug in privately through an entry point (see
-[Extending the framework](#extending-the-framework-write-a-plugin) below). So there are two ways to
-contribute:
+Thanks for your interest. This repo is the **open-source core** of `rung` — a cost-ranked
+web-scraping framework: the access-method engine, the work queue, the Postgres layer, the CLI,
+generic roster extractors, and a plugin seam. Per-domain scraping catalogs, recipes, and datasets
+are *not* part of this repo; they plug in through an entry point (see
+[Extending the framework](#extending-the-framework-write-a-plugin) below). The framework's first and
+reference application is a cannabis-dispensary dataset, but the engine is domain-agnostic — see
+[`docs/build-your-own-domain.md`](docs/build-your-own-domain.md) to build a pipeline for your own
+targets. So there are two ways to contribute:
 
 - **Improve the core** — the engine, the extractors, the CLI, docs, tests.
 - **Build your own plugin** — provide the proprietary stages for your own targets, against the
@@ -17,20 +19,20 @@ Start with [`ARCHITECTURE.md`](ARCHITECTURE.md) for the module map and the cross
 
 - **Python ≥ 3.13**, managed with [`uv`](https://docs.astral.sh/uv/).
 - **Postgres** (the tests use a real database; `tests/conftest.py` hands each test a throwaway
-  schema in a `dispensaries_test` database).
+  schema in a `rung_test` database).
 
 ```bash
 uv sync                                   # install the core + dev dependencies
 
 # a local Postgres for the tests (any Postgres works; this is one quick way):
-docker run -d --name dispensary-pg -p 5432:5432 \
-  -e POSTGRES_USER=dispensary -e POSTGRES_PASSWORD=dispensary -e POSTGRES_DB=dispensaries \
+docker run -d --name rung-pg -p 5432:5432 \
+  -e POSTGRES_USER=rung -e POSTGRES_PASSWORD=rung -e POSTGRES_DB=rung \
   postgres:17-alpine
-psql postgresql://dispensary:dispensary@localhost:5432/dispensaries \
-  -c 'CREATE DATABASE dispensaries_test;'
+psql postgresql://rung:rung@localhost:5432/rung \
+  -c 'CREATE DATABASE rung_test;'
 ```
 
-The test database URL defaults to `postgresql://dispensary:dispensary@localhost:5432/dispensaries_test`;
+The test database URL defaults to `postgresql://rung:rung@localhost:5432/rung_test`;
 override it with the `DATABASE_URL_TEST` environment variable.
 
 ## The checks (mirrored by CI)
@@ -102,7 +104,12 @@ Install your package alongside `rung`, and the CLI picks it up automatically —
 ### The stage contract
 
 The stage **names** (and the arguments the CLI passes them) are the contract between the CLI and a
-plugin. The resolvable stages are:
+plugin. The stages below are the ones the built-in CLI verbs resolve — i.e. the **reference
+application's** pipeline (roster → each entity's own site → reconcile → snapshot each catalog). A
+plugin *replaces* these to run the reference pipeline against your own targets; to build a
+**different** domain shape (your own records, schema, and stages), use the engine directly as a
+library — see [`docs/build-your-own-domain.md`](docs/build-your-own-domain.md). The resolvable
+stages are:
 
 | Stage name | Backs the CLI command |
 |---|---|

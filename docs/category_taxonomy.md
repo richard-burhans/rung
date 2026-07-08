@@ -1,5 +1,7 @@
 # Canonical product-category taxonomy (`category_std`)
 
+> **Reference application (dispensary dataset).** This document describes the reference pipeline that ships with `rung`, not the generic engine. If you are building your own domain, see [`build-your-own-domain.md`](build-your-own-domain.md) — you define your own equivalents.
+
 Each menu platform reports product `category` in its own vocabulary — a vape is `Vaporizers`
 (Dutchie) / `vape` (Jane) / `Vape Pens` (Weedmaps) / `Cartridge` (Leafly) / `Vape` (Sweed),
 ~200 distinct raw strings across the dataset. `store_products.category_std` is the **canonical

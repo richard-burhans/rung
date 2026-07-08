@@ -64,9 +64,24 @@ The connection URL defaults to the dev container
 Stage table contracts — which command reads/writes which table, and the work-queue claims that make
 concurrent runs safe — are in [`docs/stage_contracts.md`](docs/stage_contracts.md).
 
-## CLI
+## Getting started
 
-Commands (see `pyproject.toml [project.scripts]`), run via `uv run <command>`:
+- **[`docs/quickstart.md`](docs/quickstart.md)** — clone → Postgres → run the engine end to end in a
+  few minutes (a farmers-market example — a different domain from the reference application, no
+  proprietary code).
+- **[`examples/custom_domain.py`](examples/custom_domain.py)** — the ~150-line runnable example the
+  quickstart runs: your own record type, a cost-ranked access ladder, your own table, the work queue.
+- **[`docs/build-your-own-domain.md`](docs/build-your-own-domain.md)** — build a pipeline for *your*
+  targets, step by step.
+- **[`docs/concepts.md`](docs/concepts.md)** — the four load-bearing ideas · **[`docs/api.md`](docs/api.md)** — the engine surface you call.
+
+## The reference application — CLI
+
+The commands below are `rung`'s **reference application**: a licensed-dispensary dataset pipeline
+(roster → each entity's own site → reconcile → snapshot each catalog). They're a worked example of a
+full pipeline on the engine; to build a *different* domain, use the engine directly (see
+[`docs/build-your-own-domain.md`](docs/build-your-own-domain.md)). Commands (see
+`pyproject.toml [project.scripts]`), run via `uv run <command>`:
 
 | Stage | Commands |
 |---|---|
