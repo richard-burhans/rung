@@ -43,20 +43,23 @@ walkthrough is [`../docs/build-your-own-domain.md`](../docs/build-your-own-domai
 
 A **network** example (unlike `custom_domain.py`) that fetches academic-paper PDFs by DOI. Fetching a
 paper is a natural fit for the engine — one target reachable via several hosts at different
-cost/success — so the ladder is: resolve the DOI (Crossref), then run the cheapest OA host that
-returns a real PDF (arXiv → PLOS → Nature-OA → BMC → Frontiers), and **persist the winning host per
-paper** so a re-run skips straight to it. Same `access.run_target` + queue + honest `http.make_session`
-as the farmers-market example — a completely different domain — which is the point: the engine is
-domain-agnostic.
+cost/success — so the ladder is: resolve the DOI (Crossref), then run the cheapest rung that returns a
+real PDF and **persist the winner per paper** so a re-run skips straight to it. The rungs, cheapest
+first: **arXiv** (cost 0) → the **direct-journal** hosts PLOS/Nature-OA/BMC/Frontiers (cost 1, fast,
+no API call) → **Unpaywall** (cost 2 — an OA locator that finds a copy of *any* DOI on any
+repository/preprint) → **Europe PMC** (cost 3 — biomed-OA backstop that serves what US-PMC blocks).
+Same `access.run_target` + queue + honest `http.make_session` as the farmers-market example — a
+completely different domain — which is the point: the engine is domain-agnostic.
 
 ```bash
-DATABASE_URL=postgresql://rung:rung@localhost:5432/rung \
+UNPAYWALL_EMAIL=you@example.com DATABASE_URL=postgresql://rung:rung@localhost:5432/rung \
   uv run python examples/paper_fetcher.py 10.1371/journal.pone.0282396 10.1038/s41598-018-22755-2
+# or a batch:  ... paper_fetcher.py --from dois.txt
 ```
 
-Each DOI is routed to the host that can serve it; the others "fail" and the ladder walks on. The pure
-routing/resolution logic is tested (`tests/test_paper_fetcher_example.py`); the network fetch is not
-(it hits live OA hosts).
+Each DOI is routed to the rung that can serve it; the others "fail" and the ladder walks on (the
+winners are recorded in `access_methods`). The pure routing/resolution logic is tested
+(`tests/test_paper_fetcher_example.py`); the network fetch is not (it hits live OA hosts).
 
 ## `example_plugin.py` — provide a stage via the plugin seam
 

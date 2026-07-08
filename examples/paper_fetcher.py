@@ -137,6 +137,30 @@ async def _fetch_europepmc(_conn: db.DBConn, doi: str, _hint: access.MethodHint)
     return await _download_pdf(f"https://europepmc.org/articles/{pmcid}?pdf=render", doi, "europepmc")
 
 
+def _unpaywall_pdf(doi: str) -> str | None:
+    """The best open-access PDF URL for a DOI from Unpaywall (any repository/preprint/journal), or
+    None if the DOI has no OA copy anywhere. Unpaywall requires a contact email (UNPAYWALL_EMAIL)."""
+    import json
+    import os
+    email = os.environ.get("UNPAYWALL_EMAIL", "unpaywall@example.com")
+    url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(email)}"
+    try:
+        with urllib.request.urlopen(url, timeout=25) as resp:  # Unpaywall: public read-only API
+            loc = json.load(resp).get("best_oa_location") or {}
+    except Exception:
+        return None
+    return loc.get("url_for_pdf")
+
+
+async def _fetch_unpaywall(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
+    """General OA-locator rung: ask Unpaywall for *any* open-access PDF of this DOI and fetch it.
+    Subsumes the hard-coded host rungs for anything OA on a repository/preprint we don't special-case."""
+    pdf_url = _unpaywall_pdf(doi)
+    if not pdf_url:
+        return [], None, None
+    return await _download_pdf(pdf_url, doi, "unpaywall")
+
+
 # arXiv is cost 0 (cheapest); the OA journals are cost 1; PMC/publisher would be higher (omitted here
 # because they gate/block direct PDF fetches — a real deployment would add them as costly last rungs).
 CATALOG = [
@@ -145,8 +169,10 @@ CATALOG = [
     access.AccessMethod("nature", cost_rank=1, run=_make_fetcher("nature")),
     access.AccessMethod("bmc", cost_rank=1, run=_make_fetcher("bmc")),
     access.AccessMethod("frontiers", cost_rank=1, run=_make_fetcher("frontiers")),
-    # Europe PMC needs a DOI→PMCID lookup (an extra request), so it is the costlier broad fallback —
-    # but it covers most biomedical OA, so it runs when the direct-journal rungs decline.
+    # Unpaywall (an API round-trip) locates an OA copy of ANY DOI on ANY host/repository/preprint, so
+    # it's the general fallback after the fast direct-journal rungs; Europe PMC is a further biomed-OA
+    # backstop for the DOI→PMCID case Unpaywall occasionally misses.
+    access.AccessMethod("unpaywall", cost_rank=2, run=_fetch_unpaywall),
     access.AccessMethod("europepmc", cost_rank=3, run=_fetch_europepmc),
 ]
 
