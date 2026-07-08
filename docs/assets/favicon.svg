@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="rung">
+  <title>rung</title>
+  <rect x="13" y="10.2" width="22" height="4.4" rx="2.2" fill="#14b8a6" opacity=".5"/>
+  <rect x="13" y="21.8" width="22" height="4.4" rx="2.2" fill="#2dd4bf"/>
+  <rect x="13" y="33.4" width="22" height="4.4" rx="2.2" fill="#14b8a6" opacity=".5"/>
+  <rect x="11.5" y="5.5" width="5" height="37" rx="2.5" fill="#14b8a6"/>
+  <rect x="31.5" y="5.5" width="5" height="37" rx="2.5" fill="#14b8a6"/>
+</svg>

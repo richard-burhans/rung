@@ -1,0 +1,82 @@
+# MkDocs config for the public `rung` docs site (built by Read the Docs from the public repo).
+# NOTE: this ships to the public `rung` repo, where `docs/` holds ONLY public docs; RTD builds there.
+# In the private monorepo `docs/` also holds private docs — they are orphan pages in a local
+# `mkdocs serve` but never published (RTD's source is the public repo). Build locally with:
+#   uv run --with mkdocs-material mkdocs serve
+site_name: rung
+site_description: Run the cheapest rung that works — a Postgres-centric, cost-ranked web-scraping engine.
+site_url: https://rung.readthedocs.io/
+repo_url: https://github.com/richard-burhans/rung
+repo_name: richard-burhans/rung
+copyright: Open source (see LICENSE)
+
+theme:
+  name: material
+  logo: assets/logo.svg          # the lit-rung ladder mark (theme-adaptive, animates the climbing rung)
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  # Neutral header (white / near-black) with teal as the accent, so the teal ladder logo reads on it.
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: teal
+      toggle: { icon: material/brightness-7, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: teal
+      toggle: { icon: material/brightness-4, name: Switch to light mode }
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+    - toc.follow
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - Concepts: concepts.md
+  - Build your own domain:
+      - Tutorial: build-your-own-domain.md
+      - Engine API: api.md
+  - Design & internals:
+      - Postgres for everything: postgres_for_everything.md
+      - Public/private split: publish_split_design.md
+      - Framework write-ups: scraping_framework_writeups.md
+      - Related work: design_references.md
+  - Reference application (cannabis):
+      - Stage contracts: stage_contracts.md
+      - Dedupe design: dedupe_design.md
+      - Category taxonomy: category_taxonomy.md
+      - Product-type hierarchy: product_type_hierarchy.md
+      - Store-history design: store_history_design.md
+
+# The monorepo `docs/` carries private docs too; don't fail the build over pages not in the nav.
+validation:
+  nav:
+    omitted_files: ignore
+    not_found: warn
+  links:
+    absolute_links: ignore
+    unrecognized_links: ignore

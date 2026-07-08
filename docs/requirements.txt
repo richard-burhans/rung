@@ -1,0 +1,3 @@
+# Docs-site build dependencies (MkDocs + Material theme). Used by Read the Docs (.readthedocs.yaml)
+# and for local previews: `uv run --with-requirements docs/requirements.txt mkdocs serve`.
+mkdocs-material>=9.5

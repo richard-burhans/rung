@@ -1,0 +1,16 @@
+# Read the Docs build config for `rung`. https://docs.readthedocs.io/en/stable/config-file/v2.html
+# Builds the MkDocs (Material) site from mkdocs.yml. Docs-only deps (docs/requirements.txt) — the
+# rung package is NOT installed (no mkdocstrings yet), so the build stays fast and needs no Postgres.
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.13"
+
+mkdocs:
+  configuration: mkdocs.yml
+
+python:
+  install:
+    - requirements: docs/requirements.txt
