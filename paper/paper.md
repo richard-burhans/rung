@@ -82,9 +82,13 @@ a leak-checked build.
 **Reproducibility.** A single-command quality gate (lint, type-check, tests) accompanies the code,
 and the pipeline can be exported as a Galaxy workflow for end-to-end reproduction.
 
-Unlike general crawl frameworks such as Scrapy, `rung` is not a crawler but an
-*access-strategy engine* and broker-free distributed coordinator; its work queue subsumes the
-resumability such frameworks provide, and extends it across concurrent and multi-host workers.
+Unlike general crawl frameworks such as Scrapy [@scrapy] or archival crawlers like Heritrix
+[@heritrix] and Mercator [@mercator] — whose extensibility inspired the plugin seam — `rung` is not a
+crawler but an *access-strategy engine* and broker-free distributed coordinator; its work queue
+subsumes the resumability such frameworks provide and extends it across concurrent and multi-host
+workers. Where robust large-scale extraction has largely been framed as noise-tolerant wrapper
+induction [@dalvi2011], `rung` instead treats extraction as a per-target *choice among methods at
+different cost* and persists the winner — a complementary, self-healing angle.
 
 # Availability
 
