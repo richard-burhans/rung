@@ -39,6 +39,25 @@ Persisted winners in access_methods (status='ok'):
 ladder falls back to the costlier HTML rung — and each winner is remembered for next time. The full
 walkthrough is [`../docs/build-your-own-domain.md`](../docs/build-your-own-domain.md).
 
+## `paper_fetcher.py` — a real second domain: fetch open-access papers
+
+A **network** example (unlike `custom_domain.py`) that fetches academic-paper PDFs by DOI. Fetching a
+paper is a natural fit for the engine — one target reachable via several hosts at different
+cost/success — so the ladder is: resolve the DOI (Crossref), then run the cheapest OA host that
+returns a real PDF (arXiv → PLOS → Nature-OA → BMC → Frontiers), and **persist the winning host per
+paper** so a re-run skips straight to it. Same `access.run_target` + queue + honest `http.make_session`
+as the farmers-market example — a completely different domain — which is the point: the engine is
+domain-agnostic.
+
+```bash
+DATABASE_URL=postgresql://rung:rung@localhost:5432/rung \
+  uv run python examples/paper_fetcher.py 10.1371/journal.pone.0282396 10.1038/s41598-018-22755-2
+```
+
+Each DOI is routed to the host that can serve it; the others "fail" and the ladder walks on. The pure
+routing/resolution logic is tested (`tests/test_paper_fetcher_example.py`); the network fetch is not
+(it hits live OA hosts).
+
 ## `example_plugin.py` — provide a stage via the plugin seam
 
 Shows the *other* extension point: registering an implementation for a stage name the built-in CLI
