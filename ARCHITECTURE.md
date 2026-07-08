@@ -172,7 +172,9 @@ public/private partition: [`docs/publish_split_design.md`](docs/publish_split_de
 `homepage_discovery`, `dedupe` — Stage-1 government-roster extraction + shared dedup); the
 **proprietary** scrapers/catalogs/mappers/intel moved **flat into the overlay**
 `rung_intel/` (`company_stores`, `company_store_fetch`, `company_store_extractors`,
-`menus`, `menu_extractors`, `compare`, `recon`, `bootstrap`, and the per-platform recipes). The table below keeps the per-module detail; **[overlay]** marks the moved ones (write
+`menus`, `menu_extractors`, `compare`, `recon`, `bootstrap`, and the platform recipes `dutchie`,
+`dutchie_plus`, `weedmaps`, `leafly`, `sweedpos`, `trulieve`, `cresco`, `curaleaf`, `fluent`,
+`hytiva`, `jane`). The table below keeps the per-module detail; **[overlay]** marks the moved ones (write
 through the core's `db.py` or return records):
 
 | Module | Problem | Key API | Writes |
@@ -195,6 +197,7 @@ through the core's `db.py` or return records):
 | `proxy_tiers.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `dutchie_plus.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `sweedpos.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `jane.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `menus.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `menu_extractors.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `trulieve.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
@@ -303,7 +306,10 @@ overlay (its proprietary stages then resolve to registry stubs).
    handler that swallows an exception and keeps using the connection must `rollback()`
    first (a failed statement poisons the open transaction).
 3. **Table ownership.** `db.create_tables` creates every table **except `companies`**
-   (owned by `seed_companies.py`).
+   (owned by `seed_companies.py`). It is a thin wrapper over `create_engine_tables`
+   (the domain-neutral engine tables — `jobs`/`access_methods`/`token_buckets`/`proxies`/`proxy_tiers`)
+   + `create_reference_tables` (the cannabis reference schema); a build-your-own-domain plugin calls
+   only `create_engine_tables` (genericization Workstream B2 — see).
 4. **List columns are write-isolated.** `state_programs.list_*` are written only by
    `set_state_list`; `upsert_state_program` omits them.
 5. **Non-destructive replace + keep-the-best (quality-aware).** A state's `dispensaries`
@@ -417,7 +423,8 @@ overlay (its proprietary stages then resolve to registry stubs).
 | Abstraction | File | Notes |
 |---|---|---|
 | Persisted record types | `models.py` | canonical definitions |
-| DB schema & CRUD | `db.py` | `create_tables`, `_migrate_*` |
+| Engine DB (generic) | `db.py` | connection + the 5 infra tables (`jobs`/`access_methods`/`token_buckets`/`proxies`/`proxy_tiers`) + `create_engine_tables` + the access-registry CRUD; imports **no** `models`/`text` (genericization B1/B3) |
+| Reference DB schema & CRUD | `reference_db.py` | the cannabis tables + `products_normalized` view + migrations + all domain CRUD + `create_reference_tables`/`create_tables` + `NATURAL_FLOWER_WHERE`; imports `db` + `models` + `text`. `db.<reference fn>` still resolves via `db.__getattr__` (back-compat shim) |
 | Work queue | `queue.py` | SKIP LOCKED claims + lease/heartbeat/reaper; `docs/stage_contracts.md` §5 §4-5 |
 | Cross-worker rate limit | `rate_limit.py` (`token_buckets`) | per-host token bucket; §3-4 |
 | Stage contracts | `docs/stage_contracts.md` | read/write matrix, write isolation, claim keys |

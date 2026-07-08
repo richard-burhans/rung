@@ -26,10 +26,9 @@ Run it against a local Postgres (see docs/quickstart.md):
 
     DATABASE_URL=postgresql://rung:rung@localhost:5432/rung uv run python examples/custom_domain.py
 
-NOTE (2026-07): `db.create_tables()` today also creates the reference application's cannabis tables
-alongside the generic infra tables — harmless here (they stay empty), and Workstream B in
-docs/build-your-own-domain.md splits `create_engine_tables()` out so a general user creates only the
-infra. Until then, ignore the extra tables.
+`db.create_engine_tables()` builds **only** the domain-neutral infra (jobs + access_methods +
+rate-limit/proxy tables) — no cannabis reference tables — so this example creates just the engine
+infra plus its own `markets` table.
 """
 
 from __future__ import annotations
@@ -137,7 +136,7 @@ async def scrape_city(conn: db.DBConn, city: str) -> tuple[str | None, list[Mark
 
 async def run(conn: db.DBConn, cities: list[str]) -> dict[str, tuple[str | None, int]]:
     """Create the schema, enqueue the cities, then drain the queue running the ladder per city."""
-    db.create_tables(conn)          # generic infra: jobs + access_methods (also the reference tables; see NOTE)
+    db.create_engine_tables(conn)   # ONLY the generic infra: jobs + access_methods + rate-limit/proxy tables
     conn.execute(_CREATE_MARKETS)
     conn.commit()
 

@@ -11,6 +11,8 @@ offending edge, mirroring ``test_http.py``. See docs/publish_split_design.md.
 """
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,7 +33,7 @@ CLI = "cli"
 # exactly these and nothing proprietary leaks back in.
 PUBLIC_MODULES = frozenset({
     "models", "http", "browser", "text", "normalize", "addresses",
-    "db", "queue", "access", "rate_limit", "registry", "cli", "seed_companies",
+    "db", "reference_db", "queue", "access", "rate_limit", "registry", "cli", "seed_companies",
     "state_search", "state_lists", "extract", "ai_fallback", "homepage_discovery", "dedupe",
 })
 
@@ -85,6 +87,12 @@ def _internal_edges() -> dict[str, set[str]]:
             deps.update(t for t in targets if t in stems)
         deps.discard(path.stem)
         edges[path.stem] = deps
+    # The engine `db` references `reference_db` ONLY via its lazy back-compat `__getattr__` shim (a
+    # function-local import) and a `TYPE_CHECKING` re-export — neither is a module-load dependency
+    # (`import rung.db` loads no reference_db/models/text; asserted by
+    # test_importing_the_engine_loads_no_cannabis below). So it is not a real edge for the layering /
+    # acyclicity contracts; drop it. `reference_db -> db` stays (a genuine load-time edge).
+    edges.get("db", set()).discard("reference_db")
     return edges
 
 
@@ -271,6 +279,22 @@ def test_overlay_holds_the_proprietary_data() -> None:
 def test_internal_import_graph_is_acyclic() -> None:
     cycle = _first_cycle(_internal_edges())
     assert cycle is None, f"import cycle: {' -> '.join(cycle or [])}"
+
+
+def test_importing_the_engine_loads_no_cannabis() -> None:
+    # Genericization B1/B3: the generic engine (`db`/`queue`/`access`) must import WITHOUT dragging in
+    # the cannabis record types (`models`) or terpene taxonomy (`text`) — those live in the reference
+    # half (`reference_db`), reached only via db's lazy back-compat shim. A build-your-own-domain user
+    # importing the engine gets none of the cannabis schema. Fresh subprocess for clean sys.modules.
+    code = (
+        "import rung.db, rung.queue, rung.access, sys\n"
+        "cannabis = [m for m in ('rung.models', 'rung.text', 'rung.reference_db') if m in sys.modules]\n"
+        "print(','.join(cannabis))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
+                         cwd=REPO_ROOT)
+    leaked = [m for m in out.stdout.strip().split(",") if m]
+    assert not leaked, f"importing the engine eagerly loaded cannabis modules: {leaked}"
 
 
 # ── Overlay-package internal layering (the proprietary modules left PUBLIC_DIR in the carve-out; the

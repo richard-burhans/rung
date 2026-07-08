@@ -25,7 +25,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_DIR = REPO_ROOT / "rung"
 INTEL_DIR = REPO_ROOT / "rung_intel" / "rung_intel"
-DB_PATH = PUBLIC_DIR / "db.py"  # the sole sanctioned write home — excluded from the scan
+DB_PATH = PUBLIC_DIR / "db.py"  # engine persistence (access_methods writes) — a sanctioned write home
+REF_PATH = PUBLIC_DIR / "reference_db.py"  # reference-app persistence (company_stores/state_programs
+# writes moved here in genericization B1/B3) — the other sanctioned write home
 
 # A write (INSERT/UPDATE — never SELECT) targeting the access_methods registry table.
 _ACCESS_METHODS_WRITE = re.compile(r"\b(?:insert\s+into|update)\s+access_methods\b", re.I)
@@ -95,20 +97,22 @@ def _writes_protected_target(sql: str) -> bool:
     return bool(match and any(col in match.group(1).lower() for col in _PROTECTED_COLUMNS))
 
 
-def _package_files_outside_db() -> list[Path]:
+def _package_files_outside_persistence() -> list[Path]:
+    """Every package .py except the two sanctioned persistence modules (``db.py`` + ``reference_db.py``)."""
     roots = [PUBLIC_DIR, *([INTEL_DIR] if INTEL_DIR.exists() else [])]
     return [
         path
         for root in roots
         for path in root.rglob("*.py")
-        if path.name != "__init__.py" and "__pycache__" not in path.parts and path != DB_PATH
+        if path.name != "__init__.py" and "__pycache__" not in path.parts
+        and path != DB_PATH and path != REF_PATH
     ]
 
 
 def test_protected_columns_and_access_methods_are_written_only_in_db() -> None:
     offenders = [
         f"{path.relative_to(REPO_ROOT)}:{lineno}"
-        for path in _package_files_outside_db()
+        for path in _package_files_outside_persistence()
         for sql, lineno in _sql_literals(
             ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         )
@@ -116,8 +120,8 @@ def test_protected_columns_and_access_methods_are_written_only_in_db() -> None:
     ]
     assert not offenders, (
         "company_stores.canonical_company_id/storefront_name + the access_methods table must be "
-        "written ONLY via the db.py helpers (single-writer contract, docs/stage_contracts.md): "
-        f"direct write(s) at {offenders}"
+        "written ONLY via the db.py / reference_db.py helpers (single-writer contract, "
+        f"docs/stage_contracts.md): direct write(s) at {offenders}"
     )
 
 
@@ -129,14 +133,14 @@ def test_state_program_list_columns_written_only_by_set_state_list() -> None:
     Scans every package SQL literal; the only sanctioned list_ write is the one inside
     ``db.set_state_list`` — anywhere else (including elsewhere in db.py) is an offender.
     """
-    sanctioned_lo, sanctioned_hi = _function_span(DB_PATH, "set_state_list")
+    sanctioned_lo, sanctioned_hi = _function_span(REF_PATH, "set_state_list")  # moved here in B1/B3
     offenders: list[str] = []
-    for path in [DB_PATH, *_package_files_outside_db()]:
+    for path in [DB_PATH, REF_PATH, *_package_files_outside_persistence()]:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for sql, lineno in _sql_literals(tree):
             if not _writes_state_program_list_col(sql):
                 continue
-            sanctioned = path == DB_PATH and sanctioned_lo <= lineno <= sanctioned_hi
+            sanctioned = path == REF_PATH and sanctioned_lo <= lineno <= sanctioned_hi
             if not sanctioned:
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
     assert not offenders, (

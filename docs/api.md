@@ -8,14 +8,15 @@ access-method runners, which are `async`.
 
 ```python
 db.get_connection() -> DBConn                 # reads DATABASE_URL (default: local dev Postgres)
-db.create_tables(conn) -> None                # create the infra tables (idempotent); commits
+db.create_engine_tables(conn) -> None         # create ONLY the generic infra tables (idempotent); commits
 db.one(conn, sql, params=()) -> tuple         # fetch a single row
 DBConn                                         # = psycopg.Connection; every signature takes one
 ```
 
-`create_tables` currently also creates the reference application's tables; a planned
-`create_engine_tables()` will build only the generic infra. Your pipeline creates and writes its own
-tables directly.
+`db.create_engine_tables()` builds only the domain-neutral engine tables (jobs, access_methods,
+token_buckets, proxies, proxy_tiers) — your pipeline then creates and writes its own tables directly.
+(`db.create_tables()` also builds the cannabis reference schema via `db.create_reference_tables()`; the
+reference application uses that.)
 
 ## `rung.access` — the cost-ranked ladder
 

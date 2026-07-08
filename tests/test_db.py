@@ -356,3 +356,17 @@ def test_state_program_country_round_trips_and_defaults_to_us() -> None:
     conn.commit()
     assert db.get_state_program(conn, "ON").country == "CA"
     assert db.get_state_program(conn, "PA").country == "US"   # default when unspecified
+
+
+def test_create_engine_tables_builds_only_the_generic_infra() -> None:
+    # Genericization Workstream B2: create_engine_tables() makes the domain-neutral engine tables and
+    # NONE of the cannabis reference tables — the contract a build-your-own-domain plugin relies on
+    # (docs/build-your-own-domain.md). A fresh throwaway schema so nothing pre-exists.
+    conn = pg_conn()
+    db.create_engine_tables(conn)
+    for table in ("jobs", "access_methods", "token_buckets", "proxies", "proxy_tiers"):
+        assert db.one(conn, "SELECT to_regclass(%s) IS NOT NULL", (table,))[0], f"{table} should exist"
+    for table in ("dispensaries", "company_stores", "store_products", "products",
+                  "product_observations", "state_programs"):
+        assert not db.one(conn, "SELECT to_regclass(%s) IS NOT NULL", (table,))[0], \
+            f"{table} must NOT be created by create_engine_tables"

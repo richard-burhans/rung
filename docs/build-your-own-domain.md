@@ -80,17 +80,17 @@ your domain schema is yours.
 from rung import db
 
 conn = db.get_connection()          # reads DATABASE_URL
-db.create_tables(conn)              # generic infra tables  (see the note below)
+db.create_engine_tables(conn)       # ONLY the generic infra: jobs, access_methods, rate-limit + proxy tables
 conn.execute("""CREATE TABLE IF NOT EXISTS farmers_markets (
     id SERIAL PRIMARY KEY, city TEXT, name TEXT, address TEXT, day TEXT, vendors INT,
     UNIQUE (city, name))""")
 conn.commit()
 ```
 
-> **Note (2026-07):** `db.create_tables()` today also creates the reference application's tables.
-> They stay empty and harmless for your pipeline. A planned change splits out a
-> `create_engine_tables()` that builds *only* the generic infra tables — at which point this step
-> creates nothing you don't use.
+`db.create_engine_tables()` creates **only** the domain-neutral engine tables — no cannabis reference
+schema — so your database gets exactly the infra the engine needs plus whatever tables you create
+yourself. (The reference application uses `db.create_tables()`, which also builds its own cannabis
+schema via `db.create_reference_tables()`.)
 
 ## 5. Drive it: the ladder + the queue
 

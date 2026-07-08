@@ -184,7 +184,7 @@ async def fetch_one(conn: db.DBConn, doi: str) -> tuple[str | None, list[Fetched
 
 async def run(conn: db.DBConn, queries: list[str]) -> dict[str, tuple[str | None, str | None]]:
     """Resolve each query to a DOI, then drain the queue fetching each via the host ladder."""
-    db.create_tables(conn)
+    db.create_engine_tables(conn)   # only the generic infra (no cannabis reference tables)
     dois = {}
     for q in queries:
         doi, _container = resolve_doi(q)
