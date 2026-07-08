@@ -1,9 +1,9 @@
 /* Inline ladder mark to the left of the "rung" page title (docs/index.md). */
 .rung-mark {
-  height: 1.05em;
+  height: 0.8em;
   width: auto;
-  vertical-align: -0.16em;
-  margin-right: 0.12em;
+  vertical-align: -0.04em;
+  margin-right: 0.1em;
 }
 
 /* Theme-aware logo: <img> logos follow the OS scheme, not the site toggle, so swap to the
