@@ -77,7 +77,10 @@ it is actually required.
 
 **A publishable core behind a plugin seam.** A public/private split lets the generic engine ship as
 open-source software while proprietary per-platform recipes remain in a separate overlay, guarded by
-a leak-checked build.
+a leak-checked build. The engine's domain-independence is demonstrated by worked examples that apply
+the same access-ladder-and-queue machinery to unrelated domains — including a directory of public
+listings and a fetcher that retrieves open-access papers by resolving each DOI down a cost-ranked
+ladder of repositories.
 
 **Reproducibility.** A single-command quality gate (lint, type-check, tests) accompanies the code,
 and the pipeline can be exported as a Galaxy workflow for end-to-end reproduction.

@@ -23,6 +23,7 @@ open-access PDFs, one at a time.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import urllib.parse
 import urllib.request
@@ -33,7 +34,8 @@ from rung import access, db, http, queue
 
 TASK_TYPE = "paper_fetch"
 TARGET_TYPE = "paper_pdf"
-OUT_DIR = Path("fetched_papers")
+# Where fetched PDFs land; override with PAPER_FETCH_DIR (e.g. a bibliography drop-zone).
+OUT_DIR = Path(os.environ.get("PAPER_FETCH_DIR", "fetched_papers"))
 
 
 @dataclass
@@ -141,7 +143,6 @@ def _unpaywall_pdf(doi: str) -> str | None:
     """The best open-access PDF URL for a DOI from Unpaywall (any repository/preprint/journal), or
     None if the DOI has no OA copy anywhere. Unpaywall requires a contact email (UNPAYWALL_EMAIL)."""
     import json
-    import os
     email = os.environ.get("UNPAYWALL_EMAIL", "unpaywall@example.com")
     url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(email)}"
     try:
