@@ -19,7 +19,7 @@ worse than an honest unknown — never silent-map an ambiguous string into a rea
 
 ## How it's derived
 
-- Source of truth: [`rung/data/category_aliases.yml`](../rung/data/category_aliases.yml)
+- Source of truth: [`rung/data/category_aliases.yml`](https://github.com/richard-burhans/rung/blob/main/rung/data/category_aliases.yml)
   — an ORDERED map of `canonical -> [substring keywords]`.
 - `text.normalize_category(raw, name=None)` lowercases + strips the raw string to alphanumerics,
   then returns the **first** canonical (top-to-bottom = priority) whose any keyword is a substring
@@ -33,7 +33,7 @@ worse than an honest unknown — never silent-map an ambiguous string into a rea
 The base classification reads only the raw `category`, so a platform that files a **capsule** under
 `edibles` or a **live-resin disposable** under `concentrates` lands in the wrong bucket. When the
 product NAME unambiguously names such a form,
-[`data/category_name_overrides.yml`](../rung/data/category_name_overrides.yml)
+[`data/category_name_overrides.yml`](https://github.com/richard-burhans/rung/blob/main/rung/data/category_name_overrides.yml)
 corrects it (applied after the base pass, when `name` is supplied):
 
 - `capsule`/`softgel`/`protab` → **Capsule**, `suppositor` → **Capsule**, `troche` → **Edible**,

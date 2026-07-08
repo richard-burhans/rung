@@ -2,7 +2,7 @@
 
 The four load-bearing ideas behind `rung`. Each is a small, orthogonal mechanism; a domain pipeline
 (like the cannabis reference application, or the farmers-market example) is just these four wired
-together. For the longer-form story see [`../NARRATIVE.md`](../NARRATIVE.md) and
+together. For the longer-form story see [`../NARRATIVE.md`](https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md) and
 [`postgres_for_everything.md`](postgres_for_everything.md).
 
 ## 1. The cost-ranked access ladder (`access.py`)
@@ -49,5 +49,5 @@ every domain.
 Together: the **ladder** decides *how* to fetch a target cheaply and resiliently, the **queue**
 decides *which* targets each worker takes, the **seam** decides *whose* catalog runs, and the
 **chokepoint** makes every fetch honest and consistent. See [`api.md`](api.md) for the exact surface,
-and [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the full module map (its "Reusable engine vs the
+and [`../ARCHITECTURE.md`](https://github.com/richard-burhans/rung/blob/main/ARCHITECTURE.md) for the full module map (its "Reusable engine vs the
 reference pipeline" section draws the same line between these mechanisms and the cannabis application).

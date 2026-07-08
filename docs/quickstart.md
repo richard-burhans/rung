@@ -59,7 +59,7 @@ That single run exercised the whole engine:
 
 ## 4. What next
 
-- **[`examples/custom_domain.py`](../examples/custom_domain.py)** — read the ~150 lines you just ran;
+- **[`examples/custom_domain.py`](https://github.com/richard-burhans/rung/blob/main/examples/custom_domain.py)** — read the ~150 lines you just ran;
   every engine call is commented.
 - **[`docs/build-your-own-domain.md`](build-your-own-domain.md)** — the step-by-step tutorial for
   building a pipeline for *your* targets (your records, your schema, your access ladder, your stages).
@@ -75,4 +75,4 @@ psql postgresql://rung:rung@localhost:5432/rung -c 'CREATE DATABASE rung_test;'
 uv run pytest
 ```
 
-See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the full dev workflow.
+See [`CONTRIBUTING.md`](https://github.com/richard-burhans/rung/blob/main/CONTRIBUTING.md) for the full dev workflow.

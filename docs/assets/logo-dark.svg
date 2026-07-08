@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="rung">
   <title>rung</title>
   <style>
-    .rail { fill: #0e2a29; }
-    .rung { fill: #0e2a29; opacity: .34; }
-    @keyframes litclimb { 0%, 100% { fill: #0e2a29; opacity: .34; } 12%, 24% { fill: #12b3a0; opacity: 1; } }
+    .rail { fill: #e6f2f0; }
+    .rung { fill: #e6f2f0; opacity: .34; }
+    @keyframes litclimb { 0%, 100% { fill: #e6f2f0; opacity: .34; } 12%, 24% { fill: #3fe0cc; opacity: 1; } }
     .r0 { animation: litclimb 3.6s ease-in-out infinite; }
     .r1 { animation: litclimb 3.6s ease-in-out infinite .45s; }
     .r2 { animation: litclimb 3.6s ease-in-out infinite .9s; }
-    @media (prefers-reduced-motion: reduce) { .rung { animation: none; } .r1 { fill: #12b3a0; opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .rung { animation: none; } .r1 { fill: #3fe0cc; opacity: 1; } }
   </style>
   <rect class="rung r2" x="13" y="10.2" width="22" height="4.4" rx="2.2"/>
   <rect class="rung r1" x="13" y="21.8" width="22" height="4.4" rx="2.2"/>

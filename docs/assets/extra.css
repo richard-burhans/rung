@@ -1,0 +1,14 @@
+/* Inline ladder mark to the left of the "rung" page title (docs/index.md). */
+.rung-mark {
+  height: 1.05em;
+  width: auto;
+  vertical-align: -0.16em;
+  margin-right: 0.12em;
+}
+
+/* Theme-aware logo: <img> logos follow the OS scheme, not the site toggle, so swap to the
+   light-on-dark variant when the reader picks the dark theme (data-md-color-scheme="slate"). */
+[data-md-color-scheme="slate"] .md-logo img,
+[data-md-color-scheme="slate"] .rung-mark {
+  content: url(logo-dark.svg);
+}

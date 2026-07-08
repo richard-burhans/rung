@@ -1,7 +1,7 @@
 # API reference (the engine surface)
 
 The public surface a pipeline or plugin author calls. Signatures are the source of truth
-([`../rung/`](../rung)); this is the map. Everything is `psycopg`-based synchronous SQL except the
+([`../rung/`](https://github.com/richard-burhans/rung/tree/main/rung)); this is the map. Everything is `psycopg`-based synchronous SQL except the
 access-method runners, which are `async`.
 
 ## `rung.db` — connection + schema

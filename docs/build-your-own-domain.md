@@ -4,7 +4,7 @@
 honest-HTTP chokepoint, and a plugin registry. The cannabis-dispensary pipeline that ships with it is
 the **reference application** — one way to use the engine, not the only way. This guide builds a
 pipeline for a different domain from scratch. The running example is **farmers markets by city**
-([`examples/custom_domain.py`](../examples/custom_domain.py) is the complete, tested version — read it
+([`examples/custom_domain.py`](https://github.com/richard-burhans/rung/blob/main/examples/custom_domain.py) is the complete, tested version — read it
 alongside this).
 
 You'll do five things. Only the last two touch the engine.
@@ -137,8 +137,8 @@ The five steps above use the engine as a **library** — the most flexible path,
 new domain shape. If your pipeline happens to match the reference application's shape (a roster of
 entities → each entity's own site → reconcile → snapshot each entity's catalog), you can instead
 provide the stages the built-in CLI verbs resolve, via the plugin seam — see
-[`../CONTRIBUTING.md`](../CONTRIBUTING.md) ("Extending the framework") and
-[`../examples/example_plugin.py`](../examples/example_plugin.py). Registered stages are discovered
+[`../CONTRIBUTING.md`](https://github.com/richard-burhans/rung/blob/main/CONTRIBUTING.md) ("Extending the framework") and
+[`../examples/example_plugin.py`](https://github.com/richard-burhans/rung/blob/main/examples/example_plugin.py). Registered stages are discovered
 automatically through the `rung.plugins` entry point.
 
 ## Where to go next

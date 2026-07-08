@@ -1,4 +1,4 @@
-# rung
+# ![](assets/logo.svg){ .rung-mark } rung
 
 **Run the cheapest rung that works.**
 
