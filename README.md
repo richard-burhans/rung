@@ -1,5 +1,9 @@
 # rung
 
+[![Docs](https://app.readthedocs.org/projects/rung-framework/badge/?version=latest)](https://rung-framework.readthedocs.io/en/latest/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-14b8a6.svg)](LICENSE)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-14b8a6.svg)](https://www.python.org/)
+
 > **run the cheapest rung that works** — a broker-free, Postgres-centric framework for
 > resilient, polite, distributed scraping of fragmented, defensive consumer-data platforms.
 
