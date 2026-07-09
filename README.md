@@ -1,10 +1,11 @@
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo.svg" alt="rung logo" width="110">
-  </picture>
-
-  <h1>rung</h1>
+  <h1>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+      <img src="docs/assets/logo.svg" alt="rung logo" height="44" valign="middle">
+    </picture>
+    rung
+  </h1>
 
   <p>
     <a href="https://rung-framework.readthedocs.io/en/latest/"><img src="https://app.readthedocs.org/projects/rung-framework/badge/?version=latest" alt="Docs"></a>
