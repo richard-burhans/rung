@@ -7,14 +7,14 @@
     rung
   </h1>
 
+  <p><strong>run the cheapest rung that works</strong> — a broker-free, Postgres-centric framework for<br>
+  resilient, polite, distributed scraping of fragmented, defensive consumer-data platforms.</p>
+
   <p>
     <a href="https://rung-framework.readthedocs.io/en/latest/"><img src="https://app.readthedocs.org/projects/rung-framework/badge/?version=latest" alt="Docs"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-14b8a6.svg" alt="License: MIT"></a>
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-14b8a6.svg" alt="Python 3.13+"></a>
   </p>
-
-  <p><strong>run the cheapest rung that works</strong> — a broker-free, Postgres-centric framework for<br>
-  resilient, polite, distributed scraping of fragmented, defensive consumer-data platforms.</p>
 </div>
 
 `rung` is a plugin-extensible scraping framework built around one idea: a target can usually be
