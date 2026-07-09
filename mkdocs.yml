@@ -5,7 +5,9 @@
 #   uv run --with mkdocs-material mkdocs serve
 site_name: rung
 site_description: Run the cheapest rung that works — a Postgres-centric, cost-ranked web-scraping engine.
-site_url: https://rung.readthedocs.io/
+# The RTD project slug is `rung-framework` — plain `rung.readthedocs.io` belongs to an unrelated
+# project, so pointing site_url there aims our canonical tags + sitemap at someone else's docs.
+site_url: https://rung-framework.readthedocs.io/en/latest/
 repo_url: https://github.com/richard-burhans/rung
 repo_name: richard-burhans/rung
 copyright: Open source (see LICENSE)
