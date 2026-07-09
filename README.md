@@ -2,7 +2,7 @@
   <h1>
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-      <img src="docs/assets/logo.svg" alt="rung logo" height="44" valign="middle">
+      <img src="docs/assets/logo.svg" alt="rung logo" height="34" valign="middle">
     </picture>
     rung
   </h1>
