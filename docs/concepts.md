@@ -1,7 +1,7 @@
 # Concepts
 
 The four load-bearing ideas behind `rung`. Each is a small, orthogonal mechanism; a domain pipeline
-(like the cannabis reference application, or the farmers-market example) is just these four wired
+(like the dispensary reference application, or the farmers-market example) is just these four wired
 together. For the longer-form story see [`../NARRATIVE.md`](https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md) and
 [`postgres_for_everything.md`](postgres_for_everything.md).
 

@@ -3,7 +3,7 @@
 *How we built a polite, resilient, distributed scraper on nothing but Postgres — and what we
 learned the hard way.*
 
-This is the story behind `rung`: the design, the reasoning, and the failures that
+This is the story behind <picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg"><img src="docs/assets/logo.svg" alt="rung logo" height="20"></picture> `rung`: the design, the reasoning, and the failures that
 taught us the design. It's written for the next person building a scraper against a fragmented,
 fast-moving corner of the web — in the give-back tradition of the people who taught us. It stays at
 the level of **patterns and architecture**; the per-platform recipes are yours to discover, the way

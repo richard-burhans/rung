@@ -12,6 +12,12 @@ with leases/heartbeats (no Redis or Celery), the per-target access-method regist
 rate limiting — behind an honest-by-default HTTP layer (opt-in TLS impersonation) and a plugin seam
 for per-domain catalogs.
 
+!!! tip "Start with the story"
+    **[The cheapest thing that works](https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md)**
+    is the narrative behind `rung` — the design, the reasoning, and the failures that taught us the
+    design. It's the most enjoyable way in, and the best way to understand why the engine is shaped
+    the way it is. The pages below are the reference; that's the story.
+
 ## Start here
 
 <div class="grid cards" markdown>

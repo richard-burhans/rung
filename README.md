@@ -1,11 +1,20 @@
-# rung
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo.svg" alt="rung logo" width="110">
+  </picture>
 
-[![Docs](https://app.readthedocs.org/projects/rung-framework/badge/?version=latest)](https://rung-framework.readthedocs.io/en/latest/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-14b8a6.svg)](LICENSE)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-14b8a6.svg)](https://www.python.org/)
+  <h1>rung</h1>
 
-> **run the cheapest rung that works** — a broker-free, Postgres-centric framework for
-> resilient, polite, distributed scraping of fragmented, defensive consumer-data platforms.
+  <p>
+    <a href="https://rung-framework.readthedocs.io/en/latest/"><img src="https://app.readthedocs.org/projects/rung-framework/badge/?version=latest" alt="Docs"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-14b8a6.svg" alt="License: MIT"></a>
+    <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.13%2B-14b8a6.svg" alt="Python 3.13+"></a>
+  </p>
+
+  <p><strong>run the cheapest rung that works</strong> — a broker-free, Postgres-centric framework for<br>
+  resilient, polite, distributed scraping of fragmented, defensive consumer-data platforms.</p>
+</div>
 
 `rung` is a plugin-extensible scraping framework built around one idea: a target can usually be
 reached several ways at wildly different cost, so **run the cheapest method that works, persist the
@@ -33,7 +42,7 @@ protection: the HTTP client sends an honest, self-identifying User-Agent with no
 (browser TLS impersonation is opt-in, off by default), and roster extraction reads **public
 records**. Respect each site's terms and `robots.txt`; you are responsible for how you use this.
 
-## Origin
+## The story
 
 I built this to compile an authoritative, multi-state dataset for a real, fast-moving consumer market
 (its first application was public dispensary rosters and menus), and I'm releasing the framework in
@@ -41,6 +50,10 @@ the tradition of open scraping education — the engine is worth sharing even wh
 per-platform recipes stay private. If it saves you time, that's the point.
 
 — Richard Burhans
+
+> 📖 **Read [**The cheapest thing that works**](NARRATIVE.md).** It's the full story behind `rung` —
+> the design, the reasoning, and the failures that taught us the design. If you read one thing here,
+> read that: it's the best way to understand how and why the engine is built the way it is.
 
 ## Architecture
 

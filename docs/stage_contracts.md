@@ -42,14 +42,14 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
 ### find-lists — `sources/state_lists.py`
 - **In:** `state_programs.best_url` (from search-states); `states.yml` `list_url:` overrides.
 - **Out:** `state_programs.list_url/list_type/list_found_at/list_status` ONLY, via
-  `db.set_state_list` (db.py). Status: `list_status` found|override|none.
+  `db.set_state_list` (reference_db.py). Status: `list_status` found|override|none.
 - **Re-run:** skips states that already have a list unless `--force`; commits per state.
 
 ### scrape-states — `sources/extract.py`
 - **In:** `state_programs.list_url/list_type` (states with a found/override list).
 - **Out:** `dispensaries`, **replace-by-state**: `DELETE WHERE state = ?` then inserts — and the
   delete runs ONLY when extraction yielded ≥1 record, so a transient zero-yield never wipes prior
-  good rows. Append via `db.insert_dispensary` (db.py); commit per state.
+  good rows. Append via `db.insert_dispensary` (reference_db.py); commit per state.
   - `store_locations` + `store_observations` via `extract.record_roster_observations` **only under
     `--record-history`** — the `state_roster` leg of the store-lifecycle history (same shared engine,
     `db.record_location_observations`, as Stage 2's `company_site` leg), appended inside the same
@@ -66,15 +66,15 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
 ### recon — `rung_intel/recon.py`
 - **In:** `companies.id/canonical_name` (per state); `dispensaries.name/website` (homepage
   derivation); `company_homepages.yml` overrides.
-- **Out:** `company_recon` full-row upsert per company (`db.upsert_recon`, db.py). Failure is a
+- **Out:** `company_recon` full-row upsert per company (`db.upsert_recon`, reference_db.py). Failure is a
   row with `error` set; success has `error IS NULL` + `platform`/`confidence`.
 - **Re-run:** re-probes and overwrites; safe.
 
 ### scrape-company-stores — `rung_intel/company_stores.py`
-- **In:** `db.get_recon_companies_for_state` (db.py): recon rows with `error IS NULL AND
+- **In:** `db.get_recon_companies_for_state` (reference_db.py): recon rows with `error IS NULL AND
   homepage_url IS NOT NULL`; `access_methods` per-target winner + hints; platform YAMLs.
 - **Out:**
-  - `company_stores` via `db.replace_company_stores` (db.py) — **keep-the-best replace**:
+  - `company_stores` via `db.replace_company_stores` (reference_db.py) — **keep-the-best replace**:
     per-company delete+insert happens only if the new result covers **at least as many DISTINCT
     physical stores** (by address; raw row counts let a double-counting extractor entrench
     itself), OR new adds `external_id` handles where stored had none AND retains ≥0.8 of the
