@@ -1043,6 +1043,12 @@ NATURAL_FLOWER_WHERE = (
     "AND coalesce(name, '') !~* '(infus|moonrock|moon rock|kief|dusted|coated|covered)'"
 )
 
+# A US-only guard for price analyses. Canadian stores price in CAD, so pooling them into a $/g figure
+# (or a cross-market $/g ranking) is a category error — CAD read as USD looks spuriously cheap. Restrict
+# to states whose program is US-based; Canada is analyzed on its own terms in the canada_* scripts.
+# Usage: `... WHERE <price predicate> AND state IN {reference_db.US_STATES_SUBQUERY}`.
+US_STATES_SUBQUERY = "(SELECT abbr FROM state_programs WHERE country = 'US')"
+
 
 
 def get_menu_stores_for_state(conn: DBConn, abbr: str) -> list[tuple]:

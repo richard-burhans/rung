@@ -9,6 +9,7 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
     # inferring correctly at db.* call sites. Retire when callers re-point to rung.reference_db (B5).
     from rung.reference_db import (  # noqa: F401
         NATURAL_FLOWER_WHERE,
+        US_STATES_SUBQUERY,
         append_store_observation,
         clear_store_canonical_for_state,
         count_company_stores,

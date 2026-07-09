@@ -22,6 +22,14 @@ give cheaply and would make the gate cry wolf:
   cosmetic plot subsamples (harmless) and stat-bearing subsamples (not), and telling them apart needs
   dataflow. That case stays a rule for humans; this gate enforces only the high-confidence CV case.
 
+A second, related trap: ordering the query is necessary but **not sufficient for a classifier**. If the
+rows are ordered by (or correlated with) the label — as the ordering fix above tends to make them — an
+UNSHUFFLED fold becomes single-class and the classifier score collapses (a label-ordered classifier CV
+can read an accuracy far from the truth, e.g. a spurious ~chance where the real signal is well above it).
+``test_no_unshuffled_classifier_cv_fold`` enforces that a classifier CV uses a shuffled/stratified
+splitter (or a group/time splitter), even when the query is ordered — the case the ordering check alone
+waves through.
+
 Parses source with :mod:`ast` (no import, no DB) so a regression is reported as ``file:lineno``.
 """
 
@@ -33,9 +41,88 @@ REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR: Path = REPO_ROOT / "scripts"
 
 _SPLITTERS = frozenset({"KFold", "StratifiedKFold", "GroupKFold", "TimeSeriesSplit"})
+# Row-position splitters (fold = contiguous positions). Only these degenerate when rows are
+# label-ordered; a *group*/time splitter defines folds by a key, so ordering can't clump the classes.
+_POSITION_SPLITTERS = frozenset({"KFold", "StratifiedKFold"})
+# classification scorers → the CV is a classifier CV even if the estimator is passed by variable.
+_CLASSIFIER_SCORING = frozenset({
+    "accuracy", "balanced_accuracy", "f1", "f1_macro", "f1_micro", "f1_weighted",
+    "precision", "recall", "roc_auc", "roc_auc_ovr", "roc_auc_ovo", "average_precision",
+})
+# estimator constructors that are classifiers (LogisticRegression is the one that doesn't end in
+# "Classifier"); any name ending in "Classifier" also counts.
+_CLASSIFIER_ESTIMATORS = frozenset({"LogisticRegression", "SVC", "LinearSVC", "KNeighborsClassifier",
+                                    "GaussianNB", "MultinomialNB", "BernoulliNB"})
+_CV_RUNNERS = frozenset({"cross_val_score", "cross_val_predict"})
 # select-list aggregate → the query returns one row per group; order cannot affect the result.
 _AGGREGATE = re.compile(r"\b(count|sum|avg|min|max|stddev|variance|corr)\s*\(", re.IGNORECASE)
 _SELECT = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
+
+
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Call):
+        return (node.func.attr if isinstance(node.func, ast.Attribute)
+                else node.func.id if isinstance(node.func, ast.Name) else "")
+    return ""
+
+
+def _has_shuffle_true(call: ast.Call) -> bool:
+    return any(kw.arg == "shuffle" and isinstance(kw.value, ast.Constant) and kw.value.value is True
+               for kw in call.keywords)
+
+
+def _module_splitter_vars(tree: ast.AST) -> dict[str, ast.Call]:
+    """name -> the splitter Call it was assigned (so ``cv=<name>`` can be resolved to its shuffle=)."""
+    out: dict[str, ast.Call] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) \
+                and _call_name(node.value) in _SPLITTERS:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    out[target.id] = node.value
+    return out
+
+
+def _cv_is_unshuffled_positional(cv: ast.expr | None, splitter_vars: dict[str, ast.Call]) -> bool:
+    """True if the ``cv=`` argument is a row-POSITION fold with no shuffle (int, default, or a bare
+    KFold/StratifiedKFold(shuffle!=True) — directly or via a variable). Group/time splitters → False."""
+    if cv is None:  # cross_val_score default is an unshuffled (Stratified)KFold(5)
+        return True
+    if isinstance(cv, ast.Constant) and isinstance(cv.value, int):
+        return True
+    if isinstance(cv, ast.Name):
+        cv = splitter_vars.get(cv.id)
+        if cv is None:
+            return False  # unresolved variable → don't guess (avoid false positives)
+    if isinstance(cv, ast.Call):
+        return _call_name(cv) in _POSITION_SPLITTERS and not _has_shuffle_true(cv)
+    return False
+
+
+def _draws_unshuffled_classifier_cv(tree: ast.AST) -> list[int]:
+    """Line numbers of classifier CV calls that split by unshuffled row positions.
+
+    Ordering the query does NOT save these: if the rows are label-ordered (as the determinism fix
+    makes them), an unshuffled fold is single-class and the score collapses. The fix is a shuffled,
+    stratified splitter. Group/time splitters and shuffle=True splitters are safe.
+    """
+    splitter_vars = _module_splitter_vars(tree)
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node) not in _CV_RUNNERS:
+            continue
+        cv = next((kw.value for kw in node.keywords if kw.arg == "cv"), None)
+        if not _cv_is_unshuffled_positional(cv, splitter_vars):
+            continue
+        scoring = next((kw.value for kw in node.keywords if kw.arg == "scoring"), None)
+        scored_as_classifier = (isinstance(scoring, ast.Constant)
+                                and scoring.value in _CLASSIFIER_SCORING)
+        estimator = node.args[0] if node.args else None
+        est_name = _call_name(estimator) if estimator is not None else ""
+        est_is_classifier = est_name in _CLASSIFIER_ESTIMATORS or est_name.endswith("Classifier")
+        if scored_as_classifier or est_is_classifier:
+            hits.append(node.lineno)
+    return hits
 
 
 def _sql_strings(tree: ast.AST) -> list[tuple[int, str]]:
@@ -126,10 +213,52 @@ def test_no_unordered_select_feeds_an_unshuffled_cv_fold() -> None:
     )
 
 
+def test_no_unshuffled_classifier_cv_fold() -> None:
+    offenders: list[str] = []
+    for path in sorted(SCRIPTS_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for lineno in _draws_unshuffled_classifier_cv(tree):
+            offenders.append(f"{path.name}:{lineno} — a classifier cross-validation splits by unshuffled "
+                             "row positions; if the query is label-ordered the folds are single-class")
+    assert not offenders, (
+        "A classifier cross-validation uses unshuffled row-position folds. Ordering the query is not "
+        "enough for a classifier — label-ordered rows make the folds single-class and collapse the "
+        "score. Pass `cv=StratifiedKFold(n_splits=…, shuffle=True, random_state=…)` (a GroupKFold or "
+        "TimeSeriesSplit is also fine).\n  " + "\n  ".join(offenders)
+    )
+
+
 # ── unit-level checks of the classifier, so the guard itself is trustworthy ──
 
 def _t(src: str) -> ast.AST:
     return ast.parse(src)
+
+
+def test_unshuffled_classifier_cv_is_detected() -> None:
+    # int cv + classification scoring → flagged
+    assert _draws_unshuffled_classifier_cv(_t(
+        "cross_val_score(LogisticRegression(), X, y, cv=5, scoring='balanced_accuracy')"))
+    # int cv + classifier estimator, no scoring → flagged
+    assert _draws_unshuffled_classifier_cv(_t("cross_val_score(RandomForestClassifier(), X, y, cv=4)"))
+    # bare unshuffled StratifiedKFold → flagged
+    assert _draws_unshuffled_classifier_cv(_t(
+        "cross_val_score(LogisticRegression(), X, y, cv=StratifiedKFold(5), scoring='roc_auc')"))
+
+
+def test_shuffled_or_grouped_classifier_cv_is_exempt() -> None:
+    # shuffled splitter inline
+    assert not _draws_unshuffled_classifier_cv(_t(
+        "cross_val_score(LogisticRegression(), X, y, cv=StratifiedKFold(5, shuffle=True, random_state=0))"))
+    # shuffled splitter via a variable
+    assert not _draws_unshuffled_classifier_cv(_t(
+        "cv = StratifiedKFold(5, shuffle=True, random_state=0)\n"
+        "cross_val_score(LogisticRegression(), X, y, cv=cv, scoring='balanced_accuracy')"))
+    # GroupKFold defines folds by a key, not row position
+    assert not _draws_unshuffled_classifier_cv(_t(
+        "cross_val_score(LogisticRegression(), X, y, cv=GroupKFold(5), groups=g, scoring='roc_auc')"))
+    # a REGRESSION over positions is fine unshuffled (ordering alone suffices; not a classifier)
+    assert not _draws_unshuffled_classifier_cv(_t(
+        "cross_val_score(LinearRegression(), X, y, cv=5, scoring='r2')"))
 
 
 def test_shuffle_true_is_recognized_and_exempts_the_module() -> None:
