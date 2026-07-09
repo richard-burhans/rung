@@ -5,8 +5,8 @@
 **Status:** BUILT 2026-06-24 (leaf-level, name-driven) for **all categories** — Vape, Concentrate,
 Edible, Flower, Pre-Roll, Beverage, Tincture, Topical, Capsule, Accessory.
 `store_products.product_type_std` is stamped at scrape time (`menu_extractors._record` →
-`text.normalize_product_type` reading `data/product_type_aliases.yml`), backfilled by
-`scripts/backfill_product_type.py`, surfaced in `products_normalized` (`product_type`) and the
+`text.normalize_product_type` reading `data/product_type_aliases.yml`), backfilled over existing
+rows by an idempotent script, surfaced in `products_normalized` (`product_type`) and the
 search-page dropdown. Companion to `category_taxonomy.md` (the top-level `category_std`); the
 investigation that led here is below.
 
@@ -122,9 +122,9 @@ Edible
   reaches the Concentrate rules — its `category_std` is already Vape, so it matches Vape → `Cartridge`.
   The category is decided first (`normalize_category`), then the type within it
   (`normalize_product_type(name, category, category_std)`).
-- Stamped at the `menu_extractors._record` choke point into the `product_type_std` column;
-  `scripts/backfill_product_type.py` populated existing rows; surfaced in `products_normalized` and
-  the search-page dropdown.
+- Stamped at the `menu_extractors._record` choke point into the `product_type_std` column; an
+  idempotent backfill populated existing rows; surfaced in
+  `products_normalized` and the search-page dropdown.
 - An explicit **`Unspecified`** bucket where a covered category's name carries no form — honest, not
   faked. `None` for categories not yet in the YAML.
 

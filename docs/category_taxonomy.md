@@ -25,8 +25,8 @@ worse than an honest unknown — never silent-map an ambiguous string into a rea
   then returns the **first** canonical (top-to-bottom = priority) whose any keyword is a substring
   of it; `Other` if none match, `None` if the raw is blank.
 - Stamped in one place — `menu_extractors._record` — so all 9 platform mappers get it for free.
-- Existing rows: `scripts/backfill_category_std.py` (idempotent; a distinct-category pass for the
-  base classification + a per-row pass for the name overrides below).
+- Existing rows: an idempotent backfill — a distinct-category
+  pass for the base classification + a per-row pass for the name overrides below.
 
 ### Name overrides (the raw category is name-blind, and platforms mislabel forms)
 
@@ -65,7 +65,7 @@ out of Edible/Tincture/Topical into the Capsule category.)
 
 ## Extending it
 
-1. Run `scripts/backfill_category_std.py --dry-run` (or `GROUP BY category_std`) and look at the
+1. Dry-run the category backfill (or `GROUP BY category_std`) and look at the
    **Other** bucket's top raw strings.
 2. If a high-volume string is unambiguous, add a keyword to the right canonical in
    `category_aliases.yml` (mind the priority order — add a focused-test case in `tests/test_text.py`).
@@ -83,7 +83,7 @@ categories. See [`product_type_hierarchy.md`](product_type_hierarchy.md).
 column, deriving a canonical lineage facet: **`Indica · Sativa · Hybrid · CBD`** (or `None`).
 `text.normalize_strain_type` reads `data/strain_aliases.yml` (ordered keyword rules, alnum
 substring match, first hit wins); `menu_extractors._record` stamps it for every platform; the
-`products_normalized` view surfaces it under the `strain_type` name; `scripts/backfill_strain_std.py`
+`products_normalized` view surfaces it under the `strain_type` name; an idempotent backfill
 applies it to existing rows. The raw `strain_type` is preserved alongside.
 
 Two deliberate differences from `category_std`:
@@ -103,6 +103,6 @@ Two deliberate differences from `category_std`:
 Distribution across the dataset (~5.5M rows): **Hybrid ~29% · Indica ~16% · Sativa ~9% ·
 CBD ~0.6% · None ~45%**.
 
-Extend it the same way as the category taxonomy (dry-run `scripts/backfill_strain_std.py`, inspect
+Extend it the same way as the category taxonomy (dry-run the strain backfill, inspect
 the values, add a keyword + a `tests/test_text.py` case) — but keep keywords lineage-specific so a
 brand/strain name can never be mis-bucketed.

@@ -129,8 +129,8 @@ transaction), reaps at startup, and the `reap-jobs` CLI is the standalone reaper
 reap-at-start + both Stage-2/3 consumers + an optional poll loop as the single fleet entrypoint —
 one process per egress IP); `reap_expired`
 re-queues an expired-lease (dead-worker) claim through a `FOR UPDATE SKIP LOCKED` subquery so
-concurrent reapers don't collide (`requeue_stale` is the coarser claimed_at-age fallback) — see
- §4-5. The per-run companion to the durable `access_methods` registry;
+concurrent reapers don't collide (`requeue_stale` is the coarser claimed_at-age fallback) — see the
+distributed-scraping design doc, §4-5. The per-run companion to the durable `access_methods` registry;
 closes the two concurrency hazards in `docs/stage_contracts.md` §5 (concurrent
 `scrape-company-stores` runs partition companies; `dedupe-stores` is exclusive per state).
 
