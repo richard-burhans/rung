@@ -96,8 +96,8 @@ different cost* and persists the winner — a complementary, self-healing angle.
 # Availability
 
 `rung` is released under the MIT License at
-<https://github.com/richard-burhans/rung>. A companion narrative (`NARRATIVE.md`)
-describes the design and the lessons behind it for the wider scraping community.
+<https://github.com/richard-burhans/rung>. A companion narrative (the "story" section
+of the README) describes the design and the lessons behind it for the wider scraping community.
 
 # Acknowledgements
 

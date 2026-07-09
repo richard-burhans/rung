@@ -13,7 +13,7 @@ rate limiting — behind an honest-by-default HTTP layer (opt-in TLS impersonati
 for per-domain catalogs.
 
 !!! tip "Start with the story"
-    **[The cheapest thing that works](https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md)**
+    **[The cheapest thing that works](https://github.com/richard-burhans/rung/blob/main/README.md#the-story)**
     is the narrative behind `rung` — the design, the reasoning, and the failures that taught us the
     design. It's the most enjoyable way in, and the best way to understand why the engine is shaped
     the way it is. The pages below are the reference; that's the story.
@@ -49,5 +49,5 @@ labelled as such.
   divide, and how the plugin seam holds the boundary.
 - [`ARCHITECTURE.md`](https://github.com/richard-burhans/rung/blob/main/ARCHITECTURE.md) —
   the module map and dependency edges.
-- [`NARRATIVE.md`](https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md) — the
-  "why it's built this way" story.
+- [The story](https://github.com/richard-burhans/rung/blob/main/README.md#the-story) — the
+  "why it's built this way" narrative, in the README.

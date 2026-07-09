@@ -60,7 +60,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - The story (NARRATIVE): https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md
+  - The story: https://github.com/richard-burhans/rung/blob/main/README.md#the-story
   - Get started:
       - Quickstart: quickstart.md
       - Concepts: concepts.md

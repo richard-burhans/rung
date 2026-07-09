@@ -6,7 +6,7 @@ give-back-mission-aligned and both stay strictly at the **architecture/pattern**
 half. **No per-platform recipes** (exact queries/endpoints/throttle params) — those stay private, per
 the public-build redaction. Teach the design, not the exploit map.
 
-Final artifacts land in the **public** repo (`paper.md`+`paper.bib` for JOSS; `NARRATIVE.md`); these
+Final artifacts land in the **public** repo (`paper.md`+`paper.bib` for JOSS; the README "story" section); these
 are the planning outlines. Engineering citations: `docs/design_references.md`.
 
 ---
@@ -75,7 +75,7 @@ distributed scraping of fragmented consumer-data platforms.*
 
 ## 2. Community narrative — a readable explainer (give-back)
 
-Long-form, blog-style, in the JWR give-back tradition; lands as `NARRATIVE.md` in the public repo
+Long-form, blog-style, in the JWR give-back tradition; lands as the README "story" section in the public repo
 (or a blog post). Goal: help a scraper-builder *understand the design and the reasoning*, with the
 war stories that make the lessons stick. Architecture-level; recipes stay private.
 
@@ -116,5 +116,5 @@ nothing but Postgres.*
   reason). The narrative should be publishable to the same audience as the public repo.
 
 ### Open questions
-- Home: `NARRATIVE.md` in the public repo vs a hosted blog post (or both).
+- Home: the README "story" section in the public repo vs a hosted blog post (or both).
 - Length/depth (a tight 2k-word essay vs a longer multi-part series).

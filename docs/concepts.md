@@ -2,7 +2,7 @@
 
 The four load-bearing ideas behind `rung`. Each is a small, orthogonal mechanism; a domain pipeline
 (like the dispensary reference application, or the farmers-market example) is just these four wired
-together. For the longer-form story see [`../NARRATIVE.md`](https://github.com/richard-burhans/rung/blob/main/NARRATIVE.md) and
+together. For the longer-form story see [the story in the README](https://github.com/richard-burhans/rung/blob/main/README.md#the-story) and
 [`postgres_for_everything.md`](postgres_for_everything.md).
 
 ## 1. The cost-ranked access ladder (`access.py`)
