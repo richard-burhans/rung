@@ -22,11 +22,11 @@ closed in March" becomes a dated, provable fact. Openings / closures / acquisiti
 also a genuine market-structure signal (useful for the analysis/CSHL angle and for patients: "is my
 dispensary still open?").
 
-This is the store-level analogue of the master-product-DB pattern already shipped
-(`products` + append-only `product_observations`, see `master_product_db_design.md`) and is listed as
-a high-readiness future analysis in `reports/replication_and_future_work.md` §8 ("roster-churn /
-closure detection"). The *analysis* can wait for history to accrue; the **capture cannot** — every
-un-logged day is unrecoverable. So Phase 0 (capture) ships now; the derivation is later.
+This is the store-level analogue of the master-product-DB pattern already shipped (`products` +
+append-only `product_observations`), and roster-churn / closure detection is one of the
+high-readiness future analyses tracked in our replication backlog. The *analysis* can wait for
+history to accrue; the **capture cannot** — every un-logged day is unrecoverable. So Phase 0
+(capture) ships now; the derivation is later.
 
 ## The hard part: a stable identity (verified against live data)
 
@@ -96,9 +96,9 @@ Wired behind the **existing `record_history` flag**, exactly like product histor
 - `run_company_stores(..., record_history=False)` calls `record_store_observations` per company, in
   the same transaction as the keep-the-best replace + job completion.
 - `scrape-company-stores --record-history` (new flag) and the self-feeding `worker --record-history`
-  (already threads it to menus) now also drive Stage-2 capture. **Ops (live):** the weekly
-  `store_history_sweep.sh` cron runs `scrape-company-stores --record-history` — installed on the host,
-  Sundays 12:00 (see `deployment_runbook.md`); first store-history accrual is 2026-07-05.
+  (already threads it to menus) now also drive Stage-2 capture. **Ops (live):** a weekly store-history
+  sweep runs `scrape-company-stores --record-history` on the host, Sundays 12:00 (see the deployment
+  runbook); first store-history accrual is 2026-07-05.
 
 Capture is intentionally from the **raw** per-scrape snapshot (not the alias-folded dedupe output):
 keep the raw signal, canonicalize on read — so a future improvement to brand-folding re-derives
@@ -118,7 +118,7 @@ own collapse rule; the engine owns the upsert + change-vs-heartbeat discipline:
   `source='state_roster'`. Runs ONLY on a non-empty extraction — a failed roster fetch records
   nothing, so an observed absence stays a real signal rather than an artifact of a dead list URL.
   The roster is only ~36 % geocoded, so its identity leans on the address fallback. **Ops (live):**
-  the same weekly `store_history_sweep.sh` cron also runs `scrape-states --record-history`.
+  the same weekly store-history sweep also runs `scrape-states --record-history`.
 
 Both legs go through one identity helper, `dedupe.location_key` = `geo_key` with a **guarded**
 `address_key` fallback. The guard is load-bearing for the roster: some states put a non-address in

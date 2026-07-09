@@ -32,9 +32,13 @@ It writes nothing unless given `--write`, which replaces its state's rows in the
 
 YAML inputs (curated, read-only; under `rung/data/`): `states.yml` (search-states,
 find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
-`company_homepages.yml` (recon), `dutchie_chains.yml` / `dutchie_plus_tokens.yml` /
-`state_geo_anchors.yml` / `weedmaps_slugs.yml` / `leafly_slugs.yml` / `jane_store_ids.yml`
-(scrape-company-stores), `grower_brands.yml` (compare-stores).
+`company_homepages.yml` (recon), `state_geo_anchors.yml` (scrape-company-stores).
+
+The private overlay adds its own curated catalogs, read by the same stages but shipped with the
+overlay rather than the core: per-operator platform handle maps and per-platform API tokens
+(scrape-company-stores), and a grower/processor brand exclusion list (compare-stores). Naming them
+here would advertise how the proprietary stages reach each target, so this doc describes their role
+and not their contents.
 
 ## 2. Per-stage contracts
 
@@ -99,8 +103,8 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
   whose canonical name contains a term or whose id matches. It enqueues + **`claim_target`s only
   those** targets (not `claim_next`), so a focused debug run never claims or fails a concurrent
   full run's jobs.
-- **Re-run:** cached winner skips re-discovery; failure triggers a ladder re-walk (see
-  `access_methods_design.md`).
+- **Re-run:** cached winner skips re-discovery; failure triggers a ladder re-walk (see the
+  access-method design doc).
 
 ### scrape-menus — `rung_intel/menus.py` (Stage 3)
 - **In:** `db.get_menu_stores_for_state` — canonical `company_stores` rows carrying a Stage-2
@@ -116,8 +120,8 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
     (`category_std`, `product_type_std`, `strain_type_std`, and via `normalize.enrich_record`
     `size_g`, `terpenes_std`, `terp_total`, plus per-variant `size_g`/`price_per_g` inside the
     `variants` JSONB); the `products_normalized`
-    VIEW projects just the standard fields (+ a derived top-level `price_per_g`).
-    `scripts/backfill_normalization.py` recomputes these over existing rows.
+    VIEW projects just the standard fields (+ a derived top-level `price_per_g`). An idempotent
+    normalization backfill recomputes these over existing rows.
   - `access_methods` per attempt (target_type `store_menu`, target_key `{state}:{store_key}`),
     with the menu-shaped `plausible` predicate.
   - `jobs`: one `store_menu` job per store handle, then claims them (§5). **Freshness
