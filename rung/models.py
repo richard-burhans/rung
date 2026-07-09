@@ -1,3 +1,4 @@
+import datetime
 from dataclasses import dataclass, field
 
 
@@ -145,6 +146,31 @@ class LocationObservation:
     storefront_name: str | None = None
     platform: str | None = None
     external_id: str | None = None
+
+
+@dataclass(frozen=True)
+class LifecycleEventRecord:
+    """One DERIVED store-lifecycle transition, as persisted to ``store_lifecycle_events``.
+
+    The unit ``db.replace_lifecycle_events`` consumes (Phase 2 of docs/store_history_design.md).
+    Unlike ``LocationObservation`` — an append-only *observation* — an event is a **conclusion**
+    recomputed from the whole observation log, so the table is replaced per state rather than
+    appended to. Display fields (address/city) are deliberately absent: join ``store_locations``.
+
+    ``kind`` is ``opened`` | ``closed`` | ``operator_changed`` | ``relocation_candidate``.
+    ``confidence`` grades a closure; ``related_location_id`` pairs a relocation candidate with the
+    location it probably moved from.
+    """
+
+    location_id: int
+    state: str
+    source: str
+    kind: str
+    occurred_on: datetime.date
+    operator: str | None = None
+    previous_operator: str | None = None
+    confidence: str | None = None
+    related_location_id: int | None = None
 
 
 @dataclass

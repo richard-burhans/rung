@@ -22,7 +22,13 @@ rewritten, re-run, or re-scheduled freely as long as its contract holds.
 | scrape-company-stores | R | | R | R | W (keep-the-best) | | W | W |
 | dedupe-stores | | | R | | W-cols (`canonical_company_id`, `storefront_name`, coords) | W-col (`company_id` realign) | | W |
 | compare-stores | | R | R | | R | | | |
+| store-lifecycle | | | R | | R | | | |
 | scrape-menus | | | | | R | W (replace-by-store) | W | W |
+
+`store-lifecycle` additionally reads the append-only history tables `store_locations` +
+`store_observations` (not in the matrix — they are written only under `--record-history`, see §2/§3).
+It writes nothing unless given `--write`, which replaces its state's rows in the derived
+`store_lifecycle_events` (Phase 2).
 
 YAML inputs (curated, read-only; under `rung/data/`): `states.yml` (search-states,
 find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
@@ -152,10 +158,18 @@ find-lists, scrape-states), `companies.yml` (seed-companies, compare-stores),
   per-state `dedupe` job (§5).
 - **Re-run:** fully idempotent when serial.
 
-### compare-stores — `sources/compare.py`
+### compare-stores — `rung_intel/compare.py`
 - **In:** `dispensaries`, deduped `company_stores` (`canonical_company_id IS NULL`), `companies`,
   alias + grower-brand YAMLs.
 - **Out:** stdout report only. Read-only; always safe.
+
+### store-lifecycle — `rung_intel/store_lifecycle.py`
+- **In:** `store_locations` + `store_observations` (the append-only history), `companies` +
+  `company_stores` (via `compare.build_canon`, for the operator fold), `companies.yml`.
+- **Out:** stdout report; with `--write`, `store_lifecycle_events` (replace-by-state — a derivation
+  may legitimately shrink, so no keep-the-best guard). Needs `--record-history` sweeps to have run —
+  with fewer than `--closed-after-cycles` usable cycles it reports `first seen` and nothing else.
+- **Re-run:** idempotent. Same log + same `--closed-after-cycles` → the same rows.
 
 ## 3. Commit discipline
 

@@ -236,6 +236,37 @@ def compare_stores_cmd(state: str) -> None:
     print_compare_report(report)
 
 
+@click.command("store-lifecycle")
+@click.option("--state", default="PA", help="State to derive store lifecycle for (e.g. PA).")
+# No default here: the derivation owns it (``store_lifecycle.DEFAULT_CLOSED_AFTER_CYCLES``), and the
+# public core cannot import the overlay to mirror the number without drifting from it.
+@click.option("--closed-after-cycles", type=int, default=None,
+              help="Consecutive missed usable scrape cycles before a store counts as closed [default: 2].")
+@click.option(
+    "--write", is_flag=True,
+    help="Materialize the derived events into store_lifecycle_events (replacing this state's rows) "
+    "so maps and the patient UI read them directly instead of re-deriving.",
+)
+def store_lifecycle_cmd(state: str, closed_after_cycles: int | None, write: bool) -> None:
+    """Derive opened/closed/operator-changed events from the append-only store history."""
+    run_store_lifecycle = _stage("store_lifecycle.run")
+    print_store_lifecycle_report = _stage("store_lifecycle.print")
+    tuning = {} if closed_after_cycles is None else {"closed_after_cycles": closed_after_cycles}
+
+    abbr = state.strip().upper()
+    conn = db.get_connection()
+    db.create_tables(conn)
+    report = run_store_lifecycle(conn, abbr, **tuning)
+    written = None
+    if write:
+        written = _stage("store_lifecycle.materialize")(conn, report)
+        conn.commit()
+    conn.close()
+    print_store_lifecycle_report(report)
+    if written is not None:
+        print(f"\n  wrote {written} row(s) to store_lifecycle_events for {abbr}")
+
+
 @click.command("dedupe-stores")
 @click.option("--state", default="PA", help="State to dedupe company stores for (e.g. PA).")
 def dedupe_stores_cmd(state: str) -> None:

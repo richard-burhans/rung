@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         record_location_observations,
         record_observations,
         replace_company_stores,
+        replace_lifecycle_events,
         replace_store_products,
         set_state_list,
         set_store_canonical,

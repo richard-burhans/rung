@@ -29,6 +29,7 @@ from rung.sources.extract import (
     _query_arcgis_layer,
     _slga_record,
     _split_name_address,
+    _unmerge_name_overflow,
 )
 
 
@@ -603,3 +604,47 @@ def test_table_extractors_null_a_date_mis_mapped_to_address():
     assert _record_from_values("pdf", {"name": "X", "address": "5/3/24"}).address is None
     # A real street address (even one that merely contains digits) is untouched.
     assert _record_from_values("pdf", {"name": "X", "address": "100 Main St"}).address == "100 Main St"
+
+
+# ── PA roster PDF: a long name overprinted onto the address column ──────────────
+# The PDF draws the wrapped store name on top of the address at overlapping x-positions in the
+# same font, so pdfplumber interleaves the two runs character by character. All five cases below
+# are verbatim from the live 2026-07 PA roster PDF.
+
+def test_unmerge_name_overflow_inverts_the_real_pa_overprints() -> None:
+    cases = [
+        ("Restore Integrative Wellness Center - Elkins", "P8a0rk03 Old York Road", "Elkins Park",
+         "Restore Integrative Wellness Center - Elkins Park", "8003 Old York Road"),
+        ("Restore Integrative Wellness Center - Philade", "l9p5h7ia-963 Frankford Avenue", "Philadelphia",
+         "Restore Integrative Wellness Center - Philadelphia", "957-963 Frankford Avenue"),
+        ("Restore Integrative Wellness Center - Doyles", "t8o1w2n N Easton Road, Unit 6", "Doylestown",
+         "Restore Integrative Wellness Center - Doylestown", "812 N Easton Road, Unit 6"),
+        ("Restore Integrative Wellness Center - Pottsto", "w1n450 East High Street", "Pottstown",
+         "Restore Integrative Wellness Center - Pottstown", "1450 East High Street"),
+        ("Restore Integrative Wellness Center - East Pe", "t5e4r7s1bu Mrgain Street", "East Petersburg",
+         "Restore Integrative Wellness Center - East Petersburg", "5471 Main Street"),
+    ]
+    for name, address, city, want_name, want_address in cases:
+        assert _unmerge_name_overflow(name, address, city) == (want_name, want_address)
+
+
+def test_unmerge_name_overflow_leaves_a_row_it_cannot_prove() -> None:
+    # An intact row is untouched.
+    assert _unmerge_name_overflow("Ethos - Allentown", "1 Main St", "Allentown") == (
+        "Ethos - Allentown", "1 Main St")
+    # Missing pieces: nothing to invert against.
+    assert _unmerge_name_overflow("Store", "P8a0rk03 Old York Road", None) == (
+        "Store", "P8a0rk03 Old York Road")
+    # The name does not end with a prefix of the city -> not this corruption.
+    assert _unmerge_name_overflow("Ethos - Pittsburgh North of Harmarville (Har",
+                                  "m5a rAvlipllhea) Drive East", "Pittsburgh") == (
+        "Ethos - Pittsburgh North of Harmarville (Har", "m5a rAvlipllhea) Drive East")
+    # The near-miss: the overflow came from the NAME's parenthetical, not the city. Subtracting the
+    # city tail *would* leave a digit-leading address ("5 Alpha) Drive East"), but the stray ")"
+    # betrays the bad split, so the balanced-parens guard declines. Real PA row.
+    assert _unmerge_name_overflow("Ethos - Pittsburgh North of Harmarville (Har",
+                                  "m5a rAvlipllhea) Drive East", "Harmarville") == (
+        "Ethos - Pittsburgh North of Harmarville (Har", "m5a rAvlipllhea) Drive East")
+    # Overflow chars not all consumable from the address head -> decline.
+    assert _unmerge_name_overflow("Shop - Elkins", "8003 Old York Road", "Elkins Park") == (
+        "Shop - Elkins", "8003 Old York Road")

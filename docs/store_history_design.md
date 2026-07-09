@@ -2,7 +2,10 @@
 
 > **Reference application (dispensary dataset).** This document describes the reference pipeline that ships with `rung`, not the generic engine. If you are building your own domain, see [`build-your-own-domain.md`](build-your-own-domain.md) — you define your own equivalents.
 
-Status: **design + Phase 0 (company-site capture) + Phase 0.5 (roster capture) — 2026-07-02.**
+Status: **Phase 0 (company-site capture) + Phase 0.5 (roster capture) — 2026-07-02;
+Phase 1 (lifecycle derivation, `store-lifecycle`) + Phase 2 (materialized
+`store_lifecycle_events`, `--write`) — 2026-07-09. Relocation collapsing deferred: no real case
+exists to tune against yet.**
 
 ## Why
 
@@ -126,28 +129,105 @@ are unidentifiable and skipped (don't guess). MD's county-only roster therefore 
 the roster leg until those rows gain street addresses/geocodes — its stores are still captured on the
 `company_site` leg (99 % geocoded).
 
-The two independent sources enable the cross-source corroboration below. **Known limitation:** a
-store geocoded by one source but address-only in the other gets two `location_key`s (geo vs address
-form) — the Phase-1 derivation should fold same-`normalize_address` locations when corroborating,
-mirroring how `compare-stores` matches rosters to own-site rows.
+The two independent sources enable the cross-source corroboration below. **Known limitation (resolved
+in Phase 1):** a store geocoded by one source but address-only in the other gets two `location_key`s
+(geo vs address form). The Phase-1 derivation folds them at read time — see "Identity fold" below —
+mirroring how `compare-stores` matches rosters to own-site rows. Capture stays raw.
 
-## Phase 1 — derive lifecycle (read-side, later; gated on accrued history)
+## Phase 1 — derive lifecycle (read-side; SHIPPED 2026-07-09)
 
-A `store-lifecycle` report scanning `store_observations` grouped by `location_id`, ordered by
-`observed_at`:
-- **opened** = first observation of a location;
-- **closed** = a location absent for **K consecutive scrape cycles of its state** (cadence-aware, NOT
-  wall-clock days — a skipped cron run must not fake a closure);
-- **acquired / rebranded** = the canonicalized operator at a location changes.
-- **Cross-source corroboration** (needs Phase 0.5): gone from **both** own-site and roster =
-  high-confidence closed; gone from own-site but still on the roster = "closed, roster lagging" — the
-  project's core thesis, now dated.
+`store-lifecycle --state XX [--closed-after-cycles K]` → `rung_intel/store_lifecycle.py`, registered
+through the plugin seam like `compare-stores`. Reads only; Phase 2 (below) materializes the events.
 
-## Phase 2 — events table + surfacing (later)
+- **opened** = a location's first sighting, *excluding* the source's earliest usable cycle (that is
+  the initial backfill, when every store "appears") and excluding sightings that fall in a partial
+  cycle (too thin to assert an opening, just as it is too thin to assert an absence). Both are
+  reported as `first seen`. Judgement is tracked **per source**: a roster leg with plenty of history
+  must not make an unjudgeable own-site leg read as "nothing closed".
+- **closed** = absent for **K consecutive usable scrape cycles of its state and source** (default
+  K=2). Cadence-aware, never wall-clock: the sweep is weekly and covers a different set of states
+  each run (2026-07-04 touched 3 states, 2026-07-05 touched 41), so a global day-grid would declare
+  every unscraped state closed.
+- **acquired / rebranded** = the canonicalized operator at a stable location changes.
+- **Cross-source corroboration**: gone from own-site but still on the roster = "closed, roster
+  lagging" — the project's core thesis, now dated. (First live hit 2026-07-09: one Ontario store, at
+  `K=1`, last on its operator's own site 07-04 and still on the province's roster 07-05. Named
+  examples stay out of the design doc: an unreviewed `K=1` verdict about a real business is a claim
+  we have not earned the right to publish.)
 
-Materialize `store_lifecycle_events` (opened/closed/operator_changed) for maps + the patient UI to
-read directly; tune the fuzzy-merge edge cases (a store relocating a few blocks vs a genuinely new
-one) against real observed cases.
+Three things the live data forced, each of which a naive version gets wrong:
+
+1. **Identity fold** (the Phase-0.5 limitation above). 1,283 address-keyed locations are the same
+   physical store as a geo-keyed one; unfolded, each is a phantom "opened" and cross-source
+   corroboration can never match. We fold an address-keyed location into a geo-keyed one when they
+   share a `dedupe.address_key` **and exactly one** geo location claims it (1,210 of the 1,283). The
+   other 73 are ambiguous — two or three geo cells share the key, and sampled pairs sit >100 m apart,
+   i.e. genuinely different stores. Ambiguous means skip, don't guess.
+
+2. **Operator identity tolerates storefront drift.** `canon` folds casing, generics and
+   companies.yml aliases but not the locality suffix a site tacks on. The discriminator is the one
+   this doc's own survey draws: drift **extends** the operator name, an acquisition **replaces** it.
+   So two canonical names denote the same operator when their spelling-folded brands are equal or one
+   prefixes the other. "ZEN LEAF"/"ZEN LEAF MERIDEN" and "Kindling Cannabis"/"Kindling Cannabis North
+   York East" are drift; "Columbia Care"/"gLeaf" and "Pop's Cannabis Co."/"Fika Local" are real.
+   Without this, ON reported 4 acquisitions in one day; with it, 1 — the real one. The prefix branch
+   knowingly merges two distinct operators when one brand prefixes the other ("Bloom"/"Bloomfield"):
+   that under-reports, and inventing an acquisition is far worse than missing one.
+
+3. **Partial cycles are not evidence of absence.** The own-site leg scrapes per company, so a failed
+   company writes nothing and its stores look absent. A partial run is a dip the source **later
+   beats**; a genuine decline is never beaten later, so the comparison looks *forward only* — never
+   at the widest cycle overall, which would suppress the closures of a state that really shrank. ON's
+   own-site sweep saw 1,106 locations on 07-04 against 1,280 on 07-05 (86%), so 07-04's absences are
+   discarded. Presence in a partial cycle still counts: a store seen there was really there.
+
+   Guarding on *operator* presence instead is tempting and **wrong**: a single-store operator vanishes
+   from a cycle exactly when its one store closes, which would make those closures — the common case —
+   undetectable. Operator presence instead grades **confidence**: `corroborated` when the operator's
+   other stores were still being scraped while this one went missing, `unconfirmed` when the operator
+   vanished wholesale (scrape failure and total exit are indistinguishable from the log alone).
+
+## Phase 2 — events table + surfacing (SHIPPED 2026-07-09; relocation tuning deferred)
+
+`store-lifecycle --state XX --write` materializes the derivation into `store_lifecycle_events` so
+maps and the patient UI read events directly instead of re-deriving:
+
+```
+store_lifecycle_events                -- the DERIVED conclusion; recomputed, never appended
+  id                  BIGINT PK
+  location_id         BIGINT NOT NULL -- → store_locations (display fields live there; join)
+  state, source       TEXT
+  kind                TEXT            -- opened | closed | operator_changed | relocation_candidate
+  occurred_on         DATE
+  operator, previous_operator  TEXT
+  confidence          TEXT            -- closed: corroborated | unconfirmed
+  related_location_id BIGINT          -- relocation_candidate: the location it may have moved FROM
+  derived_at          TIMESTAMPTZ
+```
+
+**Replaced per state, not appended, and deliberately allowed to shrink.** `store_observations` is the
+evidence and must never be lost; this table is a *conclusion* drawn over all of it. Later evidence
+revises an earlier verdict — a store called "closed" that reappears next cycle was never closed — so
+`db.replace_lifecycle_events` does a wholesale per-state replace. The keep-the-best guard that
+protects `replace_company_stores` would be actively wrong here: that guard stops a transient scrape
+failure from clobbering a live snapshot, whereas *fewer events* is a legitimate re-derivation.
+
+### Relocation: reported, never collapsed — and NOT tuned
+
+The remaining edge case is "a store relocating a few blocks vs a genuinely new one". Today it
+**cannot be tuned**: the observation log holds **two dates**, and no state has yet produced an opening
+and a closure together, so there is not one real relocation to calibrate a radius against. Inventing a
+"within N metres" threshold and calling it tuned would be the guess this project refuses everywhere
+else.
+
+So `relocation_candidates` carries **no distance threshold**. A candidate is a closure and an opening
+on the same source, with the same canonical operator, in the same town (`compare.norm_city` — the fold
+`compare-stores` already uses, not a new one), where the opening does not precede the closure. Both the
+`opened` and `closed` events still stand; a `relocation_candidate` row merely links them via
+`related_location_id`. A consumer may merge them; the derivation does not decide.
+
+**Revisit when history matures:** once several states have produced opening/closure pairs, calibrate
+against the real cases and decide whether to collapse.
 
 ## Reuse (don't rebuild)
 

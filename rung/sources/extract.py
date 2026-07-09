@@ -273,6 +273,61 @@ def _header_map(row: list) -> dict[int, str] | None:
     return col_map if "name" in col_map.values() else None
 
 
+def _unmerge_name_overflow(
+    name: str | None, address: str | None, city: str | None,
+) -> tuple[str | None, str | None]:
+    """Repair a name whose overflow was *overprinted* onto the address column.
+
+    PA's roster PDF draws a long store name past its column, on top of the address, at
+    overlapping x-positions and in the same font — so pdfplumber interleaves the two runs
+    character by character and the name is left truncated::
+
+        name    'Restore Integrative Wellness Center - Elkins'   (truncated: lost 'Park')
+        address 'P8a0rk03 Old York Road'                         ('Park' ⊕ '8003')
+
+    No extractor can split that geometrically. But the corruption is *invertible*, because we
+    already know one of the two interleaved strings: the lost characters are exactly the tail of
+    the ``city``, whose head the truncated ``name`` still ends with. Subtract that tail from the
+    address, in order, and both fields come back ('Restore … - Elkins Park', '8003 Old York Road').
+
+    Deliberately strict — every condition must hold, or the row is returned untouched: the name
+    must end with a *proper* prefix of the city, every overflow character must be consumed in order
+    from the address's head, the repaired address must start with a digit (a street number), and
+    both repaired fields must have balanced parentheses. That last guard is not hypothetical: PA
+    also carries ``'Ethos - Pittsburgh North of Harmarville (Har'`` / ``'m5a rAvlipllhea) Drive
+    East'``, where the overflow came from the name's own parenthetical rather than the city. Its
+    real city ("Pittsburgh") already fails the prefix test, but a city of "Harmarville" would have
+    slipped through into ``'5 Alpha) Drive East'`` — a stray ``)`` betrays the bad split. That row
+    stays broken, which is correct: repairing a row we misread is worse than leaving one broken.
+    """
+    if not (name and address and city):
+        return name, address
+    flat_city = city.strip()
+    stripped = name.rstrip()
+    # The name's tail must be a proper prefix of the city ("… - Elkins" of "Elkins Park").
+    overlap = next(
+        (n for n in range(len(flat_city) - 1, 0, -1) if stripped.endswith(flat_city[:n])),
+        0,
+    )
+    overflow = flat_city[overlap:].replace(" ", "")
+    if not overlap or not overflow:
+        return name, address
+
+    kept: list[str] = []
+    pending = list(overflow)
+    for char in address:
+        if pending and char == pending[0]:
+            pending.pop(0)
+        else:
+            kept.append(char)
+    repaired = "".join(kept).strip()
+    repaired_name = f"{stripped}{flat_city[overlap:]}"
+    balanced = all(text.count("(") == text.count(")") for text in (repaired, repaired_name))
+    if pending or not repaired[:1].isdigit() or not balanced:
+        return name, address  # not the overprint we know how to invert — leave it alone
+    return repaired_name, repaired
+
+
 def _extract_pdf(content: bytes) -> list[DispensaryRecord]:
     records: list[DispensaryRecord] = []
     col_map: dict[int, str] | None = None
@@ -299,6 +354,10 @@ def _extract_pdf(content: bytes) -> list[DispensaryRecord]:
                 }
                 if not values.get("name"):
                     continue
+                # A long name overprinted onto the address column interleaves the two (PA).
+                values["name"], values["address"] = _unmerge_name_overflow(
+                    values.get("name"), values.get("address"), values.get("city"),
+                )
                 records.append(_record_from_values("pdf", values))
     return records
 
