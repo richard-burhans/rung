@@ -19,6 +19,21 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Changed
+
+- `examples/paper_fetcher.py`: replaced the Europe PMC rung with a **`pmc_oa`** rung built on PMC's
+  OA Web Service. The old rung fetched an endpoint that now returns 404 for every article — including
+  papers that *are* in the open-access subset — so it had been silently dead rather than correctly
+  declining.
+
+### Fixed
+
+- `examples/paper_fetcher.py` now reports **"not open access"** as a verdict distinct from a fetch
+  failure. A paper that PMC indexes but places outside the OA subset is free to read and carries no
+  redistribution licence; reporting it as "paywalled" was indistinguishable from a broken rung, which
+  is how two rungs rotted unnoticed. A ladder should be able to say *"I can't get this"* and *"you may
+  not have this"* in different words.
+
 ## [0.1.0] — 2026-07-10
 
 First tagged release. The public core runs standalone: Stage-1 roster extraction, the access

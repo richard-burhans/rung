@@ -4,6 +4,10 @@ fetch itself isn't exercised here (it hits live OA hosts); these cover the pure 
 DOI-resolution logic. See examples/paper_fetcher.py.
 """
 
+import asyncio
+
+import pytest
+
 from examples import paper_fetcher
 
 
@@ -34,3 +38,84 @@ def test_resolve_doi_passes_through_a_bare_doi() -> None:
 
 def test_ploscompbiol_journal_is_routed() -> None:
     assert "ploscompbiol" in paper_fetcher._url_for("plos", "10.1371/journal.pcbi.1004333")
+
+
+# ── the PMC OA rung: "not open access" is a verdict, not a failure ────────────────────────────────
+# A rung that cannot tell "this paper carries no redistribution licence" from "my fetch broke" reports
+# both as "paywalled". That is how two rungs here rotted unnoticed, so pin the distinction.
+
+_NOT_OA_XML = (
+    '<OA><request id="PMC4913118"/>'
+    '<error code="idIsNotOpenAccess">identifier \'PMC4913118\' is not Open Access</error></OA>'
+)
+_OA_TGZ_ONLY_XML = (
+    '<OA><records><record id="PMC5438553" license="CC BY">'
+    '<link format="tgz" href="ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_package/d1/78/PMC5438553.tar.gz" />'
+    "</record></records></OA>"
+)
+_OA_PDF_XML = (
+    '<OA><records><record id="PMC999" license="CC BY">'
+    '<link format="pdf" href="ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/aa/bb/PMC999.pdf" />'
+    "</record></records></OA>"
+)
+
+
+class _FakeResponse:
+    def __init__(self, payload: str) -> None:
+        self._payload = payload.encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def _stub_oa_service(monkeypatch, xml: str) -> None:
+    monkeypatch.setattr(paper_fetcher.urllib.request, "urlopen", lambda *_a, **_k: _FakeResponse(xml))
+
+
+def test_oa_service_raises_not_open_access_for_a_free_to_read_deposit(monkeypatch) -> None:
+    # Free-to-read on PMC is NOT membership of the OA subset; Unpaywall's `is_oa` doesn't imply it.
+    _stub_oa_service(monkeypatch, _NOT_OA_XML)
+    with pytest.raises(paper_fetcher._NotOpenAccess):
+        paper_fetcher._oa_pdf_url("PMC4913118")
+
+
+def test_oa_service_declines_a_package_only_record(monkeypatch) -> None:
+    # Most OA records advertise only a `tgz` on the legacy FTP tree that NCBI deletes in Aug 2026, so
+    # the rung declines rather than depending on it. Declining is not a not-open-access verdict.
+    _stub_oa_service(monkeypatch, _OA_TGZ_ONLY_XML)
+    assert paper_fetcher._oa_pdf_url("PMC5438553") is None
+
+
+def test_oa_service_returns_an_https_pdf_when_one_is_advertised(monkeypatch) -> None:
+    # The service still advertises ftp:// hrefs; the same paths serve over HTTPS.
+    _stub_oa_service(monkeypatch, _OA_PDF_XML)
+    url = paper_fetcher._oa_pdf_url("PMC999")
+    assert url == "https://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/aa/bb/PMC999.pdf"
+
+
+def test_pmc_oa_rung_records_the_verdict_instead_of_reporting_a_failure(monkeypatch) -> None:
+    doi = "10.1016/j.jcm.2016.02.012"
+    paper_fetcher.NOT_OPEN_ACCESS.discard(doi)
+    monkeypatch.setattr(paper_fetcher, "_pmcid_for_doi", lambda _doi: "PMC4913118")
+    _stub_oa_service(monkeypatch, _NOT_OA_XML)
+
+    records, url, _hint = asyncio.run(paper_fetcher._fetch_pmc_oa(None, doi, None))
+
+    assert records == [] and url is None      # the rung yields nothing…
+    assert doi in paper_fetcher.NOT_OPEN_ACCESS   # …but says *why*, so it isn't mistaken for a paywall
+    paper_fetcher.NOT_OPEN_ACCESS.discard(doi)
+
+
+def test_pmc_oa_rung_does_not_flag_a_doi_with_no_pmc_record(monkeypatch) -> None:
+    # No PMC record at all is an ordinary "this rung can't serve you", not a licence verdict.
+    doi = "10.48550/arXiv.2305.14325"
+    monkeypatch.setattr(paper_fetcher, "_pmcid_for_doi", lambda _doi: None)
+    records, _url, _hint = asyncio.run(paper_fetcher._fetch_pmc_oa(None, doi, None))
+    assert records == []
+    assert doi not in paper_fetcher.NOT_OPEN_ACCESS

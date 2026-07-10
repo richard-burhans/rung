@@ -47,9 +47,15 @@ cost/success — so the ladder is: resolve the DOI (Crossref), then run the chea
 real PDF and **persist the winner per paper** so a re-run skips straight to it. The rungs, cheapest
 first: **arXiv** (cost 0) → the **direct-journal** hosts PLOS/Nature-OA/BMC/Frontiers (cost 1, fast,
 no API call) → **Unpaywall** (cost 2 — an OA locator that finds a copy of *any* DOI on any
-repository/preprint) → **Europe PMC** (cost 3 — biomed-OA backstop that serves what US-PMC blocks).
+repository/preprint) → **PMC OA** (cost 3 — the PMC Open Access subset, via the OA Web Service).
 Same `access.run_target` + queue + honest `http.make_session` as the farmers-market example — a
 completely different domain — which is the point: the engine is domain-agnostic.
+
+The last rung earns its place by telling the truth about *why* it failed. Asked for a paper outside the
+PMC Open Access subset, it reports **not open access** rather than a failure — because "free to read on
+PMC" is not a redistribution licence, and Unpaywall's `is_oa` does not imply one. Without that verdict a
+broken rung looks exactly like a paywall, which is how two rungs here rotted unnoticed. A ladder should
+be able to say "I can't get this" and "you may not have this" in different words.
 
 ```bash
 UNPAYWALL_EMAIL=you@example.com DATABASE_URL=postgresql://rung:rung@localhost:5432/rung \

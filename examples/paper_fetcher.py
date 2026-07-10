@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -135,13 +136,67 @@ def _pmcid_for_doi(doi: str) -> str | None:
     return r.get("pmcid")
 
 
-async def _fetch_europepmc(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
-    """Broad fallback rung: resolve the DOI to a PMCID and pull the OA PDF from Europe PMC
-    (serves the same PDFs US PMC blocks — so this covers most biomedical open access)."""
+# DOIs that PMC indexes but explicitly reports as outside the OA subset. These are not fetch failures:
+# they are "free to read, no redistribution licence", and the runner reports them as such so a dead
+# rung can never again masquerade as "paywalled".
+NOT_OPEN_ACCESS: set[str] = set()
+
+
+class _NotOpenAccess(Exception):
+    """PMC indexes the article but reports it outside the OA subset."""
+
+
+def _oa_pdf_url(pmcid: str) -> str | None:
+    """A directly-fetchable OA PDF URL for a PMCID, or None. Records an explicit not-open-access verdict.
+
+    Asks the PMC OA Web Service — the *documented* route, and the only endpoint that separates "this
+    paper is not open access" from "our fetch broke". That distinction is the whole point of this rung:
+    without it a dead rung is indistinguishable from a paywall, which is how two rungs here rotted
+    unnoticed. Free-to-read on PMC is NOT membership of the PMC OA subset, and Unpaywall's `is_oa` does
+    not imply it either — a free-to-read deposit carries no redistribution licence.
+
+    Both direct-PDF routes are dead ends, verified 2026-07-10 against OA-subset controls (PMC5438553,
+    PMC9831296) and not merely against paywalled papers:
+
+    * ``pmc.ncbi.nlm.nih.gov/articles/<id>/pdf/`` answers **HTTP 200 with a Google reCAPTCHA page** —
+      a naive status-code check would record that as a success (``fetched_plausible`` is what stops it).
+    * ``europepmc.org/articles/<id>?pdf=render`` now 404s for *every* article.
+
+    Most OA records advertise only a ``tgz`` package on the legacy FTP tree, which NCBI moved under
+    ``deprecated/`` and **deletes in August 2026** (``ftp.ncbi.nlm.nih.gov/pub/pmc/readme.txt``), so we
+    deliberately do not fetch through it. In practice this rung therefore classifies far more often than
+    it downloads; the OA papers it would have fetched are already caught by the cheaper journal rungs.
+    """
+    url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}"
+    try:
+        with urllib.request.urlopen(url, timeout=25) as resp:  # PMC: public read-only API
+            xml = resp.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    if "idIsNotOpenAccess" in xml:
+        raise _NotOpenAccess
+    links = re.findall(r'<link format="([^"]+)"[^>]*href="([^"]+)"', xml)
+    pdf = next((h for fmt, h in links if fmt == "pdf"), None)
+    return pdf.replace("ftp://ftp.ncbi.nlm.nih.gov", "https://ftp.ncbi.nlm.nih.gov") if pdf else None
+
+
+async def _fetch_pmc_oa(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
+    """Costly last rung: resolve the DOI to a PMCID and fetch the PDF from the PMC OA subset.
+
+    Records a not-open-access verdict rather than reporting a failure, so `main` can tell the user the
+    paper is theirs to download by hand instead of implying our ladder is broken.
+    """
     pmcid = _pmcid_for_doi(doi)
     if not pmcid:
         return [], None, None
-    return await _download_pdf(f"https://europepmc.org/articles/{pmcid}?pdf=render", doi, "europepmc")
+    try:
+        url = _oa_pdf_url(pmcid)
+    except _NotOpenAccess:
+        NOT_OPEN_ACCESS.add(doi)
+        return [], None, None
+    if url is None:
+        return [], None, None
+    return await _download_pdf(url, doi, "pmc_oa")
 
 
 def _unpaywall_pdf(doi: str) -> str | None:
@@ -210,10 +265,10 @@ CATALOG = [
     access.AccessMethod("bmc", cost_rank=1, run=_make_fetcher("bmc")),
     access.AccessMethod("frontiers", cost_rank=1, run=_make_fetcher("frontiers")),
     # Unpaywall (an API round-trip) locates an OA copy of ANY DOI on ANY host/repository/preprint, so
-    # it's the general fallback after the fast direct-journal rungs; Europe PMC is a further biomed-OA
+    # it's the general fallback after the fast direct-journal rungs; the PMC OA subset is a further biomed-OA
     # backstop for the DOI→PMCID case Unpaywall occasionally misses.
     access.AccessMethod("unpaywall", cost_rank=2, run=_fetch_unpaywall),
-    access.AccessMethod("europepmc", cost_rank=3, run=_fetch_europepmc),
+    access.AccessMethod("pmc_oa", cost_rank=3, run=_fetch_pmc_oa),
 ]
 
 
@@ -261,7 +316,18 @@ def main() -> None:
     got = sum(1 for _w, p in results.values() if p)
     print(f"Fetched {got}/{len(results)} (doi: winning host → file):")
     for doi, (winner, path) in results.items():
-        print(f"  {doi}: {winner or 'NONE'} -> {path or '(no OA host worked — paywalled/to-get)'}")
+        if path:
+            outcome = path
+        elif doi in NOT_OPEN_ACCESS:
+            # Distinct from a fetch failure: PMC indexes it but it is outside the OA subset. There is
+            # nothing for the ladder to fix — the paper carries no redistribution licence.
+            outcome = "(not open access — free to read, fetch it by hand)"
+        else:
+            outcome = "(no OA host worked — paywalled, or a rung is broken)"
+        print(f"  {doi}: {winner or 'NONE'} -> {outcome}")
+    if NOT_OPEN_ACCESS:
+        print(f"\n{len(NOT_OPEN_ACCESS)} DOI(s) are not in the PMC OA subset. `is_oa` from Unpaywall does "
+              "not imply a redistribution licence; these are yours to download by hand.")
 
 
 if __name__ == "__main__":
