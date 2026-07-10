@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "rung: a broker-free, Postgres-centric framework for resilient distributed scraping of fragmented consumer-data platforms"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+authors:
+  - given-names: Richard
+    family-names: Burhans
+    orcid: "https://orcid.org/0009-0006-5949-0958"
+    affiliation: "The Galaxy Project, Penn State University, USA"
+repository-code: "https://github.com/richard-burhans/rung"
+url: "https://rung-framework.readthedocs.io/"
+abstract: >-
+  rung is an open-source Python framework for assembling authoritative datasets from many
+  fragmented consumer-data platforms. It treats every target as reachable several ways at
+  different cost, runs the cheapest method that works, remembers the winner, and coordinates a
+  distributed worker fleet on PostgreSQL alone — no message broker. Domain-specific catalogs plug
+  in through an entry-point seam, so the generic engine ships open-source.
+keywords:
+  - web scraping
+  - data engineering
+  - distributed systems
+  - PostgreSQL
+  - reproducibility
+  - Python
+license: MIT
+version: 0.1.0
+date-released: "2026-07-10"

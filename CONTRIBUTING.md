@@ -142,7 +142,42 @@ assert registry.resolve("compare.run") is not plugin  # it's your impl, not the 
 
 1. Fork, branch, and make your change with tests.
 2. Make sure the three checks above pass.
-3. Open a PR describing the change. CI runs the same checks on a Postgres service container.
+3. Add an entry under `[Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
+4. Open a PR describing the change. CI runs the same checks on a Postgres service container.
 
 Be respectful of the sites you scrape: honor `robots.txt` and terms of service, and don't add
 evasion or rate-limit-circumvention to the public core.
+
+## Code of Conduct
+
+This project adopts the [Galaxy Community Code of Conduct](https://galaxyproject.org/community/coc/);
+see [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). It applies to every space this project uses. We aim
+to be welcoming, inclusive, respectful, and collaborative — questions from newcomers are
+contributions too.
+
+## Governance
+
+`rung` is currently maintained by Richard Burhans, who reviews and merges pull requests and cuts
+releases. Decisions are made in the open, on GitHub issues and pull requests; if you disagree with
+one, say so on the thread — a reasoned objection is welcome and will be answered.
+
+This is a young project with a single maintainer, and we would rather say that plainly than imply a
+larger structure than exists. Contributors who sustain meaningful work on the core are invited to
+become maintainers, with commit rights and a say in the roadmap. If you would like to help steward
+the project, open an issue and let's talk.
+
+## Releases
+
+Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) and are recorded in
+[`CHANGELOG.md`](CHANGELOG.md), which follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+To cut a release: move the `[Unreleased]` entries under a new version heading with the release
+date, bump `version` in `pyproject.toml` and `CITATION.cff`, tag the commit (`git tag -a vX.Y.Z`),
+push the tag, and publish a GitHub release from it. Cite the software using
+[`CITATION.cff`](CITATION.cff).
+
+## Reporting a security issue
+
+Please do not open a public issue for a security problem. Email the maintainer at
+**richard.burhans@gmail.com** and allow a reasonable window to respond before disclosing.
