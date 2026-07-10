@@ -65,7 +65,7 @@ forbids importing outside the base layer, not base→base edges):
 | `browser.py` | `make_browser_options()`, `render_html()`, `get_script_value()` | pydoll/Chrome primitives (Playwright-installed Chromium). |
 | `text.py` | `extract_brand()`, `normalize_brand()`, `load_company_aliases()`, `normalize_category()`, `normalize_product_type()`, `normalize_strain_type()`, `is_placeholder_name()`, `readability_key()`, `normalize_terpene()`, `TERPENE_COLUMNS`, `terpene_floats()`, `dominant_terpene()`, `product_fingerprint()`, `as_dict()`, `name_of()` | Brand splitter + the spelling-insensitive operator key (`normalize_brand` folds "Zen Leaf"/"ZenLeaf"/"NuEra"/"nuEra" — the variants companies.yml doesn't alias) + the one companies.yml alias loader. All shared by seed + compare so folding is consistent. Also the three product-taxonomy normalizers, each a substring-keyword matcher over its own `data/*.yml` (alnum-normalized keys, YAML order = match priority): `normalize_category(raw, name)` → the canonical cross-platform product category (`data/category_aliases.yml` ordered keyword rules on the raw category + `data/category_name_overrides.yml` name-keyword overrides that correct platform-mislabeled forms — a capsule sold as an "edible"; no-match→`"Other"`; see `docs/category_taxonomy.md`); `normalize_product_type(name, category, category_std)` → the **2nd-level** product type *within* a `category_std` (`data/product_type_aliases.yml`, nested per category, matched off the name + raw category; per-category `_defaults` label else `"Unspecified"`, `None` for an uncovered category; see `docs/product_type_hierarchy.md`); and `normalize_strain_type` → the canonical lineage facet `Indica/Sativa/Hybrid/CBD` or `None` (`data/strain_aliases.yml`; conservative lineage-only keywords, no-match→`None`, *not* "Other"). Also `is_placeholder_name` — the one shared junk-row predicate (test/demo/equity-tag/no-data/bare-license/header) used by `extract`+`seed_companies`+`compare` so junk never enters `dispensaries`/`companies`. Beyond names, `text.py` also hosts the cross-platform **terpene** helpers (`normalize_terpene` canonicalization, `TERPENE_COLUMNS`, `terpene_floats`/`dominant_terpene` jsonb coercion) and the master-product **identity hash** `product_fingerprint` (brand+name+size+type, +mg dose for mg-dosed products), plus `readability_key` (shared by seed + compare). (`EN_DASH` is an internal constant.) |
 | `normalize.py` | `size_to_grams()`, `grams_to_label()`, `enrich_variants()`, `normalize_terpenes()`, `enrich_record()`, `PERCENT_MAX` | Product-data numeric normalizers (sizes/potency/terpene totals; the canonical terpene-name + identity helpers live in `text.py`); `grams_to_label` is the display inverse of `size_to_grams` (grams → "3.5g") used by the search export so one weight reads the same everywhere: a variant size label → grams (+ per-variant `price_per_g`) and a representative `size_g`, sized only for weight-sold categories (flower/pre-roll/vape/concentrate) so a dosed product's `mg` label can't yield a nonsense `$/g`; a raw terpene list → canonical `{Name: percent}` + `terp_total` (folds `text.normalize_terpene`, sums α+β-pinene, converts `mg/g`→`%`, repairs an impossible >40% total by dropping a lone spike or rescaling an unlabeled `mg/g` row). `enrich_record` stamps these onto a `StoreProductRecord` from the `menu_extractors._record` choke point (idempotent). Backs the `products_normalized` view. |
-| `addresses.py` | `clean()`, `extract_address_blocks()`, `BLOCK_ADDRESS_RE`/`PHONE_RE`/… | Shared address/text-extraction primitives (imports only `models`); used by both `extract` and `company_stores` so neither reaches into the other. |
+| `addresses.py` | `clean()`, `extract_address_blocks()`, `extract_line_blocks()`, `iter_line_addresses()`/`name_before()`, `BLOCK_ADDRESS_RE`/`PHONE_RE`/… | Shared address/text-extraction primitives (imports only `models`); used by both `extract` and `company_stores` so neither reaches into the other. The line-address scan is shared deliberately: the Stage-1 roster path and the Stage-2 `line_blocks` rung parse the identical "street line + `City, ST zip` line" shape, so they read one implementation and cannot drift. |
 
 **Persistence:** `db.py` — Postgres access (psycopg3, raw SQL; `DBConn` is the
 connection type alias every signature uses). Tables it creates: `dispensaries`,
@@ -181,7 +181,7 @@ through the core's `db.py` or return records):
 |---|---|---|---|
 | `state_search.py` | Per-state program coverage + verified agency URL | `run_state_coverage`, `load_states`, `StateInfo`/`StateCoverage` | `state_programs` (non-list cols) |
 | `state_lists.py` | Crawl landing page → score links → find list resource | `run_find_lists`, `find_list_url`, `ListCandidate` | `state_programs.list_*` |
-| `extract.py` | Extract records from a list, dispatching on `list_type` (pdf/csv/kml/arcgis/lookup/html/ca_dcc/az_dhs/co_med/ma_ccc/on_agco/ab_aglc/bc_lcrb/sk_slga — the `ListType` Literal, with `HANDLED_LIST_TYPES = frozenset(get_args(ListType))` derived from it); opt-in `--render` and `--ai` tiers; `--record-history` also appends the `state_roster` leg of the store-lifecycle history via `record_roster_observations` (physical-location identity from `dedupe.geo_key`/`address_key`, only on a non-empty extraction) | `run_extract_states`, `record_roster_observations`, `ExtractResult`, `print_extract_report`, `extract_records`, `extract_rendered`, `HANDLED_LIST_TYPES` | `dispensaries`; `store_locations`/`store_observations` via `db.record_location_observations` when `--record-history` |
+| `extract.py` | Extract records from a list, dispatching on `list_type` (pdf/csv/kml/arcgis/atlist/lookup/html/ca_dcc/az_dhs/co_med/ma_ccc/on_agco/ab_aglc/bc_lcrb/sk_slga/va_cca — the `ListType` Literal, with `HANDLED_LIST_TYPES = frozenset(get_args(ListType))` derived from it); opt-in `--render` and `--ai` tiers; `--record-history` also appends the `state_roster` leg of the store-lifecycle history via `record_roster_observations` (physical-location identity from `dedupe.geo_key`/`address_key`, only on a non-empty extraction) | `run_extract_states`, `record_roster_observations`, `ExtractResult`, `print_extract_report`, `extract_records`, `extract_rendered`, `HANDLED_LIST_TYPES` | `dispensaries`; `store_locations`/`store_observations` via `db.record_location_observations` when `--record-history` |
 | `ai_fallback.py` | scrapegraphai+Ollama extraction fallback (model via `RUNG_OLLAMA_MODEL`, legacy `DISPENSARY_OLLAMA_MODEL` honored, default `llama3.2`) | `extract_with_ai` | returns records |
 | `recon.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `homepage_discovery.py` | Opt-in (`recon --discover`) web-search of a no-homepage operator → filter aggregators/social → rank by brand↔domain → validate via `recon._probe_one`. Reuses `state_search` backends; probe injected to avoid a cycle | `discover_homepage`, `build_discovery_queries`, `rank_candidates`, `make_backends` | none (caller persists via recon) |
@@ -351,9 +351,9 @@ overlay (its proprietary stages then resolve to registry stubs).
    Whitehall") is the display label for reporting. Dedupe folds aliases into the
    operator but stamps each store's storefront brand.
 8. **Two type vocabularies (intentional).** `source_type` (`pdf|map|html|api`) describes
-   the agency evidence URL; `list_type` (`pdf|csv|kml|arcgis|lookup|html|ca_dcc|az_dhs|co_med|
+   the agency evidence URL; `list_type` (`pdf|csv|kml|arcgis|atlist|lookup|html|va_cca|ca_dcc|az_dhs|co_med|
    ma_ccc|on_agco|ab_aglc|bc_lcrb|sk_slga` — the `extract.ListType` Literal) is what `extract.py` dispatches on. The
-   per-state custom handlers (`ca_dcc`/`az_dhs`/`co_med`/`ma_ccc`/`on_agco`/`ab_aglc`/`bc_lcrb`/`sk_slga`) are added to the
+   per-state custom handlers (`ca_dcc`/`az_dhs`/`co_med`/`ma_ccc`/`on_agco`/`ab_aglc`/`bc_lcrb`/`sk_slga`/`va_cca`) and the generic `atlist` map-platform rung are added to the
    Literal, not produced by `state_lists._classify`, so the contract-8 test still guards
    `_classify`'s output ⊆ `HANDLED_LIST_TYPES`.
 9. **Canadian provinces are states (D1).** Province rows ride the same `state` TEXT
@@ -405,16 +405,23 @@ overlay (its proprietary stages then resolve to registry stubs).
   dedupes/matches where coordinates exist (company_stores broadly; rosters only in
   CA/MA/NJ). The cell is deliberately tight: measured against the dataset, 110 m wrongly
   merged neighbouring competitors while 11 m merged only genuine same-store pairs.
-  `compare` adds a third, coarsest tier — a **city-level locality fallback**
-  (`_locality_partition`, count-based per operator) that mops up street/geo-unmatched
-  stores for rosters carrying only a city/county and no street (WA city+zip; MD
-  county + city-in-name). Precise tiers run first; locality only pairs the leftovers.
+  `compare` adds two coarser tiers, each mopping up the previous one's leftovers, per operator.
+  **(3) coordinate proximity** (`_geo_proximity_partition`, nearest-first and one-to-one within
+  150 m) pairs rosters that publish only a name and a map pin — Manitoba's KML, where hand-placed
+  pins drift so far that only 61 of 150 stores share an exact ~11 m cell and the geo KEY additionally
+  demands a zip the roster has not got. **(4) a city-level locality fallback**
+  (`_locality_partition`, count-based) for rosters carrying only a city and no street (WA city+zip).
+  Precise tiers run first. (MD used to need the locality tier; since `extract._repair_swapped_address`
+  recovered its real street column it matches precisely.) Both coarse tiers can only ever
+  UNDER-state roster lag, never over-state it — the inverse of this module's documented failure mode,
+  which is why both are per-operator and tightly bounded.
   `dedupe.physical_key(record)` is the record-level convenience that layers these — coordinate
   cell → `address_key` street+zip → platform handle — used to dedupe the same physical store
   across the Dutchie/Weedmaps/Leafly bootstrap pools (`bootstrap.py`).
   `dedupe.location_key` is the distinct **store-history** identity — `geo_key` with a *guarded*
-  `address_key` fallback that **rejects county-only rows** (MD's 119→23 keys) so a coarse roster
-  address can't fabricate an operator-change event. It is the public symbol both store-history legs
+  `address_key` fallback that **rejects county-only rows** (once MD's 119→23 keys, before its street
+  column was recovered; now a general safety net) so a coarse roster address can't fabricate an
+  operator-change event. It is the public symbol both store-history legs
   import (`extract.record_roster_observations` and `company_stores.record_store_observations`); the
   edge/tier annotations name `geo_key`/`address_key` (its internals) for brevity, but `location_key`
   is the actual boundary-crossing key.
@@ -425,7 +432,7 @@ overlay (its proprietary stages then resolve to registry stubs).
 |---|---|---|
 | Persisted record types | `models.py` | canonical definitions |
 | Engine DB (generic) | `db.py` | connection + the 5 infra tables (`jobs`/`access_methods`/`token_buckets`/`proxies`/`proxy_tiers`) + `create_engine_tables` + the access-registry CRUD; imports **no** `models`/`text` (genericization B1/B3) |
-| Reference DB schema & CRUD | `reference_db.py` | the cannabis tables + `products_normalized` view + migrations + all domain CRUD + `create_reference_tables`/`create_tables` + `NATURAL_FLOWER_WHERE`; imports `db` + `models` + `text`. `db.<reference fn>` still resolves via `db.__getattr__` (back-compat shim) |
+| Reference DB schema & CRUD | `reference_db.py` | the cannabis tables + `products_normalized` view + migrations + all domain CRUD + `create_reference_tables`/`create_tables` + the shared analysis predicates: `NATURAL_FLOWER_WHERE` and its view-column twin `NATURAL_FLOWER_WHERE_NORMALIZED` (kept in sync by `test_db.py`), plus `US_JURISDICTIONS_SUBQUERY` (states + DC + PR) / `US_EXCL_TERRITORIES_SUBQUERY` (holds out `US_TERRITORIES`, for analyses that report PR as its own column) / `CA_PROVINCES_SUBQUERY` (the trap: `state = 'CA'` is California — Canada is `country = 'CA'`). The two US constants exist because "US" named two different populations in two live scripts; `test_db.py` pins their difference to `US_TERRITORIES`; imports `db` + `models` + `text`. `db.<reference fn>` still resolves via `db.__getattr__` (back-compat shim) |
 | Work queue | `queue.py` | SKIP LOCKED claims + lease/heartbeat/reaper; `docs/stage_contracts.md` §5 §4-5 |
 | Cross-worker rate limit | `rate_limit.py` (`token_buckets`) | per-host token bucket; §3-4 |
 | Stage contracts | `docs/stage_contracts.md` | read/write matrix, write isolation, claim keys |

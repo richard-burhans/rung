@@ -30,6 +30,7 @@ from rung.sources.extract import (
     _slga_record,
     _split_name_address,
     _unmerge_name_overflow,
+    _va_cca_record,
 )
 
 
@@ -178,6 +179,156 @@ def test_html_header_named_table():
     recs = _extract_html(html)
     assert {r.name for r in recs} == {"Green Leaf", "Happy Buds"}
     assert recs[0].city == "Reno"  # address column present → name not split
+
+
+# ── _repair_swapped_address ──────────────────────────────────────────────────
+# MD's dispensary locator is headed `Dispensary | County | Address` but its data rows are
+# `name | street | county`. Trusting the header filed the COUNTY as the address and discarded
+# the street, so all 120 rows loaded and none could ever match a company store.
+
+def test_html_misordered_header_files_the_street_not_the_county():
+    html = """
+    <table>
+      <tr><th>Dispensary</th><th>County</th><th>Address</th></tr>
+      <tr><td>Ascend - Aberdeen</td><td>226 S Philadelphia Ave Aberdeen MD 21001</td><td>Harford</td></tr>
+      <tr><td>Ascend - Crofton</td><td>1657 Crofton Blvd Crofton MD 21114</td><td>Anne Arundel</td></tr>
+      <tr><td>Zen Leaf - Towson</td><td>1608 E Joppa Rd Towson MD 21286</td><td>Baltimore</td></tr>
+    </table>"""
+    recs = _extract_html(html)
+    assert [r.address for r in recs] == [
+        "226 S Philadelphia Ave Aberdeen MD 21001",
+        "1657 Crofton Blvd Crofton MD 21114",
+        "1608 E Joppa Rd Towson MD 21286",
+    ]
+
+
+def test_html_correct_header_is_never_second_guessed():
+    # The repair must not touch a table whose header already agrees with its data.
+    html = """
+    <table>
+      <tr><th>Dispensary</th><th>Address</th><th>County</th></tr>
+      <tr><td>Green Leaf</td><td>1 Main St</td><td>Harford</td></tr>
+      <tr><td>Happy Buds</td><td>2 Oak Ave</td><td>Howard</td></tr>
+      <tr><td>Third Store</td><td>3 Elm Rd</td><td>Carroll</td></tr>
+    </table>"""
+    recs = _extract_html(html)
+    assert [r.address for r in recs] == ["1 Main St", "2 Oak Ave", "3 Elm Rd"]
+
+
+def test_html_licence_number_column_is_not_mistaken_for_a_street():
+    # WA/MT ship a city-only `address` alongside a numeric licence column. STREET_RE demands
+    # digits FOLLOWED BY A SPACE, so a bare licence number is not a candidate and nothing swaps.
+    html = """
+    <table>
+      <tr><th>Dispensary</th><th>Address</th><th>License</th></tr>
+      <tr><td>Green Leaf</td><td>Spokane</td><td>231001</td></tr>
+      <tr><td>Happy Buds</td><td>Tacoma</td><td>231002</td></tr>
+      <tr><td>Third Store</td><td>Yakima</td><td>231003</td></tr>
+    </table>"""
+    recs = _extract_html(html)
+    assert [r.address for r in recs] == ["Spokane", "Tacoma", "Yakima"]
+
+
+def test_html_two_street_like_columns_are_ambiguous_so_nothing_swaps():
+    # Mailing vs physical address: we cannot tell which the header meant. Leave it alone.
+    html = """
+    <table>
+      <tr><th>Dispensary</th><th>Mailing</th><th>Physical</th><th>Address</th></tr>
+      <tr><td>Green Leaf</td><td>1 Main St</td><td>9 Oak Ave</td><td>Harford</td></tr>
+      <tr><td>Happy Buds</td><td>2 Main St</td><td>8 Oak Ave</td><td>Howard</td></tr>
+      <tr><td>Third Store</td><td>3 Main St</td><td>7 Oak Ave</td><td>Carroll</td></tr>
+    </table>"""
+    recs = _extract_html(html)
+    assert [r.address for r in recs] == ["Harford", "Howard", "Carroll"]
+
+
+def test_html_swap_needs_enough_rows_to_be_evidence():
+    # Two rows are not evidence of a systematic header defect.
+    html = """
+    <table>
+      <tr><th>Dispensary</th><th>County</th><th>Address</th></tr>
+      <tr><td>Green Leaf</td><td>1 Main St</td><td>Harford</td></tr>
+      <tr><td>Happy Buds</td><td>2 Oak Ave</td><td>Howard</td></tr>
+    </table>"""
+    recs = _extract_html(html)
+    assert [r.address for r in recs] == ["Harford", "Howard"]
+
+
+def test_extract_page_falls_through_to_line_blocks_only_as_a_last_resort():
+    """The line-block rung must never change a page that already yields rows.
+
+    It is ordered strictly last (`table or address_block or line_block`), so the only pages it
+    can reach are the ones we currently get NOTHING from. Alabama's roster is one; a table page
+    that also happens to contain a line-block address must still be read as a table.
+    """
+    from rung.sources.extract import _extract_page
+
+    line_block = "<p>Callie's Apothecary<br/>5232 Atlanta Highway<br/>Montgomery, AL 36109</p>"
+    assert [r.name for r in _extract_page(line_block)] == ["Callie's Apothecary"]
+
+    with_table = """
+    <table>
+      <tr><th>Dispensary</th><th>Address</th></tr>
+      <tr><td>Green Leaf</td><td>1 Main St</td></tr>
+      <tr><td>Happy Buds</td><td>2 Oak Ave</td></tr>
+    </table>""" + line_block
+    assert [r.name for r in _extract_page(with_table)] == ["Green Leaf", "Happy Buds"]
+
+
+# ── atlist ───────────────────────────────────────────────────────────────────
+# NJ's CRC "Find a Dispensary" page has one <table> and it lists DELIVERY SERVICES; the sibling
+# `/dispensaries/roll-up/` page is a product-RECALL table. The roster is the embedded Atlist map.
+
+def test_atlist_marker_becomes_a_roster_record():
+    from rung.sources.extract import _atlist_record
+
+    got = _atlist_record({
+        "name": "Fresh Elizabeth",
+        "formattedAddress": "460 Maple Ave, Elizabeth, NJ 07202, USA",
+        "lat": 40.6530201, "long": -74.213966,
+        "buttonLink": "https://freshcannabis.co/",
+    })
+    assert got is not None
+    assert (got.name, got.address, got.city, got.state, got.zip_code) == (
+        "Fresh Elizabeth", "460 Maple Ave", "Elizabeth", "NJ", "07202")
+    assert (got.latitude, got.longitude) == (40.6530201, -74.213966)
+    assert got.source == "atlist"
+
+
+def test_atlist_keeps_coordinates_when_the_address_will_not_parse():
+    # "NJ-66, Neptune Township, NJ, USA" is a road, not a street number. The licensee is real and
+    # its coordinates pair via compare's proximity tier — dropping it would lose a real store.
+    from rung.sources.extract import _atlist_record
+
+    got = _atlist_record({"name": "Zen Leaf", "formattedAddress": "NJ-66, Neptune Township, NJ, USA",
+                          "lat": 40.2281881, "long": -74.03})
+    assert got is not None
+    assert got.address is None and got.zip_code is None
+    assert (got.latitude, got.longitude) == (40.2281881, -74.03)
+
+
+def test_atlist_skips_a_nameless_marker_and_tolerates_missing_coords():
+    from rung.sources.extract import _atlist_record
+
+    assert _atlist_record({"formattedAddress": "1 Main St, Erie, PA 16501, USA"}) is None
+    got = _atlist_record({"name": "No Pin", "formattedAddress": "1 Main St, Erie, PA 16501, USA",
+                          "lat": None, "long": "not-a-number"})
+    assert got is not None and got.latitude is None and got.longitude is None
+    assert got.zip_code == "16501"
+
+
+def test_atlist_map_id_is_taken_from_the_share_url():
+    from rung.sources.extract import _ATLIST_MAP_ID_RE
+
+    url = "https://my.atlist.com/map/8bed33fa-9b8c-4c51-bb33-74cd0d98628a?share=true"
+    assert _ATLIST_MAP_ID_RE.search(url).group(1) == "8bed33fa-9b8c-4c51-bb33-74cd0d98628a"
+    assert _ATLIST_MAP_ID_RE.search("https://example.com/map/not-a-uuid") is None
+
+
+def test_atlist_is_a_handled_list_type():
+    from rung.sources.extract import HANDLED_LIST_TYPES
+
+    assert "atlist" in HANDLED_LIST_TYPES
 
 
 def test_html_full_identity_dedup_keeps_multilocation_operator():
@@ -648,3 +799,69 @@ def test_unmerge_name_overflow_leaves_a_row_it_cannot_prove() -> None:
     # Overflow chars not all consumable from the address head -> decline.
     assert _unmerge_name_overflow("Shop - Elkins", "8003 Old York Road", "Elkins Park") == (
         "Shop - Elkins", "8003 Old York Road")
+
+
+def test_arcgis_record_reads_dcs_misspelled_longitude_field() -> None:
+    # DC's Open Data layer (Licensed Medical Cannabis Retailers) ships the longitude column as
+    # `LONGITDUE`. Without matching the misspelling the coordinate pair is dropped, the roster
+    # loses its geo key, and compare.py cannot match it against company stores — DC's roster also
+    # carries no zip, so the address key can't rescue it either. Real data, real typo.
+    feat = {"attributes": {
+        "TRADE_NAME": "Takoma Wellness Center",
+        "ADDRESS": "6925 Blair Rd NW",
+        "STATUS": "Active",
+        "LATITUDE": 38.9757,
+        "LONGITDUE": -77.0203,
+    }}
+    rec = _arcgis_record(feat)
+    assert rec is not None
+    assert rec.name == "Takoma Wellness Center"
+    assert rec.latitude == 38.9757
+    assert rec.longitude == -77.0203
+
+
+def test_arcgis_record_prefers_correctly_spelled_longitude() -> None:
+    # The correct spelling must win when both are present (`_arcgis_attr` tries names in order).
+    feat = {"attributes": {"NAME": "X", "LATITUDE": 1.0, "LONGITUDE": 2.0, "LONGITDUE": 99.0}}
+    rec = _arcgis_record(feat)
+    assert rec is not None and rec.longitude == 2.0
+
+
+# --- va_cca ------------------------------------------------------------------------------------
+
+def test_va_cca_record_parses_a_squarespace_map_block() -> None:
+    # Real shape from cca.virginia.gov/medicalcannabis/dispensaries: a flat `location` object whose
+    # addressLine2 is "City, VA, ZIP" and whose coordinates are markerLat/markerLng.
+    rec = _va_cca_record({
+        "mapZoom": 13, "mapLat": 38.79, "mapLng": -77.06,
+        "markerLat": 38.7919763, "markerLng": -77.0602591,
+        "addressTitle": "Beyond Hello Alexandria",
+        "addressLine1": "5902 Richmond Highway",
+        "addressLine2": "Alexandria, VA, 22303",
+        "addressCountry": "United States",
+    })
+    assert rec is not None
+    assert (rec.name, rec.address) == ("Beyond Hello Alexandria", "5902 Richmond Highway")
+    assert (rec.city, rec.state, rec.zip_code) == ("Alexandria", "VA", "22303")
+    assert (rec.latitude, rec.longitude) == (38.7919763, -77.0602591)
+    assert rec.source == "va_cca"
+
+
+def test_va_cca_record_skips_a_non_dispensary_map_block() -> None:
+    # The page carries a map block with no addressTitle/addressLine1; it is not a dispensary.
+    assert _va_cca_record({"mapZoom": 13, "mapLat": 38.0, "mapLng": -77.0}) is None
+
+
+def test_va_cca_record_drops_a_placeholder_coordinate() -> None:
+    rec = _va_cca_record({
+        "addressTitle": "X", "addressLine1": "1 Main St", "addressLine2": "Richmond, VA, 23220",
+        "markerLat": 0, "markerLng": 0,
+    })
+    assert rec is not None and rec.latitude is None and rec.longitude is None
+    assert rec.zip_code == "23220"          # the address still parses
+
+
+def test_va_cca_record_tolerates_a_missing_address_line2() -> None:
+    rec = _va_cca_record({"addressTitle": "Y", "addressLine1": "2 Oak Ave"})
+    assert rec is not None
+    assert rec.city is None and rec.zip_code is None and rec.address == "2 Oak Ave"

@@ -8,8 +8,12 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
     # so the engine stays cannabis-free); keeps LiteralString-typed constants like NATURAL_FLOWER_WHERE
     # inferring correctly at db.* call sites. Retire when callers re-point to rung.reference_db (B5).
     from rung.reference_db import (  # noqa: F401
+        CA_PROVINCES_SUBQUERY,
         NATURAL_FLOWER_WHERE,
-        US_STATES_SUBQUERY,
+        NATURAL_FLOWER_WHERE_NORMALIZED,
+        US_EXCL_TERRITORIES_SUBQUERY,
+        US_JURISDICTIONS_SUBQUERY,
+        US_TERRITORIES,
         append_store_observation,
         clear_store_canonical_for_state,
         count_company_stores,

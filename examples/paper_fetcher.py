@@ -18,6 +18,10 @@ open-access PDFs, one at a time.
 
     # or a batch — one DOI/title per line:
     uv run python examples/paper_fetcher.py --from dois.txt
+
+**Set `UNPAYWALL_EMAIL`.** Unpaywall requires a real contact address and returns HTTP 422 for a
+placeholder, which disables the single most productive rung (it locates an OA copy of ANY DOI on any
+repository, preprint server or publisher). Without it the ladder reports fetchable papers as paywalled.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -141,16 +146,50 @@ async def _fetch_europepmc(_conn: db.DBConn, doi: str, _hint: access.MethodHint)
 
 def _unpaywall_pdf(doi: str) -> str | None:
     """The best open-access PDF URL for a DOI from Unpaywall (any repository/preprint/journal), or
-    None if the DOI has no OA copy anywhere. Unpaywall requires a contact email (UNPAYWALL_EMAIL)."""
+    None if the DOI has no OA copy anywhere. Unpaywall requires a contact email (UNPAYWALL_EMAIL).
+
+    Reads `best_oa_location` FIRST but falls through every entry of `oa_locations`. `best_oa_location`
+    frequently carries `url_for_pdf: null` — typically a repository landing page — while another
+    location (often the publisher, for "bronze" OA) has the direct PDF. Taking only the best location
+    silently lost three fetchable papers in one round (Doggett 2024 JAMA Netw Open, Bonn-Miller 2017
+    JAMA, Dryburgh 2018 BJCP), each of which reported `is_oa=true`.
+    """
     import json
-    email = os.environ.get("UNPAYWALL_EMAIL", "unpaywall@example.com")
+    email = os.environ.get("UNPAYWALL_EMAIL")
+    if not email:
+        # Unpaywall REJECTS a placeholder address with HTTP 422. The old default
+        # ("unpaywall@example.com") therefore made this rung fail on every DOI, and because the failure
+        # was swallowed it was indistinguishable from "this DOI has no OA copy anywhere" — the rung was
+        # silently dead, and three fetchable papers were reported as paywalled in one round.
+        if not _unpaywall_pdf._warned:  # type: ignore[attr-defined]
+            print("  note: UNPAYWALL_EMAIL is unset — the Unpaywall rung is DISABLED "
+                  "(the API 422s on a placeholder address). Set it to enable OA lookup.")
+            _unpaywall_pdf._warned = True  # type: ignore[attr-defined]
+        return None
     url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(email)}"
     try:
         with urllib.request.urlopen(url, timeout=25) as resp:  # Unpaywall: public read-only API
-            loc = json.load(resp).get("best_oa_location") or {}
-    except Exception:
+            data = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        # 404 = DOI unknown to Unpaywall (a real "no OA"); anything else is OUR fault, so say so
+        # rather than let a broken request masquerade as a closed-access paper.
+        if exc.code != 404:
+            print(f"  warn: Unpaywall HTTP {exc.code} for {doi} — rung inconclusive, not 'closed'")
         return None
-    return loc.get("url_for_pdf")
+    except Exception as exc:  # network/JSON — likewise inconclusive
+        print(f"  warn: Unpaywall lookup failed for {doi}: {type(exc).__name__} — rung inconclusive")
+        return None
+    # `best_oa_location` often carries url_for_pdf=null (a repository landing page) while another
+    # location — commonly the publisher, for "bronze" OA — has the direct PDF. Walk them all.
+    best = data.get("best_oa_location") or {}
+    for loc in (best, *(data.get("oa_locations") or [])):
+        pdf = (loc or {}).get("url_for_pdf")
+        if pdf:
+            return pdf
+    return None
+
+
+_unpaywall_pdf._warned = False  # type: ignore[attr-defined]
 
 
 async def _fetch_unpaywall(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:

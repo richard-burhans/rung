@@ -95,3 +95,56 @@ def test_extract_address_blocks_skips_overlong_name() -> None:
     long_name = "X" * 90
     html = f"<p>{long_name} 9 Oak Rd, Erie, PA 16501</p>"
     assert addr.extract_address_blocks(html) == []
+
+
+# ── line blocks ──────────────────────────────────────────────────────────────
+# Alabama's AMCC roster is a <p> of <br/>-separated lines. `BLOCK_ADDRESS_RE` needs a comma
+# between street and city ("street, city, ST zip") and so returns nothing on it.
+
+_AMCC = """
+<div class="textwidget"><p><strong><span>OPENING JUNE 4, 2026</span><br/>
+Callie's Apothecary</strong><br/>
+<strong>5232 Atlanta Highway</strong><br/>
+<strong>Montgomery, AL 36109</strong><br/>
+<strong>Hours: Monday - Friday | 10 AM - 6 PM</strong><br/>
+<strong>Website: <a href="https://shoppecalliesal.com/">https://shoppecalliesal.com/</a></strong></p></div>
+"""
+
+
+def test_line_blocks_reads_the_alabama_roster_that_block_addresses_cannot() -> None:
+    assert addr.extract_address_blocks(_AMCC) == []      # the shape that motivated this
+    records = addr.extract_line_blocks(_AMCC)
+    assert len(records) == 1
+    got = records[0]
+    # The name is the line ABOVE the street — not the ALL-CAPS banner directly above it.
+    assert got.name == "Callie's Apothecary"
+    assert (got.address, got.city, got.state, got.zip_code) == (
+        "5232 Atlanta Highway", "Montgomery", "AL", "36109")
+
+
+def test_name_before_rejects_everything_that_is_not_a_name() -> None:
+    lines = ["OPENING JUNE 4, 2026", "Callie's Apothecary", "5232 Atlanta Highway",
+             "Montgomery, AL 36109"]
+    assert addr.name_before(lines, 2) == "Callie's Apothecary"
+    assert addr.name_before(lines, 1) is None            # ALL-CAPS banner
+    assert addr.name_before(lines, 0) is None            # nothing above the first line
+    for junk in ("Shop Now", "Directions", "info@x.com", "https://x.com", "(555) 123-4567",
+                 "9 Oak Ave", "Erie, PA 16501"):
+        assert addr.name_before([junk, "1 Main St"], 1) is None, junk
+
+
+def test_line_blocks_handles_single_line_and_canadian_postal_codes() -> None:
+    html = "<p>MariMart<br/>865 US-22, Blairsville PA 15717</p>"
+    (got,) = addr.extract_line_blocks(html)
+    assert (got.name, got.city, got.state, got.zip_code) == ("MariMart", "Blairsville", "PA", "15717")
+
+    canada = "<p>Canna Cabana<br/>123 Queen St W<br/>Toronto, ON M5H 2M9</p>"
+    (got,) = addr.extract_line_blocks(canada)
+    assert (got.state, got.zip_code) == ("ON", "M5H 2M9")
+
+
+def test_line_blocks_skips_an_address_with_no_name_and_dedupes_by_street() -> None:
+    # A roster row we cannot attribute to an operator is useless for compare-stores.
+    assert addr.extract_line_blocks("<p>1 Main St<br/>Erie, PA 16501</p>") == []
+    dupe = "<p>Acme<br/>1 Main St<br/>Erie, PA 16501</p><p>Acme<br/>1 Main St<br/>Erie, PA 16501</p>"
+    assert len(addr.extract_line_blocks(dupe)) == 1

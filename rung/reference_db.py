@@ -1043,11 +1043,41 @@ NATURAL_FLOWER_WHERE = (
     "AND coalesce(name, '') !~* '(infus|moonrock|moon rock|kief|dusted|coated|covered)'"
 )
 
+# The same predicate against the `products_normalized` VIEW, which renames the two columns
+# (`category_std AS category`, `product_type_std AS product_type`). Same semantics, same name-tells —
+# `test_reference_db.py` asserts the two stay in sync so the regex can't drift apart.
+NATURAL_FLOWER_WHERE_NORMALIZED = (
+    "category = 'Flower' AND product_type IS DISTINCT FROM 'Infused' "
+    "AND coalesce(name, '') !~* '(infus|moonrock|moon rock|kief|dusted|coated|covered)'"
+)
+
+# US territories we hold menu data for. Federal territories price in USD and license their own
+# programs, so they belong in a US price analysis — but they are NOT states, and an analysis that
+# reports a per-state or state-vs-territory contrast must be able to hold them out.
+US_TERRITORIES = ("PR",)
+
 # A US-only guard for price analyses. Canadian stores price in CAD, so pooling them into a $/g figure
 # (or a cross-market $/g ranking) is a category error — CAD read as USD looks spuriously cheap. Restrict
-# to states whose program is US-based; Canada is analyzed on its own terms in the canada_* scripts.
-# Usage: `... WHERE <price predicate> AND state IN {reference_db.US_STATES_SUBQUERY}`.
-US_STATES_SUBQUERY = "(SELECT abbr FROM state_programs WHERE country = 'US')"
+# to jurisdictions whose program is US-based; Canada is analyzed on its own terms in the canada_* scripts.
+#
+# "JURISDICTIONS", not "STATES", and the distinction is load-bearing: this includes **DC and Puerto
+# Rico**. It was called `US_JURISDICTIONS_SUBQUERY`, which read as though it were the 50 states and silently
+# disagreed with `_terpene_source.JURISDICTIONS["USA"]` — the same word naming two different
+# populations in two live scripts. Use `US_EXCL_TERRITORIES_SUBQUERY` when PR must be held out.
+# Usage: `... WHERE <price predicate> AND state IN {reference_db.US_JURISDICTIONS_SUBQUERY}`.
+US_JURISDICTIONS_SUBQUERY = "(SELECT abbr FROM state_programs WHERE country = 'US')"
+
+# The same, minus the territories above — the population for a "US states + DC" claim, and the one a
+# matrix must use when it reports Puerto Rico as its own column (otherwise PR is double-counted).
+# `test_reference_db.py` asserts this is exactly `US_JURISDICTIONS_SUBQUERY` less `US_TERRITORIES`,
+# so adding a territory to the tuple without updating the SQL fails the build rather than the analysis.
+US_EXCL_TERRITORIES_SUBQUERY = (
+    "(SELECT abbr FROM state_programs WHERE country = 'US' AND abbr <> 'PR')"
+)
+
+# The Canadian counterpart, for analyses that scope to Canada or contrast the two markets.
+# The trap: `state = 'CA'` is CALIFORNIA. Canada is `country = 'CA'`, never a state literal.
+CA_PROVINCES_SUBQUERY = "(SELECT abbr FROM state_programs WHERE country = 'CA')"
 
 
 

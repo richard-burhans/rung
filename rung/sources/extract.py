@@ -18,7 +18,9 @@ the AI extractor (ai_fallback.extract_with_ai), which is only attempted on reque
 import asyncio
 import csv
 import datetime
+import html
 import io
+import json
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -37,6 +39,7 @@ from rung.addresses import (
     ZIP_RE as _ZIP_RE,
     clean as _clean,
     extract_address_blocks as _extract_address_blocks,
+    extract_line_blocks as _extract_line_blocks,
 )
 from rung.http import make_session
 from rung.models import DispensaryRecord, LocationObservation
@@ -185,6 +188,54 @@ def _location_fraction(records: list[DispensaryRecord]) -> float:
     return located / len(records)
 
 
+def _street_fraction(cells: list[str]) -> float:
+    """Share of the non-empty cells that open with a street number ("226 S Philadelphia Ave")."""
+    values = [c.strip() for c in cells if c.strip()]
+    if not values:
+        return 0.0
+    return sum(1 for v in values if _STREET_RE.match(v)) / len(values)
+
+
+# A header-mapped `address` column holding no street at all is wrong; a lone unmapped column
+# that holds streets is where the address really lives. Demand both before overriding a header.
+_SWAP_ADDRESS_MAX = 0.10
+_SWAP_CANDIDATE_MIN = 0.60
+
+
+def _repair_swapped_address(col_map: dict[int, str], body: list[list[str]]) -> None:
+    """Re-map ``address`` onto the column that actually holds streets. Mutates ``col_map``.
+
+    A roster's header row can be misordered relative to its data. Maryland's dispensary locator
+    is headed ``Dispensary | County | Address`` while every data row is ``name | street | county``,
+    so trusting the header files the COUNTY as the address and drops the street entirely. The rows
+    load and look fine; they simply can never match a company store. Same class of defect as the
+    mis-mapped date column `_addr_or_none` nulls, and just as silent.
+
+    Trust the header unless the data contradicts it unambiguously: the mapped `address` column must
+    hold essentially no street, and EXACTLY ONE otherwise-unmapped column must mostly hold streets.
+    Two candidates, or none, means we cannot tell — so leave the header's word alone. `STREET_RE`
+    requires digits *followed by a space*, so a bare licence number ("231001") is not a candidate.
+    """
+    address_idx = next((i for i, f in col_map.items() if f == "address"), None)
+    if address_idx is None or len(body) < 3:
+        return
+
+    def column(idx: int) -> list[str]:
+        return [row[idx] for row in body if idx < len(row)]
+
+    if _street_fraction(column(address_idx)) > _SWAP_ADDRESS_MAX:
+        return
+    width = max((len(row) for row in body), default=0)
+    candidates = [
+        idx for idx in range(width)
+        if idx not in col_map and _street_fraction(column(idx)) >= _SWAP_CANDIDATE_MIN
+    ]
+    if len(candidates) != 1:
+        return
+    del col_map[address_idx]
+    col_map[candidates[0]] = "address"
+
+
 def _extract_table(table) -> tuple[list[DispensaryRecord], bool]:
     """Extract records from one table.
 
@@ -205,11 +256,15 @@ def _extract_table(table) -> tuple[list[DispensaryRecord], bool]:
 
     header_named = "name" in col_map.values()
     body = rows[1:]
+    body_cells = [_row_cells(r) for r in body]
     if not header_named:
-        name_idx = _infer_name_column([_row_cells(r) for r in body])
+        name_idx = _infer_name_column(body_cells)
         if name_idx is None:
             return [], False
         col_map[name_idx] = "name"
+
+    # The header can be misordered relative to the data (MD files its county as the address).
+    _repair_swapped_address(col_map, body_cells)
 
     # If no address column was identified, the name cell may carry the address.
     split_name = "address" not in col_map.values()
@@ -639,8 +694,12 @@ def _arcgis_record(feat: dict) -> DispensaryRecord | None:
         return None
     # Roster layers often carry lat/lng as plain attributes (Ontario's AGCO does, 100%
     # filled); a coordinate outside the valid range (or a 0,0 placeholder) is dropped.
+    # Publishers misspell the field: DC's Open Data layer ships `LONGITDUE`. Match the misspelling
+    # too — otherwise the roster loses its geo key, and `compare.py` can only fall back to the
+    # address key, which a zip-less roster (DC's) cannot satisfy either. Correct spelling wins:
+    # `_arcgis_attr` tries the names in order.
     latitude = _arcgis_float(attrs, "latitude")
-    longitude = _arcgis_float(attrs, "longitude")
+    longitude = _arcgis_float(attrs, "longitude", "longitd")
     if (
         latitude is None or longitude is None
         or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180)
@@ -901,6 +960,148 @@ def _bc_lcrb_record(obj: dict) -> DispensaryRecord | None:
     )
 
 
+# Virginia's CCA dispensary page is a Squarespace site: no `<table>`, and the addresses are not in
+# the visible DOM as text we can block-parse. Each dispensary is a map block whose JSON config is
+# stashed in an HTML *attribute* (so it arrives entity-escaped, `&quot;addressLine1&quot;`). Unescape
+# the document, then lift each `"location": {...}` object. The objects are flat (no nested braces),
+# which is what makes the non-greedy `[^{}]*` safe here rather than needing a real parser.
+_VA_LOCATION_RE = re.compile(r'"location":(\{[^{}]*\})')
+# addressLine2 is always "City, VA, ZIP" on this page (verified: 23/23, 2026-07-09).
+_VA_LINE2_RE = re.compile(r"^\s*(?P<city>[^,]+),\s*(?P<state>[A-Z]{2}),?\s*(?P<zip>\d{5})")
+
+
+def _va_cca_record(loc: dict) -> DispensaryRecord | None:
+    """One CCA map-block `location` object → a DispensaryRecord, or None if it isn't a dispensary."""
+    name = _clean(str(loc.get("addressTitle") or ""))
+    street = _clean(str(loc.get("addressLine1") or ""))
+    if not name or not street:
+        return None                      # a non-dispensary map block (the page carries one)
+    city = state = zip_code = None
+    if match := _VA_LINE2_RE.match(str(loc.get("addressLine2") or "")):
+        city, state, zip_code = (match["city"].strip(), match["state"], match["zip"])
+    latitude, longitude = loc.get("markerLat"), loc.get("markerLng")
+    if not (isinstance(latitude, (int, float)) and isinstance(longitude, (int, float))
+            and -90 <= latitude <= 90 and -180 <= longitude <= 180
+            and not (latitude == 0 and longitude == 0)):
+        latitude = longitude = None
+    return DispensaryRecord(
+        source="va_cca", name=name, address=street, city=city, state=state,
+        zip_code=zip_code, phone=None, website=None,
+        latitude=latitude, longitude=longitude,
+    )
+
+
+# ── Atlist (my.atlist.com embedded maps) ─────────────────────────────────────
+# New Jersey's CRC "Find a Dispensary" page renders an Atlist map in an <iframe>. The page's own
+# HTML holds ONE table, and it lists DELIVERY SERVICES — parsing it yielded 3 rows named
+# "Passing Puff Delivery", "TerpTaxi" and "Weedies" while we held 186 NJ company stores. (The
+# neighbouring `/dispensaries/roll-up/` page is a product-RECALL table, not a roster. Both are
+# traps for a table-hunting parser.)
+#
+# The real roster is the map's markers. Atlist's SPA reads `/v1/map/{id}/markers` and, for a
+# publicly-shared map, sends the literal bearer token `public` — its bundle falls back to the
+# string "public" when no user token exists. That is the anonymous read path the embed itself uses.
+_ATLIST_HOST = "https://api.atlist.com"
+_ATLIST_MAP_ID_RE = re.compile(r"/map/([0-9a-fA-F-]{36})")
+# "460 Maple Ave, Elizabeth, NJ 07202, USA" — Google-formatted, so the shape is stable.
+_ATLIST_ADDRESS_RE = re.compile(
+    r"^(?P<street>.+?),\s*(?P<city>[^,]+),\s*(?P<state>[A-Z]{2})\s+(?P<zip>\d{5})(?:-\d{4})?"
+    r"(?:,\s*[A-Za-z .]+)?$"
+)
+_ATLIST_MAX_PAGES = 40   # 250 markers/page; a runaway-cursor backstop, not an expected limit
+
+
+def _atlist_record(marker: dict) -> DispensaryRecord | None:
+    """One Atlist marker → a roster record. Coordinates are kept even when the address won't parse.
+
+    A marker whose `formattedAddress` is a road rather than a street number ("NJ-66, Neptune
+    Township, NJ, USA") still carries lat/long, and `compare`'s proximity tier pairs on those alone.
+    Dropping it because the text is unparseable would lose a real licensee.
+    """
+    name = _clean(marker.get("name"))
+    if not name:
+        return None
+    latitude, longitude = _coord(marker.get("lat")), _coord(marker.get("long"))
+    parsed = _ATLIST_ADDRESS_RE.match((marker.get("formattedAddress") or "").strip())
+    if parsed is None:
+        return DispensaryRecord(source="atlist", name=name, website=_clean(marker.get("buttonLink")),
+                                latitude=latitude, longitude=longitude)
+    return DispensaryRecord(
+        source="atlist", name=name, address=_clean(parsed["street"]), city=_clean(parsed["city"]),
+        state=parsed["state"], zip_code=parsed["zip"], website=_clean(marker.get("buttonLink")),
+        latitude=latitude, longitude=longitude,
+    )
+
+
+def _coord(value: object) -> float | None:
+    if isinstance(value, int | float):
+        return float(value)
+    return None
+
+
+async def _extract_atlist(url: str, session) -> list[DispensaryRecord]:
+    """Every marker on a publicly-shared Atlist map, paging through its opaque `nextToken`."""
+    found = _ATLIST_MAP_ID_RE.search(url)
+    if not found:
+        return []
+    endpoint = f"{_ATLIST_HOST}/v1/map/{found.group(1)}/markers"
+    headers = {"Authorization": "Bearer public"}
+    records: list[DispensaryRecord] = []
+    token: str | None = None
+    for _page in range(_ATLIST_MAX_PAGES):
+        params = {"nextToken": token} if token else None
+        try:
+            response = await session.get(endpoint, headers=headers, params=params, timeout=60)
+        except Exception:
+            return records
+        if response.status_code >= 400:
+            return records
+        try:
+            payload = response.json()
+        except ValueError:
+            return records
+        if not isinstance(payload, dict):
+            return records
+        for marker in payload.get("markers") or []:
+            if isinstance(marker, dict):
+                record = _atlist_record(marker)
+                if record is not None:
+                    records.append(record)
+        token = payload.get("nextToken")
+        if not token:
+            break
+    return records
+
+
+async def _extract_va_cca(url: str, session) -> list[DispensaryRecord]:
+    """Virginia CCA's medical-cannabis dispensary locations (Squarespace map blocks)."""
+    try:
+        response = await session.get(url, timeout=60, allow_redirects=True)
+    except Exception:
+        return []
+    if response.status_code >= 400:
+        return []
+    document = html.unescape(response.text or "")
+    records: list[DispensaryRecord] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _VA_LOCATION_RE.finditer(document):
+        try:
+            location = json.loads(match.group(1))
+        except ValueError:
+            continue
+        if not isinstance(location, dict):
+            continue
+        record = _va_cca_record(location)
+        if record is None:
+            continue
+        identity = ((record.name or "").lower(), (record.address or "").lower())
+        if identity in seen:                 # the same block can render twice (desktop + mobile)
+            continue
+        seen.add(identity)
+        records.append(record)
+    return records
+
+
 async def _extract_bc_lcrb(url: str, session) -> list[DispensaryRecord]:
     """Fetch BC's roster from the LCRB map API (a bare JSON list, no paging/auth)."""
     try:
@@ -1047,8 +1248,8 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 # producer) must stay a subset of this — guarded by test_list_type_vocabulary_consistent
 # so the two never drift. Any other value falls through to the html parser.
 ListType = Literal[
-    "pdf", "csv", "kml", "arcgis", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
-    "on_agco", "ab_aglc", "bc_lcrb", "sk_slga", "lookup", "html",
+    "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
+    "on_agco", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "lookup", "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
 
@@ -1068,6 +1269,10 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
             return await _extract_on_agco(list_url, session)
         if list_type == "bc_lcrb":
             return await _extract_bc_lcrb(list_url, session)
+        if list_type == "va_cca":
+            return await _extract_va_cca(list_url, session)
+        if list_type == "atlist":
+            return await _extract_atlist(list_url, session)
         if list_type == "sk_slga":
             return await _extract_sk_slga(list_url, session)
         if list_type in ("lookup",):
@@ -1099,7 +1304,7 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
                 return _extract_kml(resp.content)
             # html / unknown, or a mislabeled pdf that was really HTML: try the
             # table extractor, then the non-table card/list fallback.
-            return _extract_html(resp.text) or _extract_address_blocks(resp.text)
+            return _extract_page(resp.text)
         except Exception:
             return []
 
@@ -1118,8 +1323,15 @@ def _content_iframes(html: str) -> list[str]:
 
 
 def _extract_page(html: str) -> list[DispensaryRecord]:
-    """Tables first, then the non-table address-block fallback."""
-    return _extract_html(html) or _extract_address_blocks(html)
+    """Tables, then the address-block fallback, then line blocks.
+
+    Strictly ordered, each a LAST RESORT for the one before, so a page that already yields
+    rows cannot change behaviour: the line-block rung only ever runs where we currently get
+    **nothing**. It reads a street line followed by a "City, ST zip" line — the shape
+    `BLOCK_ADDRESS_RE` cannot span, because that needs a comma between street and city.
+    Alabama's AMCC roster is prose of exactly this form.
+    """
+    return _extract_html(html) or _extract_address_blocks(html) or _extract_line_blocks(html)
 
 
 async def extract_rendered(url: str, tab) -> list[DispensaryRecord]:

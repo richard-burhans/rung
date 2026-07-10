@@ -21,6 +21,14 @@
   program_term: medical cannabis
   agency: Alabama Medical Cannabis Commission
   known_url: https://amcc.alabama.gov/
+  # AMCC publishes no roster table. Its patients page carries a prose "Dispensary Opening
+  # Announcements" block — a <p> of <br/>-separated lines: name, street, "City, ST zip". The table
+  # parser and the block-address parser both return 0 there (the latter needs a comma between street
+  # and city), so the line-block rung reads it. Verified live 2026-07-10: ONE dispensary, Callie's
+  # Apothecary (Montgomery), opened 2026-06-04 — Alabama's first. The Commission says more will open,
+  # and this page is where they will be announced, so the roster grows without further code.
+  list_url: https://amcc.alabama.gov/patients/
+  list_type: html
 
 - abbr: AR
   name: Arkansas
@@ -76,10 +84,18 @@
 
 - abbr: DC
   name: District of Columbia
-  programs: both
-  program_term: cannabis
+  # DC licenses MEDICAL retail. Adult-use possession/gifting is legal under Initiative 71, but there
+  # is no licensed adult-use retail market, so `both` overstated it and made program_term vague.
+  programs: medical
+  program_term: medical cannabis
   agency: Alcoholic Beverage and Cannabis Administration
   known_url: https://abca.dc.gov/
+  # ABCA publishes its licensed medical-cannabis retailers as an ArcGIS layer on Open Data DC
+  # (74 active retailers, verified live 2026-07-09; TRADE_NAME + ADDRESS + STATUS + lat/lon).
+  # THE TRAP: the host is `dcgis`, not `arcgis`, so `state_lists._classify()` scores this URL as
+  # "html" and the generic table parser returns 0 rows. `list_type` MUST be set explicitly.
+  list_url: https://maps2.dcgis.dc.gov/dcgis/rest/services/DCGIS_DATA/Health_WebMercator/MapServer/31
+  list_type: arcgis
 
 - abbr: DE
   name: Delaware
@@ -257,6 +273,14 @@
   program_term: cannabis
   agency: Cannabis Regulatory Commission
   known_url: https://www.nj.gov/cannabis/
+  # THE TRAP: the CRC's "Find a Dispensary" page has exactly one <table>, and it lists DELIVERY
+  # SERVICES - the html parser returned 3 rows ("Passing Puff Delivery", "TerpTaxi", "Weedies")
+  # while we held 186 NJ company stores. Its sibling `/dispensaries/roll-up/` is a product-RECALL
+  # table. Both are traps for a table-hunting parser. The real roster is the Atlist map the page
+  # embeds in an <iframe>: 317 licensees, 316 with a full street+ZIP, all 317 with coordinates
+  # (verified live 2026-07-10).
+  list_url: https://my.atlist.com/map/8bed33fa-9b8c-4c51-bb33-74cd0d98628a?share=true
+  list_type: atlist
 
 - abbr: NM
   name: New Mexico
@@ -355,6 +379,13 @@
   program_term: compassionate use
   agency: Texas Department of Public Safety
   known_url: https://www.dps.texas.gov/section/compassionate-use-program
+  # DPS lists exactly three Active Licensed Dispensaries - Fluent (#0004), Texas Original (#0005),
+  # Goodblend (#0006) - with a licence number, an e-mail and a website, and NO street address, ever
+  # (verified live 2026-07-10). The three-name roster is therefore COMPLETE and CORRECT, not a
+  # scraping failure. Their pickup locations are not published. We hold no TX company stores, so
+  # nothing is blocked; the guard reports this at WARN, not ERROR.
+  list_url: https://www.dps.texas.gov/section/compassionate-use-program/licensed-dispensaries
+  list_type: html
 
 - abbr: UT
   name: Utah
@@ -365,10 +396,19 @@
 
 - abbr: VA
   name: Virginia
-  programs: both
-  program_term: cannabis
+  # VA licenses MEDICAL retail only: five pharmaceutical processors (Ayr, Jushi/Beyond Hello,
+  # GTI/Rise, Verano/Zen Leaf) plus their dispensing facilities. Adult-use possession is legal but
+  # retail is not licensed yet — dual-use verification deadline 2026-12-01. Revisit `programs` then.
+  programs: medical
+  program_term: medical cannabis
   agency: Cannabis Control Authority
-  known_url: https://www.cca.virginia.gov/
+  known_url: https://cca.virginia.gov/medicalcannabis/dispensaries
+  # The CCA page is Squarespace: no `<table>`, and each dispensary is a map block whose JSON config
+  # lives in an HTML attribute, so it arrives entity-escaped (`&quot;addressLine1&quot;`). The generic
+  # html parser therefore returns 0. `va_cca` unescapes the document and lifts each `"location"`
+  # object (name, street, "City, VA, ZIP", marker lat/lng). 23 dispensaries, verified 2026-07-09.
+  list_url: https://cca.virginia.gov/medicalcannabis/dispensaries
+  list_type: va_cca
 
 - abbr: VT
   name: Vermont

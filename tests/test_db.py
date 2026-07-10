@@ -370,3 +370,58 @@ def test_create_engine_tables_builds_only_the_generic_infra() -> None:
                   "product_observations", "state_programs"):
         assert not db.one(conn, "SELECT to_regclass(%s) IS NOT NULL", (table,))[0], \
             f"{table} must NOT be created by create_engine_tables"
+
+
+def test_natural_flower_predicates_stay_in_sync() -> None:
+    # Two spellings of one rule: NATURAL_FLOWER_WHERE targets `store_products`, the _NORMALIZED variant
+    # targets the `products_normalized` VIEW, which renames category_std/product_type_std. If someone
+    # edits the adulteration name-tells in one, the other must follow — a drift here would silently let
+    # infused flower back into the price/chemovar analyses that use the view.
+    plain = db.NATURAL_FLOWER_WHERE
+    view = db.NATURAL_FLOWER_WHERE_NORMALIZED
+    assert plain.replace("category_std", "category").replace("product_type_std", "product_type") == view
+
+
+def test_country_subqueries_partition_state_programs() -> None:
+    # `state = 'CA'` is California; Canada is `country = 'CA'`. Guard the trap: the two subqueries must
+    # be disjoint and, together, cover every seeded program row.
+    conn = pg_conn()
+    db.create_reference_tables(conn)
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="CA", name="California", programs="both", program_term="cannabis", agency="DCC"))
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="ON", name="Ontario", programs="both", program_term="cannabis", agency="AGCO",
+        country="CA"))
+    conn.commit()
+    us = {r[0] for r in conn.execute(f"SELECT abbr FROM state_programs WHERE abbr IN {db.US_JURISDICTIONS_SUBQUERY}")}
+    ca = {r[0] for r in conn.execute(f"SELECT abbr FROM state_programs WHERE abbr IN {db.CA_PROVINCES_SUBQUERY}")}
+    assert "CA" in us and "CA" not in ca, "California must be a US state, not a Canadian province"
+    assert ca == {"ON"}
+    assert not (us & ca)
+
+
+def test_us_subqueries_differ_by_exactly_the_declared_territories() -> None:
+    """Two live scripts spelled "US" two different ways: `_scope.predicate("us")` INCLUDED Puerto
+    Rico, `_terpene_source.JURISDICTIONS["USA"]` EXCLUDED it. Both are now named constants, and this
+    pins the only difference between them to `US_TERRITORIES`, so adding a territory to that tuple
+    without updating the SQL fails the build rather than a downstream number.
+    """
+    conn = pg_conn()
+    db.create_reference_tables(conn)
+    for abbr, name in (("CA", "California"), ("DC", "District of Columbia"), ("PR", "Puerto Rico")):
+        db.upsert_state_program(conn, StateProgramRecord(
+            abbr=abbr, name=name, programs="both", program_term="cannabis", agency="x"))
+    db.upsert_state_program(conn, StateProgramRecord(
+        abbr="ON", name="Ontario", programs="both", program_term="cannabis", agency="x", country="CA"))
+    conn.commit()
+
+    def abbrs(subquery: str) -> set[str]:
+        return {r[0] for r in conn.execute(f"SELECT abbr FROM state_programs WHERE abbr IN {subquery}")}
+
+    everything = abbrs(db.US_JURISDICTIONS_SUBQUERY)
+    states_only = abbrs(db.US_EXCL_TERRITORIES_SUBQUERY)
+
+    assert everything - states_only == set(db.US_TERRITORIES)
+    assert "PR" in everything, "the price guard must keep PR: it is a US territory pricing in USD"
+    assert "DC" in states_only, "DC is not a territory — holding it out would be a different bug"
+    assert "ON" not in everything
