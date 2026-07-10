@@ -72,7 +72,6 @@ nav:
   - Design & internals:
       - Postgres for everything: postgres_for_everything.md
       - Public/private split: publish_split_design.md
-      - Framework write-ups: scraping_framework_writeups.md
       - Related work: design_references.md
   - Reference application (cannabis):
       - Stage contracts: stage_contracts.md
