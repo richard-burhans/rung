@@ -1,5 +1,6 @@
 import datetime
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, LiteralString
 
 import psycopg
@@ -158,6 +159,69 @@ CREATE TABLE IF NOT EXISTS proxy_tiers (
 )
 """
 
+# Externally-sourced facts an analysis depends on but cannot derive from its own data — "brand X is
+# owned by company Y", "state Z began retail sales in 2018-01". Such a fact is a *premise*, and a
+# premise with no recorded source is unfalsifiable: a reader cannot check it without redoing the
+# author's research.
+#
+# Each row is one subject–predicate–object triple carrying the evidence for itself: where it came
+# from, the exact supporting text, and when it was retrieved. `retrieved_at` matters because sources
+# change — a corporate brand list is true of a filing, not of the world forever.
+#
+# `confidence` is the attestor's own grading, not a probability: `verified` (a primary source states
+# it), `reported` (a reputable secondary source), `inferred` (derived, and therefore attackable).
+# Generic infra, like `jobs`: the engine stores provenance; a domain decides what facts need it.
+@dataclass
+class Attestation:
+    """One externally-sourced fact, carrying the evidence for itself.
+
+    A *premise* an analysis relies on but cannot derive from its own data — "brand X is owned by
+    company Y". Recorded as a subject-predicate-object triple plus the source that supports it, so a
+    reader can check the premise without repeating the author's research.
+
+    Engine infrastructure, like ``jobs``: the vocabulary of subject types and predicates belongs to
+    the domain, and the engine has no opinion about it. (Defined here rather than in ``models`` so
+    importing the engine loads no domain module — see ``tests/test_import_layering.py``.)
+    """
+
+    subject_type: str                   # 'brand' | 'company' | 'state' | … (the domain's vocabulary)
+    subject: str
+    predicate: str                      # 'owned_by' | 'operates' | 'not_owned_by' | …
+    object: str
+    source_type: str                    # 'sec_filing' | 'press_release' | 'company_site' | 'trade_press'
+    source_ref: str                     # a citable handle, e.g. "Acme FY2024 Form 10-K"
+    retrieved_at: str                   # ISO-8601 date — sources change; a fact is true *of a source*
+    source_url: str | None = None
+    quote: str | None = None            # the exact supporting text, so the claim is checkable in place
+    confidence: str = "reported"        # 'verified' (primary source) | 'reported' | 'inferred'
+    notes: str | None = None
+
+
+_CREATE_ATTESTATIONS = """
+CREATE TABLE IF NOT EXISTS attestations (
+    subject_type  TEXT NOT NULL,
+    subject       TEXT NOT NULL,
+    predicate     TEXT NOT NULL,
+    object        TEXT NOT NULL,
+    source_type   TEXT NOT NULL,
+    source_ref    TEXT NOT NULL,
+    source_url    TEXT,
+    quote         TEXT,
+    confidence    TEXT NOT NULL DEFAULT 'reported',
+    retrieved_at  DATE NOT NULL,
+    notes         TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (subject_type, subject, predicate, object, source_ref),
+    CONSTRAINT attestations_confidence_check
+        CHECK (confidence IN ('verified', 'reported', 'inferred'))
+)
+"""
+
+_CREATE_ATTESTATIONS_LOOKUP = """
+CREATE INDEX IF NOT EXISTS attestations_subject_idx
+    ON attestations (subject_type, lower(subject), predicate)
+"""
+
 # Cross-worker per-host rate limiter (token bucket). One row per host: `tokens` is the current
 # allowance, refilled at `rate_per_sec` up to `burst` on each access using `now() - last_refill` as
 # the elapsed clock. Public infra (like `jobs`); the refill/deduct policy lives in `rate_limit.py`
@@ -215,6 +279,8 @@ def create_engine_tables(conn: DBConn) -> None:
     conn.execute(_CREATE_PROXIES)
     conn.execute(_CREATE_PROXIES_CLAIM_INDEX)
     conn.execute(_CREATE_PROXY_TIERS)
+    conn.execute(_CREATE_ATTESTATIONS)
+    conn.execute(_CREATE_ATTESTATIONS_LOOKUP)
     conn.commit()
 
 
@@ -312,6 +378,74 @@ def get_access_winner(
     ).fetchone()
 
 
+
+
+_UPSERT_ATTESTATION = """
+INSERT INTO attestations (subject_type, subject, predicate, object, source_type, source_ref,
+                          source_url, quote, confidence, retrieved_at, notes)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (subject_type, subject, predicate, object, source_ref) DO UPDATE SET
+    source_type = EXCLUDED.source_type,
+    source_url  = EXCLUDED.source_url,
+    quote       = EXCLUDED.quote,
+    confidence  = EXCLUDED.confidence,
+    retrieved_at = EXCLUDED.retrieved_at,
+    notes       = EXCLUDED.notes,
+    updated_at  = now()
+"""
+
+
+def upsert_attestation(conn: DBConn, record: Attestation) -> None:
+    """Record one externally-sourced fact and the evidence for it. Caller must commit.
+
+    Keyed on the triple *plus* ``source_ref``: two sources may attest the same fact, and a reader is
+    better served by both than by whichever was written last.
+    """
+    conn.execute(
+        _UPSERT_ATTESTATION,
+        (
+            record.subject_type,
+            record.subject,
+            record.predicate,
+            record.object,
+            record.source_type,
+            record.source_ref,
+            record.source_url,
+            record.quote,
+            record.confidence,
+            record.retrieved_at,
+            record.notes,
+        ),
+    )
+
+
+def attestations_for(
+    conn: DBConn, subject_type: str, subject: str, predicate: str | None = None
+) -> list[Attestation]:
+    """Every recorded fact about a subject, most recently retrieved first. Case-insensitive subject.
+
+    Returns the *evidence*, not a verdict: a caller that finds two rows disagreeing has learned
+    something true about the world, and should not silently take one.
+    """
+    sql = (
+        "SELECT subject_type, subject, predicate, object, source_type, source_ref, retrieved_at, "
+        "source_url, quote, confidence, notes FROM attestations "
+        "WHERE subject_type = %s AND lower(subject) = lower(%s)"
+    )
+    params: list[object] = [subject_type, subject]
+    if predicate is not None:
+        sql += " AND predicate = %s"
+        params.append(predicate)
+    sql += " ORDER BY retrieved_at DESC, source_ref"
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    return [
+        Attestation(
+            subject_type=r[0], subject=r[1], predicate=r[2], object=r[3], source_type=r[4],
+            source_ref=r[5], retrieved_at=str(r[6]), source_url=r[7], quote=r[8],
+            confidence=r[9], notes=r[10],
+        )
+        for r in rows
+    ]
 
 
 def __getattr__(name: str) -> Any:

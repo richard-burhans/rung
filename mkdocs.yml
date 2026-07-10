@@ -71,6 +71,7 @@ nav:
       - Engine API: api.md
   - Design & internals:
       - Postgres for everything: postgres_for_everything.md
+      - Provenance: provenance_design.md
       - Public/private split: publish_split_design.md
       - Related work: design_references.md
   - Reference application (cannabis):

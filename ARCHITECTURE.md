@@ -40,7 +40,10 @@ in a different domain:
   `FOR UPDATE SKIP LOCKED` work queue), `registry` (the plugin seam), `rate_limit` (the cross-worker
   token bucket), `http` (the honest session chokepoint), `browser` (the pydoll primitives), plus the
   **generic-infra tables** in `db` (`jobs`, `access_methods`, `token_buckets`, `proxies`,
-  `proxy_tiers`). Reuse these for any scraping domain.
+  `proxy_tiers`, `attestations`). Reuse these for any scraping domain. `attestations` stores the
+  **external premises an analysis stands on** — a subject-predicate-object fact with its source, the
+  quoted supporting text, and the date it was retrieved, so a reader can check a premise instead of
+  redoing the research (`docs/provenance_design.md`).
 - **Reference pipeline (the dispensary application that exercises the engine).** The Stage-1 roster
   extractors (`sources/{extract, state_lists, state_search, homepage_discovery, ai_fallback,
   dedupe}`), the **domain schema + records** (`db`'s `dispensaries`/`company_stores`/`store_products`/

@@ -19,6 +19,21 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added
+
+- **`attestations`** — a generic engine table (alongside `jobs` and `access_methods`) for the external
+  facts an analysis stands on but cannot derive: *"brand X is owned by company Y"*, *"market Z opened in
+  2018-01"*. Each row is a subject–predicate–object triple carrying the evidence for itself — source
+  type, a citable reference, a URL, the **exact supporting quote**, a confidence grade
+  (`verified` | `reported` | `inferred`), and the date it was retrieved. A premise with no recorded
+  source is unfalsifiable; checking it means redoing the author's research.
+  `db.upsert_attestation()` / `db.attestations_for()`; see `docs/provenance_design.md`.
+
+  Two decisions worth knowing: the primary key is the triple **plus** the source, so two sources may
+  attest one fact and a disagreement stays visible rather than becoming last-write-wins; and **negative
+  attestations** (`not_owned_by`) are first-class, because a brand-name collision is the failure a
+  brand→producer join actually hits.
+
 ### Changed
 
 - `examples/paper_fetcher.py`: replaced the Europe PMC rung with a **`pmc_oa`** rung built on PMC's
