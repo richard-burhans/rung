@@ -40,7 +40,9 @@ in a different domain:
   `FOR UPDATE SKIP LOCKED` work queue), `registry` (the plugin seam), `rate_limit` (the cross-worker
   token bucket), `http` (the honest session chokepoint), `browser` (the pydoll primitives), plus the
   **generic-infra tables** in `db` (`jobs`, `access_methods`, `token_buckets`, `proxies`,
-  `proxy_tiers`, `attestations`). Reuse these for any scraping domain. `attestations` stores the
+  `proxy_tiers`, `attestations`). Reuse these for any scraping domain. `access_methods.status` carries
+  the **outcome vocabulary** — `ok | unavailable | blocked | broken | failed` — so a rung that is *broken*
+  can never be recorded as the world being *empty* ( §Outcomes). `attestations` stores the
   **external premises an analysis stands on** — a subject-predicate-object fact with its source, the
   quoted supporting text, and the date it was retrieved, so a reader can check a premise instead of
   redoing the research (`docs/provenance_design.md`).

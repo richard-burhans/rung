@@ -9,6 +9,7 @@ import asyncio
 import pytest
 
 from examples import paper_fetcher
+from rung import access
 
 
 def test_url_routing_matches_doi_prefix_to_host() -> None:
@@ -78,10 +79,12 @@ def _stub_oa_service(monkeypatch, xml: str) -> None:
     monkeypatch.setattr(paper_fetcher.urllib.request, "urlopen", lambda *_a, **_k: _FakeResponse(xml))
 
 
-def test_oa_service_raises_not_open_access_for_a_free_to_read_deposit(monkeypatch) -> None:
+def test_oa_service_raises_the_engine_unavailable_signal(monkeypatch) -> None:
     # Free-to-read on PMC is NOT membership of the OA subset; Unpaywall's `is_oa` doesn't imply it.
+    # The rung says so in the ENGINE's vocabulary, so run_target persists 'unavailable' — distinctly
+    # from a rung that merely broke. That distinction is the whole point (rung/access.py).
     _stub_oa_service(monkeypatch, _NOT_OA_XML)
-    with pytest.raises(paper_fetcher._NotOpenAccess):
+    with pytest.raises(access.Unavailable, match="open-access subset"):
         paper_fetcher._oa_pdf_url("PMC4913118")
 
 
@@ -99,23 +102,22 @@ def test_oa_service_returns_an_https_pdf_when_one_is_advertised(monkeypatch) -> 
     assert url == "https://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/aa/bb/PMC999.pdf"
 
 
-def test_pmc_oa_rung_records_the_verdict_instead_of_reporting_a_failure(monkeypatch) -> None:
+def test_pmc_oa_rung_raises_rather_than_returning_a_silent_empty(monkeypatch) -> None:
+    # The rung yields nothing, but it does not go quiet: it raises the signal that tells `run_target`
+    # to persist 'unavailable'. A silent empty return would be recorded as 'failed' — unknown — which
+    # is the honest default but the wrong answer here.
     doi = "10.1016/j.jcm.2016.02.012"
-    paper_fetcher.NOT_OPEN_ACCESS.discard(doi)
     monkeypatch.setattr(paper_fetcher, "_pmcid_for_doi", lambda _doi: "PMC4913118")
     _stub_oa_service(monkeypatch, _NOT_OA_XML)
 
-    records, url, _hint = asyncio.run(paper_fetcher._fetch_pmc_oa(None, doi, None))
-
-    assert records == [] and url is None      # the rung yields nothing…
-    assert doi in paper_fetcher.NOT_OPEN_ACCESS   # …but says *why*, so it isn't mistaken for a paywall
-    paper_fetcher.NOT_OPEN_ACCESS.discard(doi)
+    with pytest.raises(access.Unavailable):
+        asyncio.run(paper_fetcher._fetch_pmc_oa(None, doi, None))
 
 
-def test_pmc_oa_rung_does_not_flag_a_doi_with_no_pmc_record(monkeypatch) -> None:
-    # No PMC record at all is an ordinary "this rung can't serve you", not a licence verdict.
+def test_pmc_oa_rung_stays_silent_when_there_is_no_pmc_record(monkeypatch) -> None:
+    # No PMC record at all is an ordinary "this rung can't serve you", not a licence verdict. It must
+    # NOT raise Unavailable — that would assert something about the world it has not checked.
     doi = "10.48550/arXiv.2305.14325"
     monkeypatch.setattr(paper_fetcher, "_pmcid_for_doi", lambda _doi: None)
     records, _url, _hint = asyncio.run(paper_fetcher._fetch_pmc_oa(None, doi, None))
     assert records == []
-    assert doi not in paper_fetcher.NOT_OPEN_ACCESS

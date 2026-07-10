@@ -27,6 +27,60 @@ MethodHint = tuple[str | None, dict | None]
 MethodResult = tuple[list, str | None, dict | None]
 MethodRunner = Callable[[db.DBConn, str, MethodHint], Awaitable[MethodResult]]
 
+# ── the outcome vocabulary ────────────────────────────────────────────────────────────────────────
+#
+# A rung that returns nothing has said almost nothing. There are four reasons it might, and they call
+# for four different responses:
+#
+#   Unavailable  the WORLD says no. This target has no data by this route. Nothing to fix.
+#   Blocked      we were REFUSED. The data exists; this egress cannot have it. Rotate, back off, wait.
+#   Broken       WE are wrong. A dead URL, a changed payload, missing config. Fix the rung.
+#   (silence)    the rung returned nothing and did not say why → recorded as 'failed'.
+#
+# Collapsing these is this project's signature bug. Three times, a failure of OURS was persisted and
+# reported as a fact about the world: Unpaywall 422'd on a placeholder email and the paper was called
+# "paywalled"; a Europe PMC URL 404'd for *every* article and the papers were called "paywalled"; NCBI
+# returned HTTP 200 with a reCAPTCHA page, which a naive status check would have called a success.
+# Two of the three were invisible for weeks, because a green pipeline and a comfortable sentence agree.
+#
+# The asymmetry is deliberate: **only an explicit Unavailable produces 'unavailable'.** A rung that is
+# merely silent is 'failed' — unknown — because the cost of mistaking a broken rung for an empty world
+# is that you stop looking.
+
+
+class MethodOutcome(Exception):
+    """Base for a runner's explanation of why it produced no records. Carries its ``status``."""
+
+    status = "failed"
+
+
+class Unavailable(MethodOutcome):
+    """The world says no: this target has no data by this route, and re-trying will not change that.
+
+    Raise this only when the SOURCE told you so — a documented "not open access" verdict, a 404 from
+    an API that is authoritative for the question, an empty result from a complete listing. Never
+    raise it because a request failed.
+    """
+
+    status = "unavailable"
+
+
+class Blocked(MethodOutcome):
+    """We were refused: 403/429/captcha/soft-block. The data exists; this egress cannot have it."""
+
+    status = "blocked"
+
+
+class Broken(MethodOutcome):
+    """We are wrong: a dead URL, a changed payload shape, a missing credential. Fix the rung.
+
+    A rung that raises this is asking to be repaired. It should be loud in a canary and never be
+    mistaken for the target simply having no data.
+    """
+
+    status = "broken"
+
+
 @dataclass(frozen=True)
 class AccessMethod:
     """One extraction method for a target_type.
@@ -137,6 +191,22 @@ def _hint_for(row: tuple | None) -> MethodHint:
     return resource_url, params
 
 
+async def _attempt(
+    method: AccessMethod, conn: db.DBConn, target_key: str, hint: MethodHint
+) -> tuple[list, str | None, dict | None, MethodOutcome | None]:
+    """Run one rung. Returns its result, or the outcome it raised to explain producing nothing.
+
+    Only the explicit signals are caught. An unexpected exception still propagates: a rung that
+    crashes has not told us why it failed, and swallowing it here would recreate the very silence
+    this vocabulary exists to break.
+    """
+    try:
+        records, resource_url, params = await method.run(conn, target_key, hint)
+    except MethodOutcome as outcome:
+        return [], None, None, outcome
+    return records, resource_url, params, None
+
+
 async def run_target(
     conn: db.DBConn,
     target_type: str,
@@ -175,9 +245,16 @@ async def run_target(
     if max_yield:
         best: tuple[str, list, Any] | None = None
         for method in ladder:
-            records, resource_url, params = await method.run(
-                conn, target_key, _hint_for(rows.get(method.name))
+            records, resource_url, params, outcome = await _attempt(
+                method, conn, target_key, _hint_for(rows.get(method.name))
             )
+            if outcome is not None:
+                db.record_access_attempt(
+                    conn, target_type, target_key, method.name, method.cost_rank,
+                    outcome.status, error=str(outcome) or outcome.status,
+                )
+                conn.commit()
+                continue
             kept = [record for record in records if plausible(record)]
             if len(kept) >= min_records:
                 db.record_access_attempt(
@@ -227,9 +304,19 @@ async def run_target(
             ]
 
     for method in order:
-        records, resource_url, params = await method.run(
-            conn, target_key, _hint_for(rows.get(method.name))
+        records, resource_url, params, outcome = await _attempt(
+            method, conn, target_key, _hint_for(rows.get(method.name))
         )
+        if outcome is not None:
+            # The rung said WHY. Persist that, and keep walking — a target that is `unavailable` by
+            # one route may still be reachable by another, and the next canary run can tell the
+            # difference between a source that has nothing and a rung that is broken.
+            db.record_access_attempt(
+                conn, target_type, target_key, method.name, method.cost_rank,
+                outcome.status, error=str(outcome) or outcome.status,
+            )
+            conn.commit()
+            continue
         if is_success(records, min_records, plausible):
             db.record_access_attempt(
                 conn, target_type, target_key, method.name, method.cost_rank,

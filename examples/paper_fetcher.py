@@ -136,14 +136,17 @@ def _pmcid_for_doi(doi: str) -> str | None:
     return r.get("pmcid")
 
 
-# DOIs that PMC indexes but explicitly reports as outside the OA subset. These are not fetch failures:
-# they are "free to read, no redistribution licence", and the runner reports them as such so a dead
-# rung can never again masquerade as "paywalled".
-NOT_OPEN_ACCESS: set[str] = set()
+def not_open_access(conn: db.DBConn) -> set[str]:
+    """DOIs the engine recorded as `unavailable` — PMC indexes them, outside the OA subset.
 
-
-class _NotOpenAccess(Exception):
-    """PMC indexes the article but reports it outside the OA subset."""
+    Read from `access_methods`, not from a module-level set: the engine already persists *why* each
+    rung stopped, and a second copy of that fact would drift from the first.
+    """
+    rows = conn.execute(
+        "SELECT target_key FROM access_methods WHERE target_type = %s AND status = 'unavailable'",
+        (TARGET_TYPE,),
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def _oa_pdf_url(pmcid: str) -> str | None:
@@ -174,7 +177,9 @@ def _oa_pdf_url(pmcid: str) -> str | None:
     except Exception:
         return None
     if "idIsNotOpenAccess" in xml:
-        raise _NotOpenAccess
+        # The engine's vocabulary, not a bespoke flag: the WORLD says no. `run_target` persists this
+        # as 'unavailable', distinctly from a rung that merely broke. See rung/access.py.
+        raise access.Unavailable("not in the PMC open-access subset")
     links = re.findall(r'<link format="([^"]+)"[^>]*href="([^"]+)"', xml)
     pdf = next((h for fmt, h in links if fmt == "pdf"), None)
     return pdf.replace("ftp://ftp.ncbi.nlm.nih.gov", "https://ftp.ncbi.nlm.nih.gov") if pdf else None
@@ -189,11 +194,7 @@ async def _fetch_pmc_oa(_conn: db.DBConn, doi: str, _hint: access.MethodHint) ->
     pmcid = _pmcid_for_doi(doi)
     if not pmcid:
         return [], None, None
-    try:
-        url = _oa_pdf_url(pmcid)
-    except _NotOpenAccess:
-        NOT_OPEN_ACCESS.add(doi)
-        return [], None, None
+    url = _oa_pdf_url(pmcid)          # raises access.Unavailable when PMC says it is not OA
     if url is None:
         return [], None, None
     return await _download_pdf(url, doi, "pmc_oa")
@@ -313,20 +314,21 @@ def main() -> None:
         ]
     conn = db.get_connection()
     results = asyncio.run(run(conn, queries))
+    unavailable = not_open_access(conn)   # the engine's own record of WHY, not a second copy
     got = sum(1 for _w, p in results.values() if p)
     print(f"Fetched {got}/{len(results)} (doi: winning host → file):")
     for doi, (winner, path) in results.items():
         if path:
             outcome = path
-        elif doi in NOT_OPEN_ACCESS:
+        elif doi in unavailable:
             # Distinct from a fetch failure: PMC indexes it but it is outside the OA subset. There is
             # nothing for the ladder to fix — the paper carries no redistribution licence.
             outcome = "(not open access — free to read, fetch it by hand)"
         else:
             outcome = "(no OA host worked — paywalled, or a rung is broken)"
         print(f"  {doi}: {winner or 'NONE'} -> {outcome}")
-    if NOT_OPEN_ACCESS:
-        print(f"\n{len(NOT_OPEN_ACCESS)} DOI(s) are not in the PMC OA subset. `is_oa` from Unpaywall does "
+    if unavailable:
+        print(f"\n{len(unavailable)} DOI(s) are not in the PMC OA subset. `is_oa` from Unpaywall does "
               "not imply a redistribution licence; these are yours to download by hand.")
 
 

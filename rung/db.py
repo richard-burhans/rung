@@ -52,6 +52,20 @@ type DBConn = psycopg.Connection
 
 _DEFAULT_DATABASE_URL = "postgresql://rung:rung@localhost:5432/rung"
 
+# `status` is the OUTCOME VOCABULARY, and the distinction it draws is the point. A ladder that cannot
+# say "I can't get this" and "you may not have this" in different words will always say the latter,
+# because it is the more comfortable sentence — and then a broken rung reads as a fact about the world.
+# That has happened here three times (see docs/access_methods_design.md §"Outcomes"):
+#
+#   ok           the method returned plausible records
+#   unavailable  the WORLD says no — this target has no data by this route, and never will
+#   blocked      we were REFUSED — 403/429/captcha; the data exists, this egress cannot have it
+#   broken       WE are wrong — a dead URL, a parse failure, missing config. Fix the rung.
+#   failed       a rung returned nothing and did not say why. The honest default; never 'unavailable'.
+#   never        no attempt recorded yet
+#
+# `broken` must be impossible to record as `unavailable`: only an explicit `access.Unavailable` signal
+# from the runner produces it. Silence produces `failed`.
 _CREATE_ACCESS_METHODS = """
 CREATE TABLE IF NOT EXISTS access_methods (
     target_type  TEXT    NOT NULL,
@@ -67,9 +81,15 @@ CREATE TABLE IF NOT EXISTS access_methods (
     last_ok_at   TEXT,
     last_fail_at TEXT,
     updated_at   TEXT    NOT NULL,
-    PRIMARY KEY (target_type, target_key, method)
+    PRIMARY KEY (target_type, target_key, method),
+    CONSTRAINT access_methods_status_check
+        CHECK (status IN ('ok', 'unavailable', 'blocked', 'broken', 'failed', 'never'))
 )
 """
+
+# The outcome vocabulary, as data. `access.py` owns the semantics; `db` owns the storage and refuses
+# anything outside the set — a typo'd status is a silent lie about why a rung stopped working.
+ACCESS_STATUSES = frozenset({"ok", "unavailable", "blocked", "broken", "failed", "never"})
 
 # Transient per-run work items (claims close the documented concurrency hazards —
 # see docs/stage_contracts.md §5). Companion to access_methods, which is the
@@ -275,6 +295,7 @@ def create_engine_tables(conn: DBConn) -> None:
     conn.execute(_CREATE_JOBS_LIVE_UNIQUE)
     conn.execute(_CREATE_JOBS_PENDING_CLAIM)
     _migrate_jobs(conn)
+    _migrate_access_methods(conn)
     conn.execute(_CREATE_TOKEN_BUCKETS)
     conn.execute(_CREATE_PROXIES)
     conn.execute(_CREATE_PROXIES_CLAIM_INDEX)
@@ -282,6 +303,22 @@ def create_engine_tables(conn: DBConn) -> None:
     conn.execute(_CREATE_ATTESTATIONS)
     conn.execute(_CREATE_ATTESTATIONS_LOOKUP)
     conn.commit()
+
+
+def _migrate_access_methods(conn: DBConn) -> None:
+    """Add the status CHECK to a database created before the outcome vocabulary existed.
+
+    Safe on live data: production held only 'ok' and 'failed', both in the vocabulary. Postgres
+    validates existing rows when the constraint is added, so a database carrying some other status
+    fails loudly here rather than silently accepting it forever.
+    """
+    conn.execute(
+        "ALTER TABLE access_methods DROP CONSTRAINT IF EXISTS access_methods_status_check"
+    )
+    conn.execute(
+        "ALTER TABLE access_methods ADD CONSTRAINT access_methods_status_check "
+        "CHECK (status IN ('ok', 'unavailable', 'blocked', 'broken', 'failed', 'never'))"
+    )
 
 
 def _migrate_jobs(conn: DBConn) -> None:
@@ -340,12 +377,18 @@ def record_access_attempt(
 ) -> None:
     """Upsert the outcome of one method attempt against one target. Caller commits.
 
-    On 'ok' the last_ok_at timestamp advances; on 'failed', last_fail_at. attempts
-    increments on every call. A null resource_url/params preserves the stored value.
+    ``status`` must be one of ``ACCESS_STATUSES``. On 'ok' the last_ok_at timestamp advances; on any
+    other outcome, last_fail_at. attempts increments on every call. A null resource_url/params
+    preserves the stored value.
     """
+    if status not in ACCESS_STATUSES:
+        raise ValueError(f"unknown access status {status!r}; expected one of {sorted(ACCESS_STATUSES)}")
     now = datetime.datetime.now(datetime.UTC).isoformat()
     ok_at = now if status == "ok" else None
-    fail_at = now if status == "failed" else None
+    # Every outcome that is not a success advances last_fail_at — 'broken' and 'blocked' are failures
+    # too, and the staleness governor reads these timestamps. (Before the vocabulary existed this
+    # tested `== "failed"`, which would have left the new statuses without a failure time.)
+    fail_at = None if status in ("ok", "never") else now
     conn.execute(
         _UPSERT_ACCESS_METHOD,
         (
@@ -363,6 +406,27 @@ def get_access_methods(conn: DBConn, target_type: str, target_key: str) -> list[
         "WHERE target_type = %s AND target_key = %s ORDER BY cost_rank",
         (target_type, target_key),
     ).fetchall()
+
+
+def access_health(conn: DBConn, target_type: str | None = None) -> list[tuple[str, str, int]]:
+    """Attempt counts per (method, status) — the query a canary runs, and the reason the vocabulary exists.
+
+    A method whose rows are all ``ok`` or ``unavailable`` is healthy: it works, or the world has
+    nothing for it. A method accumulating ``broken`` is asking to be repaired, and ``blocked`` says the
+    egress is wrong, not the code. Before the vocabulary, all three read ``failed`` and no query could
+    tell them apart — so a rung that died because an endpoint moved stayed green for weeks.
+
+    Ordered worst-first: broken, then blocked, then the rest.
+    """
+    sql = (
+        "SELECT method, status, count(*) FROM access_methods "
+        + ("WHERE target_type = %s " if target_type else "")
+        + "GROUP BY method, status "
+        "ORDER BY CASE status WHEN 'broken' THEN 0 WHEN 'blocked' THEN 1 WHEN 'failed' THEN 2 "
+        "ELSE 3 END, count(*) DESC, method"
+    )
+    params = (target_type,) if target_type else ()
+    return [(row[0], row[1], row[2]) for row in conn.execute(sql, params).fetchall()]
 
 
 def get_access_winner(

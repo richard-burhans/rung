@@ -21,6 +21,19 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Added
 
+- **An outcome vocabulary for the access ladder.** `access_methods.status` now distinguishes
+  `ok` · `unavailable` (the world says no) · `blocked` (we were refused) · `broken` (we are wrong) ·
+  `failed` (a rung returned nothing and did not say why). A runner signals with `access.Unavailable`,
+  `access.Blocked` or `access.Broken`; `run_target` persists the reason and keeps walking.
+
+  **The asymmetry is the design**: only an explicit `Unavailable` records `unavailable`. Silence
+  records `failed`, because the cost of mistaking a broken rung for an empty world is that you stop
+  looking. An *unexpected* exception still propagates — a rung that crashes has not told you why.
+
+  `db.access_health()` reports `(method, status, count)` worst-first: the query a scheduled canary
+  runs. Enforced twice — `record_access_attempt` rejects an unknown status, and a `CHECK` constraint
+  refuses one written by any other path.
+
 - **`attestations`** — a generic engine table (alongside `jobs` and `access_methods`) for the external
   facts an analysis stands on but cannot derive: *"brand X is owned by company Y"*, *"market Z opened in
   2018-01"*. Each row is a subject–predicate–object triple carrying the evidence for itself — source
