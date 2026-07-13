@@ -6,7 +6,7 @@ a Frontiers `/pdf`, PMC, or the gated publisher. So the access ladder is: **reso
 then run the cheapest OA host that returns a real PDF, and persist the winning host per paper** so a
 re-run skips straight to it.
 
-This is the seed of "paper-rung" — the productionized `acquire` step of the deep-literature loop and a
+This is the seed of "paper-rung" — the productionized `acquire` step of the research-librarian loop and a
 component of the central knowledge base — and it doubles as evidence that the engine is domain-agnostic
 (same `access.run_target` + queue as `examples/custom_domain.py`, a completely different domain).
 
