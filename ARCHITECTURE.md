@@ -94,7 +94,7 @@ fields: `category_std` (as `category`), `product_type_std` (as `product_type`), 
 `price_per_g`, percent/mg potency, `terp_total`, `terpenes_std`, `cannabinoids_std` (minor
 cannabinoids `{NAME: %}` — CBN/CBG/CBC from Jane/Hytiva/Cresco/Weedmaps), and `currency`
 (derived via a `LEFT JOIN state_programs` — `CAD` for CA-province stores, else `USD`; prices
-stay numeric in native currency so cross-country analyses partition, D2) — alongside the
+stay numeric in native currency so cross-country analyses partition) — alongside the
 identity/price/timestamp passthrough columns
 (`id`/`company_id`/`state`/`store_key`/`platform`/`source`/`name`/`brand`/`price`/`scraped_at`);
 the combined cross-platform surface)
@@ -361,7 +361,7 @@ overlay (its proprietary stages then resolve to registry stubs).
    per-state custom handlers (`ca_dcc`/`az_dhs`/`co_med`/`ma_ccc`/`on_agco`/`ab_aglc`/`bc_lcrb`/`sk_slga`/`va_cca`) and the generic `atlist` map-platform rung are added to the
    Literal, not produced by `state_lists._classify`, so the contract-8 test still guards
    `_classify`'s output ⊆ `HANDLED_LIST_TYPES`.
-9. **Canadian provinces are states (D1).** Province rows ride the same `state` TEXT
+9. **Canadian provinces are states.** Province rows ride the same `state` TEXT
    column everywhere (2-letter codes don't collide with USPS); `states.yml` /
    `state_programs.country` (`US`/`CA`, default `US`) is the only marker, used to
    partition exports/analyses and derive currency — see.
