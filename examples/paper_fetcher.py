@@ -2,7 +2,7 @@
 
 Fetching a paper is exactly what rung is for: one target (a paper) is reachable several ways at
 different cost/success — arXiv, a PLOS "printable" endpoint, a Nature-OA `.pdf`, a BMC `counter/pdf`,
-a Frontiers `/pdf`, PMC, or the gated publisher. So the access ladder is: **resolve the DOI (Crossref),
+a Frontiers `/pdf`, a Harvard DASH bitstream, PMC, or the gated publisher. So the access ladder is: **resolve the DOI (Crossref),
 then run the cheapest OA host that returns a real PDF, and persist the winning host per paper** so a
 re-run skips straight to it.
 
@@ -200,9 +200,43 @@ async def _fetch_pmc_oa(_conn: db.DBConn, doi: str, _hint: access.MethodHint) ->
     return await _download_pdf(url, doi, "pmc_oa")
 
 
+def _unpaywall_json(doi: str) -> dict | None:
+    """Unpaywall's record for a DOI, or None. Centralizes the email gate + honest failure handling so
+    every Unpaywall-driven rung (the general locator AND the DASH resolver) shares one story.
+
+    Unpaywall requires a contact email (UNPAYWALL_EMAIL) and REJECTS a placeholder with HTTP 422. The
+    old default ("unpaywall@example.com") made this fail on every DOI, and because the failure was
+    swallowed it was indistinguishable from "this DOI has no OA copy anywhere" — the rung was silently
+    dead, and fetchable papers were reported as paywalled. A non-404 HTTP / network error is
+    inconclusive (OUR fault), never a "closed access" verdict.
+    """
+    import json
+    email = os.environ.get("UNPAYWALL_EMAIL")
+    if not email:
+        if not _unpaywall_json._warned:  # type: ignore[attr-defined]
+            print("  note: UNPAYWALL_EMAIL is unset — the Unpaywall rungs are DISABLED "
+                  "(the API 422s on a placeholder address). Set it to enable OA lookup.")
+            _unpaywall_json._warned = True  # type: ignore[attr-defined]
+        return None
+    url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(email)}"
+    try:
+        with urllib.request.urlopen(url, timeout=25) as resp:  # Unpaywall: public read-only API
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:  # 404 = DOI unknown (a real "no OA"); anything else is inconclusive
+            print(f"  warn: Unpaywall HTTP {exc.code} for {doi} — rung inconclusive, not 'closed'")
+        return None
+    except Exception as exc:  # network/JSON — likewise inconclusive
+        print(f"  warn: Unpaywall lookup failed for {doi}: {type(exc).__name__} — rung inconclusive")
+        return None
+
+
+_unpaywall_json._warned = False  # type: ignore[attr-defined]
+
+
 def _unpaywall_pdf(doi: str) -> str | None:
     """The best open-access PDF URL for a DOI from Unpaywall (any repository/preprint/journal), or
-    None if the DOI has no OA copy anywhere. Unpaywall requires a contact email (UNPAYWALL_EMAIL).
+    None if the DOI has no OA copy anywhere.
 
     Reads `best_oa_location` FIRST but falls through every entry of `oa_locations`. `best_oa_location`
     frequently carries `url_for_pdf: null` — typically a repository landing page — while another
@@ -210,33 +244,9 @@ def _unpaywall_pdf(doi: str) -> str | None:
     silently lost three fetchable papers in one round (Doggett 2024 JAMA Netw Open, Bonn-Miller 2017
     JAMA, Dryburgh 2018 BJCP), each of which reported `is_oa=true`.
     """
-    import json
-    email = os.environ.get("UNPAYWALL_EMAIL")
-    if not email:
-        # Unpaywall REJECTS a placeholder address with HTTP 422. The old default
-        # ("unpaywall@example.com") therefore made this rung fail on every DOI, and because the failure
-        # was swallowed it was indistinguishable from "this DOI has no OA copy anywhere" — the rung was
-        # silently dead, and three fetchable papers were reported as paywalled in one round.
-        if not _unpaywall_pdf._warned:  # type: ignore[attr-defined]
-            print("  note: UNPAYWALL_EMAIL is unset — the Unpaywall rung is DISABLED "
-                  "(the API 422s on a placeholder address). Set it to enable OA lookup.")
-            _unpaywall_pdf._warned = True  # type: ignore[attr-defined]
+    data = _unpaywall_json(doi)
+    if not data:
         return None
-    url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(email)}"
-    try:
-        with urllib.request.urlopen(url, timeout=25) as resp:  # Unpaywall: public read-only API
-            data = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        # 404 = DOI unknown to Unpaywall (a real "no OA"); anything else is OUR fault, so say so
-        # rather than let a broken request masquerade as a closed-access paper.
-        if exc.code != 404:
-            print(f"  warn: Unpaywall HTTP {exc.code} for {doi} — rung inconclusive, not 'closed'")
-        return None
-    except Exception as exc:  # network/JSON — likewise inconclusive
-        print(f"  warn: Unpaywall lookup failed for {doi}: {type(exc).__name__} — rung inconclusive")
-        return None
-    # `best_oa_location` often carries url_for_pdf=null (a repository landing page) while another
-    # location — commonly the publisher, for "bronze" OA — has the direct PDF. Walk them all.
     best = data.get("best_oa_location") or {}
     for loc in (best, *(data.get("oa_locations") or [])):
         pdf = (loc or {}).get("url_for_pdf")
@@ -245,7 +255,62 @@ def _unpaywall_pdf(doi: str) -> str | None:
     return None
 
 
-_unpaywall_pdf._warned = False  # type: ignore[attr-defined]
+# ── Harvard DASH — the 'pdf' URL is an HTML landing page; the real PDF is a bitstream inside it ──────
+_DASH_HOSTS = ("dash.harvard.edu", "nrs.harvard.edu")
+_DASH_BITSTREAM = re.compile(r"/bitstreams/[0-9a-fA-F-]+/download")
+
+
+def _dash_bitstream_url(landing_html: str) -> str | None:
+    """Extract the DASH bitstream download URL from a landing page's HTML, or None.
+
+    Harvard DASH answers its OA URL with an HTML *record* page even where Unpaywall lists it as the
+    `url_for_pdf`, so a naive fetch gets HTML and reports the paper paywalled even though its PDF is one
+    hop away. The real PDF is a `/bitstreams/<uuid>/download` link inside the page; take the first and
+    make it absolute. (Heuristic: a record with several bitstreams — e.g. a licence file — may need the
+    largest, but the article PDF is the first in practice.)
+    """
+    m = _DASH_BITSTREAM.search(landing_html)
+    return f"https://dash.harvard.edu{m.group(0)}" if m else None
+
+
+def _dash_landing_for_doi(doi: str) -> str | None:
+    """A Harvard DASH landing URL for this DOI from Unpaywall (dash.harvard.edu / nrs.harvard.edu), or
+    None. DASH lists its landing page under `url_for_pdf`/`url`, so scan every OA location's URLs."""
+    data = _unpaywall_json(doi)
+    if not data:
+        return None
+    for loc in ((data.get("best_oa_location") or {}), *(data.get("oa_locations") or [])):
+        for key in ("url_for_pdf", "url", "url_for_landing_page"):
+            u = (loc or {}).get(key)
+            if u and any(host in u for host in _DASH_HOSTS):
+                return u
+    return None
+
+
+async def _get_text(url: str) -> str | None:
+    """GET a URL via the honest session and return its decoded body (for landing-page HTML), or None."""
+    async with http.make_session() as session:
+        try:
+            resp = await session.get(url)
+        except Exception:
+            return None
+    content = resp.content if hasattr(resp, "content") else b""
+    return content.decode("utf-8", "replace") if content else None
+
+
+async def _fetch_dash(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
+    """Repository rung for Harvard DASH: resolve the landing page, extract its bitstream link, fetch the
+    real PDF. Complements the Unpaywall rung, which returns DASH's landing URL and fails on the HTML."""
+    landing = _dash_landing_for_doi(doi)
+    if not landing:
+        return [], None, None
+    html = await _get_text(landing)
+    if not html:
+        return [], None, None
+    pdf_url = _dash_bitstream_url(html)
+    if not pdf_url:
+        return [], None, None
+    return await _download_pdf(pdf_url, doi, "dash")
 
 
 async def _fetch_unpaywall(_conn: db.DBConn, doi: str, _hint: access.MethodHint) -> access.MethodResult:
@@ -269,6 +334,9 @@ CATALOG = [
     # it's the general fallback after the fast direct-journal rungs; the PMC OA subset is a further biomed-OA
     # backstop for the DOI→PMCID case Unpaywall occasionally misses.
     access.AccessMethod("unpaywall", cost_rank=2, run=_fetch_unpaywall),
+    # DASH lists a repository landing page as its 'pdf' URL, so the unpaywall rung above fetches HTML and
+    # fails; this rung follows the landing to its bitstream. Same cost tier, tried after unpaywall.
+    access.AccessMethod("dash", cost_rank=2, run=_fetch_dash),
     access.AccessMethod("pmc_oa", cost_rank=3, run=_fetch_pmc_oa),
 ]
 

@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Added
 
+- **A Harvard DASH rung in the paper-fetcher example.** DASH lists a repository *landing page* as an OA
+  copy's `url_for_pdf`, so the Unpaywall rung fetches HTML and the paper looks paywalled; the new `dash`
+  rung follows the landing to its `/bitstreams/<uuid>/download` link and fetches the real PDF. The
+  Unpaywall request is now factored into a shared `_unpaywall_json` helper so both rungs share one
+  honest failure story. (`examples/paper_fetcher.py`.)
+
 - **An outcome vocabulary for the access ladder.** `access_methods.status` now distinguishes
   `ok` · `unavailable` (the world says no) · `blocked` (we were refused) · `broken` (we are wrong) ·
   `failed` (a rung returned nothing and did not say why). A runner signals with `access.Unavailable`,

@@ -121,3 +121,43 @@ def test_pmc_oa_rung_stays_silent_when_there_is_no_pmc_record(monkeypatch) -> No
     monkeypatch.setattr(paper_fetcher, "_pmcid_for_doi", lambda _doi: None)
     records, _url, _hint = asyncio.run(paper_fetcher._fetch_pmc_oa(None, doi, None))
     assert records == []
+
+
+# ── the DASH rung: Unpaywall's 'pdf' URL is an HTML landing page; follow it to the bitstream ───────
+# DASH answers its OA URL with an HTML record page, so the unpaywall rung fetches HTML and fails; this
+# rung extracts the bitstream PDF link inside — otherwise the paper looks paywalled even though it's OA.
+
+_DASH_LANDING_HTML = (
+    '<html><body><h1>Ecometrics in the Age of Big Data</h1>'
+    '<a href="https://dash.harvard.edu/bitstreams/7312037d-953b-6bd4-e053-0100007fdf3b/download">PDF</a>'
+    "</body></html>"
+)
+
+
+def test_dash_bitstream_url_extracts_the_download_link_from_landing_html() -> None:
+    url = paper_fetcher._dash_bitstream_url(_DASH_LANDING_HTML)
+    assert url == "https://dash.harvard.edu/bitstreams/7312037d-953b-6bd4-e053-0100007fdf3b/download"
+
+
+def test_dash_bitstream_url_absolutizes_a_relative_href() -> None:
+    # DASH pages carry the link both absolute and relative; the extractor keys on the path so both work.
+    html = '<a href="/bitstreams/abc-123/download">download</a>'
+    assert paper_fetcher._dash_bitstream_url(html) == "https://dash.harvard.edu/bitstreams/abc-123/download"
+
+
+def test_dash_bitstream_url_returns_none_without_a_bitstream() -> None:
+    assert paper_fetcher._dash_bitstream_url("<html>no pdf here</html>") is None
+
+
+def test_dash_landing_is_found_only_for_a_dash_hosted_oa_copy(monkeypatch) -> None:
+    # A DASH-hosted OA copy is recognized by host; a non-DASH repository copy is not this rung's job.
+    monkeypatch.setenv("UNPAYWALL_EMAIL", "test@example.com")  # or _unpaywall_json short-circuits to None
+    dash_json = ('{"best_oa_location": {"url_for_pdf": '
+                 '"http://nrs.harvard.edu/urn-3:HUL.InstRepos:17692600"}, "oa_locations": []}')
+    _stub_oa_service(monkeypatch, dash_json)
+    assert paper_fetcher._dash_landing_for_doi("10.1177/0081175015576601") == \
+        "http://nrs.harvard.edu/urn-3:HUL.InstRepos:17692600"
+
+    other_json = '{"best_oa_location": {"url_for_pdf": "https://example.org/x.pdf"}, "oa_locations": []}'
+    _stub_oa_service(monkeypatch, other_json)
+    assert paper_fetcher._dash_landing_for_doi("10.1/other") is None
