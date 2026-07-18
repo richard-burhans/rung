@@ -28,6 +28,7 @@ dependencies = [
 
 [project.scripts]
 recon          = "rung.cli:recon_cmd"
+fetch-fx       = "rung.cli:fetch_fx_cmd"
 bootstrap-dutchie = "rung.cli:bootstrap_dutchie_cmd"
 bootstrap-pools = "rung.cli:bootstrap_pools_cmd"
 check-dutchie-hash = "rung.cli:check_dutchie_hash_cmd"

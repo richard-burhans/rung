@@ -12,18 +12,18 @@ rewritten, re-run, or re-scheduled freely as long as its contract holds.
 
 `R` = reads, `W` = writes, `W-cols` = writes only specific columns (see §4).
 
-| Stage | state_programs | dispensaries | companies | company_recon | company_stores | store_products | access_methods | jobs |
-|---|---|---|---|---|---|---|---|---|
-| search-states | W | | | | | | | |
-| find-lists | R, W-cols (`list_*`) | | | | | | | |
-| scrape-states | R | W (replace-by-state) | | | | | | |
-| seed-companies | | R | **W (owner)** | | | | | |
-| recon | | R | R | W | | | | |
-| scrape-company-stores | R | | R | R | W (keep-the-best) | | W | W |
-| dedupe-stores | | | R | | W-cols (`canonical_company_id`, `storefront_name`, coords) | W-col (`company_id` realign) | | W |
-| compare-stores | | R | R | | R | | | |
-| store-lifecycle | | | R | | R | | | |
-| scrape-menus | | | | | R | W (replace-by-store) | W | W |
+| Stage | state_programs | dispensaries | geocode_cache | companies | company_recon | company_stores | store_products | access_methods | jobs |
+|---|---|---|---|---|---|---|---|---|---|
+| search-states | W | | | | | | | | |
+| find-lists | R, W-cols (`list_*`) | | | | | | | | |
+| scrape-states | R | W (replace-by-state) + W-cols (geo restore) | R | | | | | | |
+| seed-companies | | R | | **W (owner)** | | | | | |
+| recon | | R | | R | W | | | | |
+| scrape-company-stores | R | | | R | R | W (keep-the-best) | | W | W |
+| dedupe-stores | | | | R | | W-cols (`canonical_company_id`, `storefront_name`, coords) | W-col (`company_id` realign) | | W |
+| compare-stores | | R | | R | | R | | | |
+| store-lifecycle | | | | R | | R | | | |
+| scrape-menus | | | | | | R | W (replace-by-store) | W | W |
 
 `store-lifecycle` additionally reads the append-only history tables `store_locations` +
 `store_observations` (not in the matrix — they are written only under `--record-history`, see §2/§3).
@@ -60,6 +60,15 @@ and not their contents.
 - **Out:** `dispensaries`, **replace-by-state**: `DELETE WHERE state = ?` then inserts — and the
   delete runs ONLY when extraction yielded ≥1 record, so a transient zero-yield never wipes prior
   good rows. Append via `db.insert_dispensary` (reference_db.py); commit per state.
+  - **Then `db.apply_geocode_cache(conn, "dispensaries", abbr)`, in the SAME commit** — reads
+    `geocode_cache`, writes back the derived `latitude`/`longitude`/`zip_code`/`city`. The
+    non-empty-replace guard above protects the *anticipated* failure (an empty scrape wiping good
+    rows) and is blind to the real one: a **successful** scrape wiping **derived** rows, because the
+    source republishes only what the source publishes. For a roster with a street but no ZIP (NV, IL,
+    UT, MD) that silently un-matched the state — `compare`'s two keys BOTH carry the ZIP. Each column
+    is restored only where it `IS NULL`, so a source-published value is never overwritten. Costs no
+    geocoder calls. Enforced across all three delete+reinsert callers by
+    `tests/test_roster_replace_restores_geocode.py`.
   - `store_locations` + `store_observations` via `extract.record_roster_observations` **only under
     `--record-history`** — the `state_roster` leg of the store-lifecycle history (same shared engine,
     `db.record_location_observations`, as Stage 2's `company_site` leg), appended inside the same
@@ -74,11 +83,26 @@ and not their contents.
 - **Re-run:** additive only.
 
 ### recon — `rung_intel/recon.py`
-- **In:** `companies.id/canonical_name` (per state); `dispensaries.name/website` (homepage
+- **In:** `companies.id/canonical_name` (per state); `dispensaries.name/**city**/website` (homepage
   derivation); `company_homepages.yml` overrides.
 - **Out:** `company_recon` full-row upsert per company (`db.upsert_recon`, reference_db.py). Failure is a
   row with `error` set; success has `error IS NULL` + `platform`/`confidence`.
 - **Re-run:** re-probes and overwrites; safe.
+- **The website index MUST be keyed exactly as `seed_companies` keys a company** — `normalize_brand(
+  extract_brand(name, city))` — **and the stored `canonical_name` must be re-passed through
+  `extract_brand` before lookup, not merely normalized.** It is a string written by whatever
+  `extract_brand` looked like the day that company was seeded, so comparing it raw against a
+  freshly-derived key compares an old fold with a new one. Both mismatches were live: the roster row
+  "Fresh Elizabeth" filed its website under a key the lookup never asked for, and recorded `no_url` —
+  *our* key mismatch, persisted as a fact about the operator ("it publishes no website") while the
+  roster published it.
+- **`company_recon` is DERIVED FROM the roster and nothing re-derives it when the roster changes.**
+  Recon is a *snapshot* of the read. NJ's roster was repaired 2026-07-09 (3 rows → 317) and re-scraped
+  07-12; recon last ran **06-17**, when NJ had no roster and hence no websites, and recorded `no_url`
+  for 209 of 215 companies. Re-running it took NJ from **3 → 91** homepages. `coverage_healthcheck`'s
+  `recon_stale` check now fails when recon predates the roster that fed it — it deliberately stays
+  silent for CO/MT/NV, whose rosters publish **no** website column at all, so their `no_url` is a
+  *correct* verdict rather than an expired one.
 
 ### scrape-company-stores — `rung_intel/company_stores.py`
 - **In:** `db.get_recon_companies_for_state` (reference_db.py): recon rows with `error IS NULL AND

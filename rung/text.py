@@ -31,14 +31,74 @@ _EM_DASH = "—"
 # abbreviations, legal suffixes, locations, or restatements. (No clean-source canonical_name
 # contains ';', so this never affects PA/IL/OH/MD/FL.)
 _ALIAS_DELIM_RE = re.compile(r"\s*[;,]\s*")
+# " at " as a storefront-location separator ("Value Buds at Baseline Village"), folded like " - "
+# but guarded (see extract_brand) because "at" is a common word.
+_AT_SEPARATOR_RE = re.compile(r"\s+at\s+", re.IGNORECASE)
 _ARTICLES = frozenset({"the", "a", "an"})
 # A single trailing generic descriptor, stripped once so "Swade Cannabis Dispensary" and
 # "Swade Cannabis" collapse to the same operator. Order matters (longest first).
+# Longest alternatives FIRST — regex alternation is first-match, so "medical marijuana dispensary"
+# must precede "marijuana dispensary", which must precede "dispensary". Get this order wrong and
+# "RISE Medical Marijuana Dispensary" strips to "RISE Medical" instead of "RISE".
 _TRAILING_GENERIC_RE = re.compile(
-    r"\s+(?:cannabis\s+dispensary|marijuana\s+dispensary|cannabis\s+shop|dispensaries|"
+    r"\s+(?:medical\s+marijuana\s+dispensary|medical\s+cannabis\s+dispensary|medical\s+dispensary|"
+    r"cannabis\s+dispensary|marijuana\s+dispensary|cannabis\s+shop|dispensaries|"
     r"dispensary|marijuana|cannabis|marketplace)$",
     re.IGNORECASE,
 )
+
+# A trailing LEGAL-ENTITY suffix — the licensee/storefront gap, and the reason a state roster and an
+# operator's own site describe the same shop under two names.
+#
+# A licence is issued to a legal person ("ADEGOKE HOLDINGS LLC", "Patriot Care Corp", "Smacked LLC");
+# the shop trades under a brand ("Adegoke", "Patriot Care", "Smacked"). The roster files the former and
+# the company's own site publishes the latter, so the two never key together and BOTH sides report a
+# phantom — ours as `site_only` ("the state list is missing this store"), the roster's as `state_only`
+# ("possible closure"). Measured on the live DB, 2026-07-14: stripping this recovers **324 roster rows
+# across 18 jurisdictions** (MT 96, NY 76, MA 44, CO 26, CA 23, OR 23, …).
+#
+# Stripped REPEATEDLY and BEFORE the generic descriptor, because both stack in one name:
+# "FLOYD'S CANNABIS COMPANY" -> (legal) "FLOYD'S CANNABIS" -> (generic) "FLOYD'S", which is what the
+# company's own site calls it. Repeat because "Aurora Cannabis Enterprises Inc." carries two.
+#
+# Every strip is guarded by `_keeps_a_brand`, and that guard is load-bearing here: "Elixir Holdings"
+# folds to "Elixir", so a strip that ate the whole name would collapse unrelated licensees into one
+# phantom operator — the same failure the numeric guard exists to prevent.
+_LEGAL_ENTITY_RE = re.compile(
+    r"[,\s]+(?:l\.?l\.?c\.?|inc\.?|incorporated|corp\.?|corporation|co\.|company|holdings?|group|"
+    r"enterprises?|ventures?|partners|l\.?l\.?p\.?|lp|ltd\.?|limited|management|properties|"
+    r"investments?)\.?$",
+    re.IGNORECASE,
+)
+
+
+def _is_bare_generic(value: str) -> bool:
+    """True when `value` is *only* a generic descriptor — "Cannabis", "Dispensary", "Marijuana".
+
+    Such a string is not a brand; it is the word every brand contains. Keying on it folds unrelated
+    operators into one phantom company — the same failure `_keeps_a_brand` refuses for bare numbers.
+    `_TRAILING_GENERIC_RE` needs leading whitespace, so probe it against a padded copy.
+    """
+    return not _TRAILING_GENERIC_RE.sub("", f" {value}").strip()
+
+
+def strip_legal_entity(name: str) -> str:
+    """Drop trailing legal-entity suffixes ("Adegoke Holdings LLC" -> "Adegoke"), repeatedly.
+
+    **Never eats the name.** Two strips are refused, and the second was found by measuring the fold
+    against the live roster rather than by imagining it:
+
+    * one that leaves nothing usable (`_keeps_a_brand`) — "Holdings LLC" stays as it is;
+    * one that leaves a **bare generic** — BC's *"Cannabis Co."* would strip to *"Cannabis"* and
+      collide with *"Cannabis 247"*, merging two unrelated licensees into one phantom operator. The
+      suffix is only noise when a real brand survives it.
+    """
+    current = name.strip()
+    while True:
+        stripped = _LEGAL_ENTITY_RE.sub("", current).strip(" ,.")
+        if stripped == current or not _keeps_a_brand(stripped) or _is_bare_generic(stripped):
+            return current
+        current = stripped
 
 
 def load_company_aliases(path: Path, *, strict: bool = False) -> dict[str, str]:
@@ -67,6 +127,23 @@ def load_company_aliases(path: Path, *, strict: bool = False) -> dict[str, str]:
             continue
         for alias in names:
             aliases[str(alias)] = str(canonical)
+
+    # Index every alias under its FOLDED form too, because that is the key it will be looked up by.
+    #
+    # Callers look aliases up with `extract_brand(name)` as the key. Many aliases here are written in
+    # the licence roster's own words — "Diamond Star Group inc." folds to Dankley, "Delta 9 Pittsburgh"
+    # to Sunnyside — so once `extract_brand` learned to strip the legal-entity suffix, it started
+    # handing the lookup "Diamond Star" while this map was still keyed on "Diamond Star Group inc.".
+    # The alias silently stopped folding and the operator split back into two companies. Registering
+    # both spellings keeps a legal-entity-shaped alias working, and costs nothing when the alias is
+    # already a bare brand.
+    #
+    # `setdefault`: an explicit alias always wins over a derived one, so a fold can never quietly
+    # re-point an alias that companies.yml states outright.
+    for alias, canonical in list(aliases.items()):
+        folded = extract_brand(alias)
+        if folded and folded != alias:
+            aliases.setdefault(folded, canonical)
     return aliases
 
 
@@ -256,6 +333,21 @@ def normalize_category(raw: str | None, name: str | None = None) -> str | None:
     return base
 
 
+def category_overridden(raw: str | None, name: str | None) -> bool:
+    """True when :func:`normalize_category` CORRECTED the category from the NAME, not the raw category.
+
+    The same shape as :func:`product_type_defaulted`: ``category_std`` conflates two provenances. When
+    the platform's raw ``category`` decides the bucket, the label is the platform's own. When
+    ``category_name_overrides.yml`` fires — a capsule the platform sold as an "edible", a disposable it
+    called a "cartridge" — the bucket is OUR correction from the product name, and downstream the two are
+    spelled identically. The override is a defensible correction, not an observation of what the platform
+    published; an analysis of platform mislabeling (or one that trusts ``category_std`` as the platform's
+    voice) must be able to tell them apart. Recomputes the raw-only base and asks whether the name flips it.
+    """
+    base = normalize_category(raw, None)
+    return bool(name) and _override_category(name, base) is not None
+
+
 # ── product-type normalization (the 2nd-level `product_type_std` standard) ──────
 
 _PRODUCT_TYPE_ALIASES_PATH = Path(__file__).parent / "data" / "product_type_aliases.yml"
@@ -320,6 +412,39 @@ def normalize_product_type(
     return (_product_type_defaults_cache or {}).get(category_std or "", "Unspecified")
 
 
+def product_type_defaulted(
+    name: str | None, category: str | None, category_std: str | None
+) -> bool:
+    """True when :func:`normalize_product_type` MANUFACTURED the label from absence rather than reading it.
+
+    **This is the `strain_type` bug's shape, and it lives in our own code.** Weedmaps shipped a *defaulted*
+    lineage field — 98.2% "Indica" — we read it as an observation, and we retracted a whole finding (E1)
+    when it turned out to be a platform default. `_defaults` in `product_type_aliases.yml` does the same
+    thing on our side of the wire: when no keyword matches, `Flower` becomes **`Bud`**, `Pre-Roll` becomes
+    **`Single`**. **759,927 flower rows — 82.5% of them — carry a `Bud` that no name ever said**, and
+    downstream it is indistinguishable from a `Bud` we actually read.
+
+    The label is a defensible *prior* ("an unqualified flower is probably whole bud"). It is not an
+    observation, and the two must not be spelled the same. `bowker-star_1999_sorting-things-out` names the
+    failure exactly — a residual category that has been quietly promoted into a positive assertion — and
+    the fix it licenses is this predicate: keep the convenient default, but let every consumer *know* it
+    was a default. An analysis that reports "82% of flower is whole bud" is otherwise reporting our
+    fallback rule, not the market.
+    """
+    global _product_type_rules_cache, _product_type_defaults_cache
+    if _product_type_rules_cache is None:
+        _product_type_rules_cache = load_product_type_rules()
+        _product_type_defaults_cache = load_product_type_defaults()
+    rules = _product_type_rules_cache.get(category_std or "")
+    if rules is None:
+        return False                       # no rules for this category: nothing was manufactured
+    key = _category_key(f"{name or ''} {category or ''}")
+    if any(kw and kw in key for product_type, keywords in rules for kw in keywords):
+        return False                       # a keyword actually matched — this label was READ
+    # No match. It was defaulted iff this category HAS a default (else it is an honest "Unspecified").
+    return (category_std or "") in (_product_type_defaults_cache or {})
+
+
 # ── strain-type normalization (the cross-platform `strain_type_std` standard) ──
 
 _STRAIN_ALIASES_PATH = Path(__file__).parent / "data" / "strain_aliases.yml"
@@ -351,6 +476,25 @@ def normalize_strain_type(raw: str | None) -> str | None:
     raw value, else **None**. Unlike normalize_category's "Other" fallback, no-match is None —
     the raw column is polluted with product categories and bare strain names, so an unmatched
     value means "no recognizable strain type", not a residual bucket.
+
+    **This field is a MARKETING label, not a taxon, and the field's own standard reference says so.**
+    Clarke & Merlin's *Cannabis: Evolution and Ethnobotany* (the monograph the sativa/indica literature
+    rests on) concludes that **C. sativa is the HEMP species and ALL drug varieties are C. indica** —
+    "we now know that all drug varieties, regardless of their origin or gross phenotype, belong to
+    Cannabis indica" (Ch.10, pp.300-301). A retail "sativa" is *C. indica* ssp. *indica*; a retail
+    "indica" is ssp. *afghanica*. **Both poles of the contrast are one species.** The vocabulary has a
+    datable, non-taxonomic origin: late-1970s growers called narrow-leaflet varieties "sativas" because
+    they *resembled* NLH varieties in gross phenotype — leaflet-shape shorthand, never a determination.
+    By the mid-1980s "the vast majority of all illicitly produced sinsemilla had probably received some
+    portion of its genome from the BLD gene pool" (p.301) — the names lost their referent because the
+    populations merged.
+
+    So: normalize it, search on it, never treat it as lineage. Two independent reasons, and they stack —
+    the vocabulary names no taxon (above), **and** the raw field is defaulted on at least one platform
+    (Weedmaps: 98.2% "Indica", ~296k wrong rows; a lineage finding built on it was retracted, which is
+    why ``reference_db.TRUSTED_LINEAGE_WHERE`` exists). See
+    ``research/papers_md/summaries/clarke-merlin_2013_evolution-ethnobotany.md`` and
+    ``reports/synthesis/identity_and_chemovars.md``.
     """
     global _strain_rules_cache
     if not raw or not raw.strip():
@@ -362,6 +506,70 @@ def normalize_strain_type(raw: str | None) -> str | None:
         _strain_rules_cache = load_strain_rules()
     for canonical, keywords in _strain_rules_cache:
         if any(kw and kw in key for kw in keywords):
+            return canonical
+    return None
+
+
+# ── obtention normalization (the `obtention_std` facet) ──────────────────────────────────────────
+
+_OBTENTION_ALIASES_PATH = Path(__file__).parent / "data" / "obtention_aliases.yml"
+_obtention_rules_cache: list[tuple[str, tuple[str, ...], re.Pattern[str] | None]] | None = None
+
+
+def load_obtention_rules(
+    path: Path = _OBTENTION_ALIASES_PATH,
+) -> list[tuple[str, tuple[str, ...], re.Pattern[str] | None]]:
+    """Ordered ``[(canonical, (contains_kw, ...), words_re | None), ...]`` from obtention_aliases.yml.
+
+    YAML key order is the match PRIORITY. Two keyword kinds, and the split is not cosmetic:
+    ``contains`` matches a substring of the ALNUM-NORMALIZED text (so "In fused" -> "infused");
+    ``words`` matches whole words against the RAW text, because alnum-normalization joins words and
+    manufactures substrings — "Panda: Blue Sugar" contains "dab".
+    """
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a mapping at the top level of {path}")
+    rules: list[tuple[str, tuple[str, ...], re.Pattern[str] | None]] = []
+    for canonical, spec in data.items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"{path}: {canonical!r} must map to `contains:`/`words:` lists")
+        contains = tuple(_category_key(str(k)) for k in (spec.get("contains") or []))
+        words = [re.escape(str(w)) for w in (spec.get("words") or [])]
+        pattern = re.compile(rf"\b(?:{'|'.join(words)})\b", re.IGNORECASE) if words else None
+        rules.append((str(canonical), contains, pattern))
+    return rules
+
+
+def normalize_obtention(name: str | None, category: str | None) -> str | None:
+    """The obtention method a product's NAME or RAW category declares — else ``None``.
+
+    Answers one question: *did the cannabinoids in this product come from the plant as grown?*
+    ``Infused`` = added to the bud; ``Extracted`` = taken out of the plant; ``None`` = **neither the
+    name nor the raw category says**.
+
+    **There is no ``Natural`` value, deliberately.** 96.35% of Flower rows (903,819 of 938,042,
+    measured 2026-07-16) declare no obtention method, and stamping those ``Natural`` would manufacture
+    903,819 observations nobody made. That is the failure this project has shipped twice — Weedmaps
+    ``strain_type`` defaulted to "Indica" (the E1 retraction) and our own ``product_type_std``
+    ``_defaults`` putting a "Bud" on 759,927 rows no name ever said. So the vocabulary is positive-only,
+    and ``reference_db.NATURAL_FLOWER_WHERE`` asks ``obtention_std IS NULL`` — "the source called this
+    Flower and nothing contradicts it", which is a claim we can actually defend.
+
+    Reads the platform's **raw** ``category``, never ``category_std``: 267 Flower rows carry the signal
+    only there ("Infused Flower", "Moonrocks"). Deriving this facet from ``category_std`` would make it
+    a function of the conflated field it exists to disentangle (see reports/obtention_facet_design.md).
+    """
+    global _obtention_rules_cache
+    raw = " ".join(p for p in (name, category) if p)
+    if not raw.strip():
+        return None
+    if _obtention_rules_cache is None:
+        _obtention_rules_cache = load_obtention_rules()
+    key = _category_key(raw)
+    for canonical, contains, words_re in _obtention_rules_cache:
+        if any(kw and kw in key for kw in contains):
+            return canonical
+        if words_re is not None and words_re.search(raw):
             return canonical
     return None
 
@@ -398,6 +606,50 @@ def normalize_terpene(raw: str | None) -> str | None:
 # ("Harvest of Whitehall", "Green Cross of …") — don't strip the city in that case.
 _CITY_CONNECTORS = frozenset({"of", "the", "at", "on", "in", "and", "by", "a", "&"})
 
+# ── store-level suffixes ─────────────────────────────────────────────────────────────────────────
+# A state roster names the LICENSEE of each STORE, so a multi-store operator arrives as many names
+# that differ only by a per-store tail: "ONE PLANT BARRIE (CUNDLES)", "ONE PLANT 3003 DANFORTH",
+# "CURALEAF GROTON LLC". `seed-companies` derives `companies` from that roster, so each became its
+# own COMPANY — and Stage 2 then scraped the operator's ONE homepage once per company, giving each
+# the operator's FULL store list. Measured 2026-07-13: 6,906 of 22,074 company_stores rows (31%) are
+# a redundant copy of a rooftop another "company" already holds, and Ontario's One Plant alone
+# fragmented into ~15 companies.
+#
+# So the brand fold has to strip a store-level tail, not just a city. Each rule below is deliberately
+# narrow — a false merge joins two REAL operators, which is far worse than leaving one fragmented.
+
+# A trailing parenthetical: "ONE PLANT BARRIE (CUNDLES)" -> "ONE PLANT BARRIE".
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+# NOTE: no legal-entity rule here. A trailing "LLC"/"Inc." is a per-store legal entity and DOES
+# fragment an operator ("CURALEAF GROTON LLC") — but `companies.yml` aliases are the designed
+# mechanism for it, and they key on the FULL name including the suffix ("Diamond Star Group inc." ->
+# Dankley). Stripping it here makes those alias keys miss, which seeds the entity as its OWN company:
+# the exact fragmentation we are trying to remove. Fold legal entities in companies.yml, or teach the
+# alias map to match on a stripped key first — do not strip it out from under the map.
+
+# A trailing street address or store number: "ONE PLANT 3003 DANFORTH", "HIGH CANNABIS 12467".
+# Requires THREE+ digits so a number that is part of the brand survives — "Cloud 9", "Green 2 Go",
+# and (crucially) "Score 420 Alamogordo", whose 420 is mid-name and never trailing anyway.
+_TRAILING_ADDRESS_RE = re.compile(r"\s+\d{3,}[A-Za-z0-9 .,'\-]*$")
+
+
+def _strip_store_suffix(brand: str) -> str:
+    """Drop one store-level tail (a parenthetical or a trailing street address) from a brand.
+
+    Applied longest-first and guarded: a rule only fires if what remains is still a plausible brand
+    (≥3 chars, contains a letter, and does not end on a dangling connector). Never empties the name —
+    leaving an operator fragmented is the safe failure; merging two real operators is not.
+    """
+    for rule in (_TRAILING_PAREN_RE, _TRAILING_ADDRESS_RE):
+        folded = rule.sub("", brand).strip().rstrip(",")
+        if folded == brand:
+            continue
+        last = folded.lower().rsplit(" ", 1)[-1] if folded else ""
+        if len(folded) >= 3 and any(ch.isalpha() for ch in folded) and last not in _CITY_CONNECTORS:
+            brand = folded
+    return brand
+
 
 def _strip_storefront_city(brand: str, city: str | None) -> str:
     """Drop a trailing storefront city — "Zen Leaf Dayton" (+ own city "Dayton") -> "Zen Leaf".
@@ -422,6 +674,22 @@ def _strip_storefront_city(brand: str, city: str | None) -> str:
     return folded
 
 
+def _keeps_a_brand(stripped: str) -> bool:
+    """True when what remains after a generic-descriptor strip is still a usable brand.
+
+    Three ways a strip can eat the name, and all three have been observed in the roster:
+
+    * **nothing left** — the name *was* the descriptor;
+    * **a bare article** — "The Dispensary" must stay "The Dispensary", not become "The";
+    * **no letters left** — "123 Cannabis" must stay "123 Cannabis", not become "123". A brand that is
+      a bare number folds every unrelated numeric name in the state into one phantom company, which is
+      the very failure this whole area exists to prevent.
+    """
+    if not stripped or stripped.lower() in _ARTICLES:
+        return False
+    return any(ch.isalpha() for ch in stripped)
+
+
 def extract_brand(name: str, city: str | None = None) -> str:
     """Extract the company brand from a full dispensary name.
 
@@ -444,8 +712,80 @@ def extract_brand(name: str, city: str | None = None) -> str:
         normalized = normalized.split(" - ")[0].strip()
     elif "- " in normalized:
         normalized = normalized.split("- ")[0].strip()
-    # Drop one trailing generic descriptor, but never reduce the name to nothing or to a bare
-    # article ("The Dispensary" must stay "The Dispensary", not collapse to "The").
+    # " at <storefront location>" is the separator some rosters use where the operator's own site
+    # uses " - " — the AGLC files "Value Buds at Baseline Village"; the site is "Value Buds - Baseline
+    # Village". Fold it the same way so both sides bucket to one operator. BUT "at" is a common word,
+    # so guard on the prefix still reading as a brand: "Cannabis at the Green Brier" must NOT collapse
+    # to the bare generic "Cannabis" (measured: 64/68 " at " names corpus-wide are this AB storefront
+    # pattern; the 4 others fold correctly and the guard protects the lone bare-generic case).
+    elif _AT_SEPARATOR_RE.search(normalized):
+        candidate = _AT_SEPARATOR_RE.split(normalized, maxsplit=1)[0].strip()
+        # Guard on the prefix surviving a generic strip as a real brand — "California Street Cannabis"
+        # keeps "California Street", but a bare "Cannabis" strips to nothing, so "Cannabis at the Green
+        # Brier" must NOT collapse into the mega-generic "Cannabis" bucket. The leading space lets the
+        # (space-anchored) generic regex also catch a candidate that is ITSELF a lone generic word.
+        if candidate and _keeps_a_brand(_TRAILING_GENERIC_RE.sub("", " " + candidate).strip()):
+            normalized = candidate
+    # Drop the legal-entity suffix BEFORE the generic one — a licence roster stacks both
+    # ("FLOYD'S CANNABIS COMPANY"), and the generic strip only ever looks at the END of the name, so
+    # a "Cannabis" hiding behind a "Company" is invisible to it. Same ordering lesson as the
+    # storefront-city fold below, which fragmented one Virginia operator into ten companies.
+    normalized = strip_legal_entity(normalized)
+    # Drop one trailing generic descriptor, subject to the guards in `_keeps_a_brand`.
     stripped = _TRAILING_GENERIC_RE.sub("", normalized).strip()
-    brand = stripped if stripped and stripped.lower() not in _ARTICLES else normalized
-    return _strip_storefront_city(brand, city)
+    brand = stripped if _keeps_a_brand(stripped) else normalized
+    # Store-level tail LAST, so it cannot cascade into the generic strip: "Ziggyz Cannabis
+    # (MacArthur)" must fold to "Ziggyz Cannabis" (the brand), not to "Ziggyz" — the parenthetical
+    # is the store, "Cannabis" is part of the name.
+    brand = _strip_store_suffix(brand)
+    folded = _strip_storefront_city(brand, city)
+
+    # ONLY IF THE CITY WAS ACTUALLY REMOVED, look for a descriptor it was hiding.
+    #
+    # The generic strip above only ever sees the END of the name, so a descriptor sitting *behind* a
+    # storefront city is invisible to it: "RISE Dispensaries Abingdon" -> (city) -> "RISE Dispensaries",
+    # with the descriptor now exposed and never re-examined. That single ordering bug fragmented ONE
+    # operator into TEN companies in Virginia ("RISE Dispensaries Abingdon", "RISE Dispensary Abingdon",
+    # "RISE Medical Marijuana Dispensary Salem", …) — the same shape as the Ontario fragmentation, and
+    # the W2 event study clusters on the operator, so ten phantom firms is not a cosmetic problem.
+    #
+    # The `folded != brand` guard is load-bearing, and is exactly the cascade the store-suffix fix warned
+    # about: re-stripping unconditionally turns "Ziggyz Cannabis (MacArthur)" into "Ziggyz", when the
+    # brand really is "Ziggyz Cannabis" — no city was removed there, so nothing was hidden, so the first
+    # pass's verdict stands. We re-examine only what the city strip newly exposed.
+    if folded != brand:
+        restripped = _TRAILING_GENERIC_RE.sub("", folded).strip()
+        if _keeps_a_brand(restripped):
+            folded = restripped
+    return folded
+
+
+def geocode_query(address: str | None, city: str | None,
+                  state: str | None, zip_code: str | None) -> str | None:
+    """The one-line US address to geocode, or None when the row is too sparse to match.
+
+    Needs a street plus at least a city, a ZIP, or a state. A street + state alone is ambiguous in a
+    large state ("123 Main St, TX"), so a caller only trusts such a query when the geocoder returns
+    exactly ONE match. That is what lets DC's roster (street only, no city, no ZIP) resolve, DC being
+    a single city.
+
+    **This doubles as the `geocode_cache` key, and that is why it lives here rather than in the
+    backfill script** — the key must be computed identically by the writer (the backfill) and the
+    reader (the post-re-scrape restore), so there is exactly one definition of it.
+
+    The invariant that makes the cache hit: both paths key a row while it carries only what its
+    SOURCE published. A roster row is geocoded precisely because it arrives with no ZIP, and the
+    restore runs immediately after the re-scrape re-inserts it — both times the derived columns are
+    still NULL, so both compute the same string. (A second backfill over an already-enriched row
+    would key it differently and write a redundant cache entry; harmless, since the restore still
+    looks up the source-only key.)
+    """
+    if not address or not (city or zip_code or state):
+        return None
+    parts = [" ".join(address.split())]
+    if city:
+        parts.append(" ".join(city.split()))
+    locality = " ".join(p for p in ((state or "").strip(), (zip_code or "").strip()) if p)
+    if locality:
+        parts.append(locality)
+    return ", ".join(parts)

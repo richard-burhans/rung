@@ -87,14 +87,29 @@ class StoreProductRecord:
     brand: str | None = None
     category: str | None = None          # the platform's raw category string (preserved)
     category_std: str | None = None      # canonical cross-platform category (text.normalize_category)
+    # True when `category_std` was CORRECTED from the product NAME (category_name_overrides.yml)
+    # rather than read from the platform's raw category — a capsule the platform bucketed as an
+    # "edible", a disposable it called a "cartridge". The override is a defensible correction, not
+    # the platform's own label, and an analysis of platform categorization must tell them apart.
+    # Same shape as `product_type_defaulted`. See `text.category_overridden`.
+    category_overridden: bool | None = None
     strain_type: str | None = None      # the platform's raw strain string (preserved)
     strain_type_std: str | None = None  # canonical lineage facet (text.normalize_strain_type):
     # Indica | Sativa | Hybrid | CBD | None — None when the raw value is a category word or a
     # bare strain/brand name (the raw column is polluted), not a forced bucket.
     product_type_std: str | None = None  # canonical 2nd-level product type within category_std
+    # True when `product_type_std` was MANUFACTURED from absence (the category's `_defaults` label
+    # fired because no keyword matched) rather than read from the name. A defaulted label is a
+    # prior, not an observation — see `text.product_type_defaulted` and the E1 retraction.
+    product_type_defaulted: bool | None = None
     # (text.normalize_product_type from the name + raw category): e.g. Concentrate -> Live Resin,
     # Vape -> Cartridge, Edible -> Gummies. "Unspecified" within a covered category whose name
     # carries no form; None for categories not yet covered (see docs/product_type_hierarchy.md).
+    # Infused | Extracted | None — the obtention method the NAME or the RAW category declares.
+    # NOTE there is no `Natural`: None means "neither said", never "we determined it is unadulterated".
+    # 96.35% of Flower rows say nothing, so a `Natural` here would be 903,819 manufactured
+    # observations — the same shape as `product_type_defaulted` above. See `text.normalize_obtention`.
+    obtention_std: str | None = None
     price: float | None = None          # lowest current shelf price across variants
     size_g: float | None = None         # representative weight in grams (normalize.enrich_record):
     # the smallest variant size — None for count-priced products (edibles sold "each"). Per-variant
@@ -112,6 +127,11 @@ class StoreProductRecord:
     # alias names folded, α+β-pinene summed, mg/g converted to %; terp_total = their sum.
     terpenes_std: dict | None = None
     terp_total: float | None = None
+    # True when normalize_terpenes ALTERED the raw values to produce terpenes_std/terp_total: a lone
+    # spurious spike dropped, an unlabeled mg/g row rescaled ÷10, or a single terpene above the
+    # per-terpene ceiling dropped. A repaired row's numbers are our corrections, not the platform's
+    # published profile — and they feed D1's ICC/variance flagship. See `normalize.terpenes_repaired`.
+    terpenes_repaired: bool | None = None
     # Minor cannabinoids beyond the thc/cbd headline, as a canonical {NAME: percent} map
     # (e.g. {"CBG": 0.37, "CBN": 0.1, "CBC": 0.2}); percent-only, only the entries a platform
     # publishes. Captured where the menu exposes per-cannabinoid values (Jane lab_results,

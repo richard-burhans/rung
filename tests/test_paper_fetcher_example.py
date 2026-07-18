@@ -20,6 +20,10 @@ def test_url_routing_matches_doi_prefix_to_host() -> None:
     assert "frontiersin.org" in paper_fetcher._url_for("frontiers", "10.3389/fpls.2021.699530")
     assert "biomedcentral.com" in paper_fetcher._url_for("bmc", "10.1186/s42238-019-0001-1")
     assert "arxiv.org/pdf/2606.14525" in paper_fetcher._url_for("arxiv", "10.48550/arXiv.2606.14525")
+    # ACS: Unpaywall lists only the DOI landing page (HTML), so the direct /doi/pdf/ route is its own rung.
+    assert paper_fetcher._url_for("acs", "10.1021/acs.jnatprod.9b01200") == \
+        "https://pubs.acs.org/doi/pdf/10.1021/acs.jnatprod.9b01200"
+    assert paper_fetcher._url_for("acs", "10.1371/journal.pone.0282396") is None
 
 
 def test_url_routing_returns_none_for_wrong_host() -> None:
@@ -123,9 +127,11 @@ def test_pmc_oa_rung_stays_silent_when_there_is_no_pmc_record(monkeypatch) -> No
     assert records == []
 
 
-# ── the DASH rung: Unpaywall's 'pdf' URL is an HTML landing page; follow it to the bitstream ───────
-# DASH answers its OA URL with an HTML record page, so the unpaywall rung fetches HTML and fails; this
-# rung extracts the bitstream PDF link inside — otherwise the paper looks paywalled even though it's OA.
+# ── the dspace rung: Unpaywall's repository 'url' is an HTML landing page; follow it to the bitstream ──
+# A DSpace-7 repository (Harvard DASH, RiuNet/UPV, …) answers its OA URL with an HTML record page, so the
+# unpaywall rung fetches HTML and fails; this HOST-AGNOSTIC rung extracts the /bitstreams/<uuid>/download
+# PATH inside and absolutizes it against the host the landing resolved to — otherwise the paper looks
+# paywalled even though it is OA.
 
 _DASH_LANDING_HTML = (
     '<html><body><h1>Ecometrics in the Age of Big Data</h1>'
@@ -134,30 +140,91 @@ _DASH_LANDING_HTML = (
 )
 
 
-def test_dash_bitstream_url_extracts_the_download_link_from_landing_html() -> None:
-    url = paper_fetcher._dash_bitstream_url(_DASH_LANDING_HTML)
-    assert url == "https://dash.harvard.edu/bitstreams/7312037d-953b-6bd4-e053-0100007fdf3b/download"
+def test_bitstream_path_extracts_the_download_path_from_landing_html() -> None:
+    assert paper_fetcher._bitstream_path(_DASH_LANDING_HTML) == \
+        "/bitstreams/7312037d-953b-6bd4-e053-0100007fdf3b/download"
 
 
-def test_dash_bitstream_url_absolutizes_a_relative_href() -> None:
-    # DASH pages carry the link both absolute and relative; the extractor keys on the path so both work.
-    html = '<a href="/bitstreams/abc-123/download">download</a>'
-    assert paper_fetcher._dash_bitstream_url(html) == "https://dash.harvard.edu/bitstreams/abc-123/download"
+def test_bitstream_path_extracts_a_relative_href() -> None:
+    # RiuNet (UPV) and other DSpace-7 repos carry the link relative; the extractor keys on the PATH.
+    assert paper_fetcher._bitstream_path('<a href="/bitstreams/abc-123/download">download</a>') == \
+        "/bitstreams/abc-123/download"
 
 
-def test_dash_bitstream_url_returns_none_without_a_bitstream() -> None:
-    assert paper_fetcher._dash_bitstream_url("<html>no pdf here</html>") is None
+def test_bitstream_path_returns_none_without_a_bitstream() -> None:
+    assert paper_fetcher._bitstream_path("<html>no pdf here</html>") is None
 
 
-def test_dash_landing_is_found_only_for_a_dash_hosted_oa_copy(monkeypatch) -> None:
-    # A DASH-hosted OA copy is recognized by host; a non-DASH repository copy is not this rung's job.
-    monkeypatch.setenv("UNPAYWALL_EMAIL", "test@example.com")  # or _unpaywall_json short-circuits to None
-    dash_json = ('{"best_oa_location": {"url_for_pdf": '
-                 '"http://nrs.harvard.edu/urn-3:HUL.InstRepos:17692600"}, "oa_locations": []}')
-    _stub_oa_service(monkeypatch, dash_json)
-    assert paper_fetcher._dash_landing_for_doi("10.1177/0081175015576601") == \
-        "http://nrs.harvard.edu/urn-3:HUL.InstRepos:17692600"
+def test_absolutize_uses_the_resolved_host_not_a_hardcoded_one() -> None:
+    # The generalization: the origin comes from the host the landing resolved to, so a non-Harvard
+    # repository (RiuNet) absolutizes correctly — the Harvard-only rung could not do this.
+    path = "/bitstreams/abc-123/download"
+    assert paper_fetcher._absolutize(path, "https://dash.harvard.edu/handle/1/2") == \
+        "https://dash.harvard.edu/bitstreams/abc-123/download"
+    assert paper_fetcher._absolutize(path, "https://riunet.upv.es/entities/publication/xyz") == \
+        "https://riunet.upv.es/bitstreams/abc-123/download"
+    assert paper_fetcher._absolutize(path, "not-a-url") is None
 
-    other_json = '{"best_oa_location": {"url_for_pdf": "https://example.org/x.pdf"}, "oa_locations": []}'
-    _stub_oa_service(monkeypatch, other_json)
-    assert paper_fetcher._dash_landing_for_doi("10.1/other") is None
+
+def test_repo_landings_finds_any_repository_not_just_harvard(monkeypatch) -> None:
+    monkeypatch.setenv("UNPAYWALL_EMAIL", "test@example.com")
+    # A non-Harvard repository copy (RiuNet handle, host_type=repository) IS now this rung's job —
+    # the whole point of the generalization from the Harvard-only `dash` rung.
+    riunet = ('{"best_oa_location": {"host_type": "repository", "url_for_pdf": null, '
+              '"url": "http://hdl.handle.net/10251/103269"}, "oa_locations": '
+              '[{"host_type": "repository", "url": "http://hdl.handle.net/10251/103269"}]}')
+    _stub_oa_service(monkeypatch, riunet)
+    assert "http://hdl.handle.net/10251/103269" in \
+        paper_fetcher._repo_landings_for_doi("10.1016/j.indcrop.2017.04.043")
+
+    # A publisher (non-repository) PDF location is NOT a dspace landing — left to the other rungs.
+    publisher = '{"best_oa_location": {"host_type": "publisher", "url_for_pdf": "https://ex.org/x.pdf"}, "oa_locations": []}'
+    _stub_oa_service(monkeypatch, publisher)
+    assert paper_fetcher._repo_landings_for_doi("10.1/other") == []
+
+
+# ── what counts as a fetch: a PDF, or a JATS full text — never a block page ───────────────────────
+# `fetched_plausible` is the gate that stops an HTML interstitial or a reCAPTCHA from being recorded as
+# a successful fetch. It also decides what the epmc_fulltext rung is allowed to return.
+
+def test_fetched_plausible_accepts_a_real_pdf(tmp_path) -> None:
+    p = tmp_path / "a.pdf"
+    p.write_bytes(b"%PDF-1.7" + b"x" * 30_000)
+    assert paper_fetcher.fetched_plausible(paper_fetcher.Fetched("10.1/a", "plos", str(p)))
+
+
+def test_fetched_plausible_rejects_a_block_page(tmp_path) -> None:
+    # MDPI's bot wall and Wiley's 403 body are both HTML — and both would otherwise land on disk.
+    p = tmp_path / "b.pdf"
+    p.write_bytes(b"<!DOCTYPE html>" + b"x" * 30_000)
+    assert not paper_fetcher.fetched_plausible(paper_fetcher.Fetched("10.1/b", "mdpi", str(p)))
+
+
+def test_fetched_plausible_accepts_a_jats_full_text(tmp_path) -> None:
+    # A gold-OA paper the publisher bot-walls is still fetchable as full-text XML from Europe PMC.
+    p = tmp_path / "c.xml"
+    p.write_bytes(b'<?xml version="1.0"?><article><body>' + b"x" * 30_000 + b"</body></article>")
+    assert paper_fetcher.fetched_plausible(paper_fetcher.Fetched("10.1/c", "epmc_fulltext", str(p)))
+
+
+def test_fetched_plausible_rejects_an_abstract_only_record(tmp_path) -> None:
+    # Europe PMC serves a bodyless record for anything outside the OA subset. An abstract is not a full
+    # text, and accepting one would let the rung claim a paper we cannot actually read.
+    p = tmp_path / "d.xml"
+    p.write_bytes(b'<?xml version="1.0"?><article><front>' + b"x" * 30_000 + b"</front></article>")
+    assert not paper_fetcher.fetched_plausible(paper_fetcher.Fetched("10.1/d", "epmc_fulltext", str(p)))
+
+
+def test_epmc_fulltext_rung_declines_when_there_is_no_pmc_record(monkeypatch) -> None:
+    # No PMCID is an ordinary "this rung can't serve you" — it must not raise a licence verdict.
+    monkeypatch.setattr(paper_fetcher, "_pmcid_for_doi", lambda _doi: None)
+    records, _url, _hint = asyncio.run(paper_fetcher._fetch_epmc_fulltext(None, "10.1/none", None))
+    assert records == []
+
+
+def test_epmc_fulltext_is_the_last_rung_tried() -> None:
+    # It returns XML, not the archival PDF, so every PDF route must be tried first. Pin the ordering:
+    # a cheaper rung regressing below it would silently start preferring XML over a fetchable PDF.
+    catalog = {m.name: m.cost_rank for m in paper_fetcher.CATALOG}
+    assert catalog["epmc_fulltext"] == max(catalog.values())
+    assert catalog["epmc_fulltext"] > catalog["unpaywall"]

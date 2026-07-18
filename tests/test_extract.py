@@ -510,8 +510,18 @@ def test_aglc_record_maps_alberta_retail_row():
     rec = _aglc_record(_aglc_row())
     assert rec is not None
     assert rec.name == "13th Floor Cannabis" and rec.state == "AB"
-    assert rec.address == "1005-401 COOPERS BLVD SW"
+    # The leading unit prefix ("1005-") is stripped so the key is the street number "401 COOPERS
+    # BLVD SW" — the form the operator's own site publishes (else normalize_address JOINS "1005-401"
+    # into "1005401" and the roster matches nothing; the AB compare-lag artifact).
+    assert rec.address == "401 COOPERS BLVD SW"
     assert rec.zip_code == "T4B 4J3" and rec.phone == "4039601313"
+
+
+def test_aglc_record_strips_unit_prefix_only_when_present():
+    # A hyphenated unit prefix is dropped; a bare street number and a lettered house number are kept.
+    assert _aglc_record(_aglc_row(address="416-222 BASELINE RD")).address == "222 BASELINE RD"
+    assert _aglc_record(_aglc_row(address="1124 KENSINGTON RD NW")).address == "1124 KENSINGTON RD NW"
+    assert _aglc_record(_aglc_row(address="203B BEAR STREET")).address == "203B BEAR STREET"
 
 
 def test_aglc_record_drops_out_of_province_licensee_sites():
@@ -523,7 +533,7 @@ def test_aglc_record_drops_out_of_province_licensee_sites():
 
 def test_aglc_record_joins_address_lines():
     rec = _aglc_record(_aglc_row(address2="UNIT 4"))
-    assert rec.address == "1005-401 COOPERS BLVD SW, UNIT 4"
+    assert rec.address == "401 COOPERS BLVD SW, UNIT 4"
 
 
 # ── BC LCRB record mapping ───────────────────────────────────────────────────
@@ -574,6 +584,16 @@ def test_slga_record_maps_active_retailer():
     assert rec is not None
     assert rec.name == "Wiid Boutique Inc. - Regina" and rec.state == "SK"
     assert rec.city == "Regina" and rec.website == "www.wiidsk.ca"
+
+
+def test_slga_record_strips_canadian_unit_prefix():
+    # SK addresses lead with a unit hyphenated onto the street number — including LETTER units
+    # ("C-125", "J2-2095") and spaced ones ("170 - 3020"). Strip so the roster keys on the street
+    # number the operators' own sites publish (the same AB compare-lag class).
+    assert _slga_record(_slga_row(address="C-125 Highway 364")).address == "125 Highway 364"
+    assert _slga_record(_slga_row(address="J2-2095 Prince of Wales Dr")).address == "2095 Prince of Wales Dr"
+    assert _slga_record(_slga_row(address="170 - 3020 Preston Ave S")).address == "3020 Preston Ave S"
+    assert _slga_record(_slga_row(address="224 Main St")).address == "224 Main St"  # no prefix, unchanged
 
 
 def test_slga_record_drops_inactive_and_nameless_and_na_website():

@@ -455,3 +455,29 @@ def test_redirect_alias_pins_to_city_named_store() -> None:
         "SELECT city, storefront_name FROM company_stores WHERE canonical_company_id IS NULL"))
     assert storefronts["Whitehall"] == "Harvest of Whitehall"   # pinned by city-in-name
     assert storefronts["Reading"] != "Harvest of Whitehall"     # not the Whitehall alias
+
+
+def test_index_like_handle_is_refused_as_an_identity() -> None:
+    """A handle that names TWO rooftops is not an identity — it must not merge unrelated operators.
+
+    Ontario: recon stamps `custom`/`unknown` when it cannot identify a menu platform, and the extractor
+    then takes `external_id` from whatever the operator's own page called "id" — on a JS locator that is
+    the ARRAY INDEX. So `custom:9`, `custom:10`, … appeared under 14-15 unrelated operators, because
+    every locator numbers its own stores from zero. Unioning on those chained unrelated operators.
+
+    The discriminator is NOT the platform name: `custom:899` is a real Cresco handle (see the
+    address-less-twin test above, which must keep passing). It is that a real handle names ONE rooftop.
+    """
+    from rung.sources.dedupe import ambiguous_handles
+
+    # (id, company_id, canonical_name, name, address, city, zip, lat, lng, platform, external_id)
+    rows = [
+        (1, 1, "Alpha", "Alpha A", "100 Main St", "Erie", "16501", None, None, "custom", "9"),
+        (2, 2, "Beta", "Beta B", "200 Oak Ave", "Erie", "16502", None, None, "custom", "9"),
+        # a REAL handle: one rooftop, plus an address-less twin (the case the handle exists to catch)
+        (3, 3, "Cresco", "Sunnyside", "300 Elm St", "Erie", "16503", None, None, "custom", "899"),
+        (4, 3, "Cresco", "Sunnyside", None, None, None, None, None, "custom", "899"),
+    ]
+    bogus = ambiguous_handles(rows)
+    assert bogus == {"custom:9"}, "an index-like handle at two addresses must be refused"
+    assert "custom:899" not in bogus, "a real handle at one rooftop (+ address-less twin) must survive"

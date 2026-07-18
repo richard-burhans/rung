@@ -1,13 +1,17 @@
 """Tests for the shared text helpers (used by recon.py and seed_companies.py)."""
 
 from rung.text import (
+    category_overridden,
     dominant_terpene,
     extract_brand,
     is_placeholder_name,
     normalize_brand,
     normalize_category,
+    normalize_obtention,
     normalize_product_type,
     normalize_strain_type,
+    product_type_defaulted,
+    strip_legal_entity,
     terpene_floats,
 )
 
@@ -57,6 +61,16 @@ def test_normalize_brand_falls_back_when_all_punctuation():
 
 def test_extract_brand_hyphen():
     assert extract_brand("Trulieve - Pittsburgh") == "Trulieve"
+
+
+def test_extract_brand_folds_at_storefront_separator():
+    # " at <location>" is a storefront separator (the AGLC roster's form where the own site uses
+    # " - "), so both sides fold to one operator — the AB compare-lag fix.
+    assert extract_brand("Value Buds at Baseline Village") == "Value Buds"
+    assert extract_brand("Value Buds - Baseline Village") == "Value Buds"  # symmetric with the dash
+    assert extract_brand("The Frosted Nug at Red Bank") == "The Frosted Nug"
+    # Guarded: a bare-generic prefix must NOT collapse into the mega-generic "Cannabis" bucket.
+    assert extract_brand("Cannabis at the Green Brier") == "Cannabis at the Green Brier"
 
 
 def test_extract_brand_folds_storefront_city_with_own_city():
@@ -220,6 +234,20 @@ def test_normalize_category_name_overrides_protect_correct_higher_format():
     assert normalize_category("edibles") == "Edible"
 
 
+def test_category_overridden_flags_a_name_driven_correction():
+    # True exactly when the NAME overrides the raw-category bucket — OUR correction, not the platform's
+    # label. Same cases as test_normalize_category_name_overrides_correct_mislabeled_forms.
+    assert category_overridden("edibles", "Indica RSO Capsules 30ct") is True
+    assert category_overridden("concentrates", "Chimera Junky Infused Flower") is True
+    assert category_overridden(None, "Full Spectrum Softgels 10pk") is True   # name-only signal
+    # False when the raw category already decides the bucket (no override fired) …
+    assert category_overridden("edibles", "Sour Gummies 10pk") is False
+    assert category_overridden("Vaporizers", "Capsule Collection Cart") is False  # protected higher format
+    assert category_overridden("Pre-Rolls", "Strawberry Infused Flower Pre-Roll") is False
+    # … and False when there is no name to drive an override at all.
+    assert category_overridden("edibles", None) is False
+
+
 def test_normalize_product_type_small_flower_is_smalls():
     # "Small Flower" is the smalls grade, not whole Bud.
     assert normalize_product_type("Banana Shack Small Flower 7g", "flower", "Flower") == "Smalls"
@@ -282,3 +310,270 @@ def test_normalize_strain_type_none_for_pollution_and_traps():
     # Blank / None → None.
     assert normalize_strain_type(None) is None
     assert normalize_strain_type("   ") is None
+
+
+def test_extract_brand_strips_a_trailing_store_address_or_parenthetical() -> None:
+    """A state roster names the LICENSEE OF EACH STORE, so one operator arrives as many names.
+
+    `seed-companies` derives `companies` from that roster, so "ONE PLANT 3003 DANFORTH" and
+    "ONE PLANT BARRIE (CUNDLES)" each became their OWN company — and Stage 2 then scraped the
+    operator's single homepage once per company, giving each the FULL store list. 6,906 of 22,074
+    store rows (31%) are a redundant copy of a rooftop another "company" already holds.
+    """
+    assert extract_brand("ONE PLANT 3003 DANFORTH") == "ONE PLANT"
+    assert extract_brand("SPIRITLEAF 1550 HURON CHURCH ROAD") == "SPIRITLEAF"
+    assert extract_brand("HIGH CANNABIS 12467") == "HIGH CANNABIS"
+    assert extract_brand("GREEN ROOM (ALBANY)") == "GREEN ROOM"
+
+
+def test_extract_brand_store_suffix_does_not_cascade_into_the_generic_strip() -> None:
+    """The parenthetical is the STORE; "Cannabis" is part of the BRAND. Strip one, keep the other.
+
+    Order matters: stripping the store tail first would expose "Ziggyz Cannabis" to the trailing-
+    generic rule and over-fold it to "Ziggyz".
+    """
+    assert extract_brand("Ziggyz Cannabis (MacArthur)") == "Ziggyz Cannabis"
+
+
+def test_extract_brand_keeps_a_number_that_is_part_of_the_brand() -> None:
+    """Only a 3+-digit trailing run is a store address. A brand's own small number survives."""
+    assert extract_brand("Cloud 9") == "Cloud 9"
+    assert extract_brand("Green 2 Go") == "Green 2 Go"
+
+
+# ── The city can hide the descriptor behind it (the RISE / Ontario fragmentation) ───────────────────
+# `extract_brand` stripped the trailing generic descriptor BEFORE it stripped the storefront city, so a
+# descriptor sitting *behind* the city was invisible to it. One ordering bug, ten phantom companies.
+
+def test_a_descriptor_hidden_behind_the_city_is_stripped() -> None:
+    """The bug that fragmented ONE Virginia operator into TEN companies.
+
+    "RISE Dispensaries Abingdon" -> (city) -> "RISE Dispensaries", with the descriptor now exposed and
+    never re-examined. Each spelling seeded its own row in `companies` — and the W2 event study clusters
+    on the operator, so ten phantom firms is not a cosmetic problem.
+    """
+    variants = [
+        ("RISE Dispensaries Abingdon", "Abingdon"),
+        ("RISE Dispensary Abingdon", "Abingdon"),
+        ("RISE Medical Marijuana Dispensary Salem", "Salem"),
+        ("Rise Dispensary Bristol", "Bristol"),
+        ("RISE Abingdon", "Abingdon"),
+    ]
+    brands = {normalize_brand(extract_brand(n, c)) for n, c in variants}
+    assert brands == {"rise"}, f"one operator must fold to one brand, got {brands}"
+
+
+def test_the_longest_descriptor_wins() -> None:
+    """Regex alternation is first-match: "medical marijuana dispensary" must precede "marijuana
+    dispensary", or the strip leaves "RISE Medical" and the fold still fails."""
+    assert extract_brand("RISE Medical Marijuana Dispensary Salem", "Salem") == "RISE"
+
+
+def test_the_re_strip_does_not_cascade_when_no_city_was_removed() -> None:
+    """THE GUARD THAT MAKES THE FIX SAFE, and the cascade the store-suffix work already warned about.
+
+    Re-stripping unconditionally turns "Ziggyz Cannabis (MacArthur)" into "Ziggyz" — but the brand really
+    is "Ziggyz Cannabis"; the parenthetical is the store. No city was removed there, so nothing was
+    hidden, so the first pass's verdict must stand. We re-examine only what the city strip newly exposed.
+    """
+    assert extract_brand("Ziggyz Cannabis (MacArthur)", "Oklahoma City") == "Ziggyz Cannabis"
+
+
+def test_a_strip_may_not_leave_a_name_without_letters() -> None:
+    """"123 Cannabis" must stay "123 Cannabis", not become "123".
+
+    A brand that is a bare number folds every unrelated numeric name in the state into one phantom
+    company — the very failure this area exists to prevent. (This hole pre-dated the fix; the fix would
+    have widened it.)
+    """
+    assert extract_brand("123 Cannabis Carstairs", "Carstairs") == "123 Cannabis"
+    assert extract_brand("123 Cannabis") == "123 Cannabis"
+
+
+def test_a_bare_article_is_still_protected() -> None:
+    assert extract_brand("The Dispensary", "Denver") == "The Dispensary"
+    assert extract_brand("The Dispensary Denver", "Denver") == "The Dispensary"
+
+
+# ── A defaulted label is a PRIOR, not an observation ────────────────────────────────────────────────
+# Weedmaps shipped a *defaulted* lineage field (98.2% "Indica"); we read it as an observation and had to
+# retract a finding (E1). `product_type_aliases.yml`'s `_defaults` does the same thing on OUR side of the
+# wire: no keyword match -> Flower becomes "Bud". 759,927 flower rows carry a Bud no name ever said.
+# `bowker-star_1999_sorting-things-out` names it: a residual category promoted into a positive assertion.
+
+def test_a_manufactured_label_is_flagged() -> None:
+    """No keyword matched, so the category's `_defaults` fired. The label is real; the observation is not."""
+    assert normalize_product_type("Blue Dream 3.5g", None, "Flower") == "Bud"
+    assert product_type_defaulted("Blue Dream 3.5g", None, "Flower") is True
+    assert normalize_product_type("OG Kush Pre-Roll", None, "Pre-Roll") == "Single"
+    assert product_type_defaulted("OG Kush Pre-Roll", None, "Pre-Roll") is True
+
+
+def test_an_observed_label_is_not_flagged() -> None:
+    """A keyword matched — the name actually said it."""
+    for name, cat, want in [("Blue Dream Smalls", "Flower", "Smalls"),
+                            ("Pineapple Shake", "Flower", "Shake/Trim"),
+                            ("Gummies 10mg", "Edible", "Gummies")]:
+        assert normalize_product_type(name, None, cat) == want
+        assert product_type_defaulted(name, None, cat) is False, name
+
+
+def test_an_honest_unspecified_is_not_a_manufactured_label() -> None:
+    """A category with NO `_defaults` entry emits "Unspecified" — which is an admission, not an assertion.
+    Flagging it as `defaulted` would confuse the residual category with the manufactured one."""
+    assert normalize_product_type("Mystery Item", None, "Edible") == "Unspecified"
+    assert product_type_defaulted("Mystery Item", None, "Edible") is False
+
+
+def test_an_uncovered_category_is_not_flagged() -> None:
+    assert normalize_product_type("Thing", None, "Apparel") is None
+    assert product_type_defaulted("Thing", None, "Apparel") is False
+
+
+# ── The licensee/storefront gap: a licence is issued to a legal person, a shop trades under a brand ──
+#
+# The roster files "ADEGOKE HOLDINGS LLC"; the operator's own site publishes "Adegoke". The two never
+# keyed together, so BOTH sides reported a phantom — ours as `site_only` ("the state list is missing this
+# store"), the roster's as `state_only` ("possible closure"). Measured on the live DB (2026-07-14),
+# folding the suffix moves compare: matched 9,415 -> 9,687 and site_only 8,469 -> 8,193.
+
+
+def test_strip_legal_entity_drops_the_licence_holder_suffix() -> None:
+    assert strip_legal_entity("Adegoke Holdings LLC") == "Adegoke"
+    assert strip_legal_entity("Patriot Care Corp") == "Patriot Care"
+    assert strip_legal_entity("Smacked LLC") == "Smacked"
+    assert strip_legal_entity("Cannabis Hut Ltd") == "Cannabis Hut"
+    assert strip_legal_entity("Old Growth Cannabis Ltd") == "Old Growth Cannabis"
+
+
+def test_strip_legal_entity_is_repeated_because_names_stack_them() -> None:
+    """"Aurora Cannabis Enterprises Inc." carries two suffixes; one pass would leave "Enterprises"."""
+    assert strip_legal_entity("Aurora Cannabis Enterprises Inc.") == "Aurora Cannabis"
+
+
+def test_strip_legal_entity_never_eats_the_whole_name() -> None:
+    """A name that IS the suffix keeps it — an empty brand folds every unrelated name into one phantom."""
+    assert strip_legal_entity("Holdings LLC") == "Holdings"
+    assert strip_legal_entity("LLC") == "LLC"
+
+
+def test_strip_legal_entity_refuses_to_leave_a_BARE_GENERIC() -> None:
+    """The guard that measurement found, not imagination.
+
+    BC's "Cannabis Co." strips to "Cannabis" — the word every brand contains — which then collides with
+    "Cannabis 247", merging two unrelated licensees into one phantom operator. The suffix is only noise
+    when a REAL brand survives it.
+    """
+    assert strip_legal_entity("Cannabis Co.") == "Cannabis Co."
+    assert strip_legal_entity("Dispensary LLC") == "Dispensary LLC"
+    # And the two stay distinct operators through the full brand key.
+    assert normalize_brand(extract_brand("Cannabis Co.")) != normalize_brand(extract_brand("Cannabis 247"))
+
+
+def test_extract_brand_folds_the_legal_suffix_before_the_generic_one() -> None:
+    """Both stack: "FLOYD\'S CANNABIS COMPANY". The generic strip only sees the END of the name, so a
+    "Cannabis" hiding behind a "Company" is invisible to it unless the legal strip runs first."""
+    assert extract_brand("FLOYD'S CANNABIS COMPANY") == "FLOYD'S"
+    assert extract_brand("Adegoke Holdings LLC") == "Adegoke"
+    # The roster row and the storefront now key as one operator — the whole point.
+    assert normalize_brand(extract_brand("Adegoke Holdings LLC")) == normalize_brand(extract_brand("Adegoke"))
+    assert normalize_brand(extract_brand("Patriot Care Corp")) == normalize_brand(extract_brand("Patriot Care"))
+
+
+def test_a_legal_entity_alias_still_folds_after_the_suffix_strip() -> None:
+    """The regression the legal-entity fold caused, and the reason `load_company_aliases` folds its keys.
+
+    Aliases are looked up with `extract_brand(name)` as the key, and many are written in the licence
+    roster's own words ("Diamond Star Group inc." -> Dankley). Once `extract_brand` learned to strip the
+    suffix it handed the lookup "Diamond Star" while the map was still keyed on the full legal name, so
+    the alias silently stopped folding and one operator split back into two companies. Nothing crashed —
+    which is exactly why this is a test and not a comment.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from rung.text import load_company_aliases
+
+    with tempfile.TemporaryDirectory() as tmp:
+        yml = Path(tmp) / "companies.yml"
+        yml.write_text('Dankley:\n  - "Diamond Star Group inc."\n', encoding="utf-8")
+        aliases = load_company_aliases(yml)
+
+    assert aliases["Diamond Star Group inc."] == "Dankley"   # the spelling as written
+    assert aliases[extract_brand("Diamond Star Group inc.")] == "Dankley"  # the key it is looked up by
+
+
+# ── obtention_std ───────────────────────────────────────────────────────────────────────────────────
+#
+# This facet replaced a regex inlined in NATURAL_FLOWER_WHERE. Every case below is one the LIVE DATA
+# produced while it was being built — none is hypothetical, and each one was a bug at some point during
+# the port. They are pinned because the two failure modes here are opposite and both silent: a keyword
+# that is too loose drops real flower out of the chemovar analyses, and one that is too tight lets
+# infused flower back in (which is what inflated a producer->THC effect 0.226 -> 0.372 in the first
+# place).
+
+
+def test_normalize_obtention_reads_the_raw_category_not_just_the_name():
+    # 267 rows carry the signal ONLY in the platform's raw category; a name-only rule missed every one.
+    assert normalize_obtention("Baby Yoda", "Infused Flower") == "Infused"
+    assert normalize_obtention("Pineapple Donutz", "Moonrocks") == "Infused"
+
+
+def test_normalize_obtention_alnum_normalization_catches_split_words():
+    # `Sherb Cherry THCA In fused preroll` is a real product name. The retired regex looked for `infus`
+    # and saw "In fused" — with a space — so it passed an infused product through as natural flower.
+    assert normalize_obtention("Sherb Cherry THCA In fused preroll", "Flower") == "Infused"
+    assert normalize_obtention("Moon Rock Nugs", "Flower") == "Infused"
+
+
+def test_normalize_obtention_matches_the_infus_prefix_not_the_whole_word():
+    # The retired regex used the PREFIX `infus`. Spelling it `infused` here missed three real products,
+    # found only because backfill_obtention.py --verify prints its disagreements instead of counting them.
+    for name in ("Good Time 11 Infuse Flower", "Pineapple Express OZ Shake | Infuse Trim",
+                 "Revert - Galactic Jack - 14g - Infusd Ground Flower"):
+        assert normalize_obtention(name, "Flower") == "Infused", name
+
+
+def test_normalize_obtention_short_keywords_do_not_match_inside_a_word():
+    # THE trap. Alnum-normalization JOINS words and manufactures substrings that were never in the name,
+    # so a short keyword matched as a substring silently excludes real flower. Each of these is a live
+    # product name, and each matched a keyword across a joined word boundary during the port:
+    #   "Panda: Blue Sugar"  -> "pan-DAB-luesugar"        "3 Bros | Indoor" -> "3b-ROSIN-door"
+    #   "Cap Junkie" + Flower -> "jun-KIEF-lower"          "Gunpowder"       -> "powder"
+    for name in ("Panda: Blue Sugar", "Candy Cartel", "Beezwax Biscotti", "Poddy Mouth",
+                 "3 Bros | Indoor Flower | 3.5g | Lemon Diesel", "Tier 1 - Cap Junkie -",
+                 "BLACK PEARL - Gunpowder - Cereal Milk"):
+        assert normalize_obtention(name, "Flower") is None, name
+    # …while the same words, as WORDS, still match.
+    assert normalize_obtention("Kief Dusted Nugs", "Flower") == "Infused"
+    assert normalize_obtention("Live Rosin Coated Bud", "Flower") == "Infused"
+    assert normalize_obtention("Wax Melts", "Flower") == "Infused"
+
+
+def test_normalize_obtention_is_silent_when_the_name_is_silent():
+    # 96.35% of Flower rows say nothing. NULL means "neither the name nor the category declares a
+    # method" — NOT "we determined this is natural". There is no `Natural` value precisely so that this
+    # cannot become 903,819 manufactured observations (cf. product_type_defaulted, and the E1 retraction).
+    for name in ("Blue Dream 3.5g", "Black Diamond", "Wedding Cake | 1/8oz"):
+        assert normalize_obtention(name, "Flower") is None, name
+    assert normalize_obtention(None, None) is None
+    assert normalize_obtention("", "") is None
+
+
+def test_normalize_obtention_flags_a_mislabelled_extract():
+    # A cartridge in the Flower category is a STORE's mislabel on the platform; the raw category really
+    # does say Flower and we record it faithfully. The name is what gives it away.
+    assert normalize_obtention("Live Resin Cartridge", "Flower") == "Extracted"
+    assert normalize_obtention("Runtz Pods", "Flower") == "Extracted"
+
+
+def test_normalize_obtention_infused_wins_when_a_name_says_both():
+    # `Distillate Syringe` names an adulterant (Infused) AND a vessel (Extracted). Infused wins, because
+    # it is first in the YAML and YAML order IS the priority.
+    #
+    # Worth being honest about: the retired regex had ONE exclusion list, so Infused-vs-Extracted is a
+    # distinction this facet INTRODUCED and the old data cannot adjudicate. It does not affect the guard
+    # — `obtention_std IS NULL` treats both identically, which is all NATURAL_FLOWER_WHERE ever asked —
+    # so the ordering is pinned here to make the choice deliberate rather than incidental. If a future
+    # analysis ever splits on the two values, THAT is when this needs evidence rather than a convention.
+    assert normalize_obtention("Distillate Syringe", "Flower") == "Infused"

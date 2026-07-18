@@ -813,6 +813,32 @@ def _xls_text(cell) -> str | None:
     return _clean(str(cell.value))
 
 
+# AGLC files an Alberta address with the UNIT number hyphenated in front of the street number
+# ("416-222 BASELINE RD" = unit 416, #222). The operators' own sites publish the bare street number
+# ("222 Baseline Rd"), and `normalize_address` JOINS digit-hyphen-digit (correct for Queens-style
+# HOUSE numbers like "219-17"), so the roster keyed "416222 baseline" and matched nothing — the
+# dominant reason Alberta's compare over-stated its roster lag. Strip the unit prefix here, where the
+# row is known to be Alberta (no Queens ambiguity — that lives only in NY).
+# A leading ``<unit>-`` prefix on a Canadian roster address: the unit hyphenated onto the street
+# number ("416-222 BASELINE RD" = unit 416, #222; SK also uses LETTER units — "C-125", "J2-2095",
+# "P-3322"). Bounded to 1-4 chars + a digit lookahead so it strips the unit, never a hyphenated
+# street name ("Trans-Canada", where "Canada" isn't a digit) or a route.
+_CA_UNIT_PREFIX_RE = re.compile(r"^\s*[0-9A-Za-z]{1,4}\s*-\s*(?=\d)")
+
+
+def _strip_ca_unit_prefix(address: str | None) -> str | None:
+    """Drop a leading ``<unit>-`` prefix from a Canadian roster address (AGLC/SLGA); unchanged if none.
+
+    Canadian addresses lead with the unit ("416-222 Baseline Rd"); operators' own sites publish the
+    bare street number, and ``normalize_address`` JOINS digit-hyphen-digit (correct for Queens house
+    numbers like "219-17"), so the roster keyed "416222 baseline" and matched nothing. Safe in these
+    extractors because the rows are Canadian (AB/SK) — the Queens ambiguity is US-only.
+    """
+    if not address:
+        return address
+    return _CA_UNIT_PREFIX_RE.sub("", address, count=1).strip() or address
+
+
 def _aglc_record(values: dict[str, str | None]) -> DispensaryRecord | None:
     """One AGLC report row → a record, keeping only Alberta retail sites.
 
@@ -825,7 +851,7 @@ def _aglc_record(values: dict[str, str | None]) -> DispensaryRecord | None:
     name = values.get("name")
     if not name:
         return None
-    address = values.get("address")
+    address = _strip_ca_unit_prefix(values.get("address"))
     if values.get("address2"):
         address = f"{address}, {values['address2']}" if address else values["address2"]
     return DispensaryRecord(
@@ -885,7 +911,7 @@ def _slga_record(values: dict[str, str | None]) -> DispensaryRecord | None:
     if website and website.strip().upper() in ("N/A", "NA", "-"):
         website = None
     return DispensaryRecord(
-        source="sk_slga", name=name, address=values.get("address"),
+        source="sk_slga", name=name, address=_strip_ca_unit_prefix(values.get("address")),
         city=values.get("city"), state="SK", website=website,
     )
 
@@ -1437,6 +1463,7 @@ async def run_extract_states(
     same commit — see :func:`record_roster_observations`.
     """
     from rung.db import (
+        apply_geocode_cache,
         delete_dispensaries_for_state,
         get_all_state_programs,
         insert_dispensary,
@@ -1500,6 +1527,13 @@ async def run_extract_states(
             if record_history:
                 # Store-lifecycle history from the fresh roster, same commit as the replace.
                 record_roster_observations(conn, rec.abbr, records)
+            # Put back what the DELETE above just destroyed. The source republishes only what the
+            # source publishes, so for a roster carrying a street but no ZIP (NV, IL, UT, MD…) the
+            # geocoded lat/lon/ZIP/city are gone — and `compare`'s keys BOTH carry the ZIP, so the
+            # state silently stops matching on a scrape that SUCCEEDED. The guard above protects the
+            # anticipated failure (an empty scrape wiping good rows) and never saw this one. Costs no
+            # geocoder calls; same commit as the replace, so the rows are never briefly un-enriched.
+            apply_geocode_cache(conn, "dispensaries", rec.abbr)
             conn.commit()
 
         results.append(

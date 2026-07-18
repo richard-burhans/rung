@@ -23,7 +23,16 @@ INTEL_DIR = REPO_ROOT / "rung_intel" / "rung_intel"
 INTEL_PKG = "rung_intel"
 
 # ── Public-package tiers (by import direction; see ARCHITECTURE.md) ───────────────────────────
-BASE = frozenset({"models", "http", "browser", "text", "addresses", "normalize"})  # tier 0
+# `static_source` is a tier-0 leaf: a self-contained DuckDB-over-Parquet adapter with ZERO internal
+# imports, which `db.get_connection` delegates to when RUNG_DATA_SOURCE=static. It sits below db (db
+# imports it), so it belongs in the foundation band — see rung/static_source.py, docs it enables the
+# Galaxy / outside-researcher reproducibility path off the clean dataset.
+# `brands` carries zero internal imports; the two offline geocoders import only base (`http` +
+# `addresses`) — so all three are base-shaped leaves and belong in the enforced BASE set (they were
+# in PUBLIC_MODULES but no tier, i.e. their layering was unguarded — the same "a tier the guard does
+# not know about is not a tier" gap the overlay note below calls out).
+BASE = frozenset({"models", "http", "browser", "text", "addresses", "normalize", "static_source",
+                  "brands", "geocode_rnf", "geocode_points"})  # tier 0
 TIER1 = frozenset({"db", "queue"})            # tier 1 — persistence + work queue
 TIER2 = frozenset({"access"})                 # tier 2 — access-method engine
 FOUNDATION = BASE | TIER1 | TIER2
@@ -32,17 +41,33 @@ CLI = "cli"
 # The complete public-core module set — the carve-out is "done" when the public package holds
 # exactly these and nothing proprietary leaks back in.
 PUBLIC_MODULES = frozenset({
-    "models", "http", "browser", "text", "normalize", "addresses",
+    "models", "http", "browser", "fx", "text", "brands", "normalize", "addresses", "static_source",
     "db", "reference_db", "queue", "access", "rate_limit", "registry", "cli", "seed_companies",
     "state_search", "state_lists", "extract", "ai_fallback", "homepage_discovery", "dedupe",
+    # Offline Canadian geocoding — two rungs of one ladder, both public on purpose: generic
+    # address-range interpolation / address-point lookup over open government data, no cannabis
+    # domain logic, no import of the overlay. Neither is wired into the pipeline yet; both are
+    # measured against ground truth by scripts/validate_rnf_geocoder.py, so an unused-looking
+    # module here is deliberate, not dead code (docs/geocoding_design.md).
+    "geocode_rnf", "geocode_points",
 })
 
 # ── Overlay tiers (the proprietary modules left PUBLIC_DIR in the carve-out; their internal layering
 # is enforced HERE, the INTEL_DIR analogue of the public checks below). ───────────────────────────
 # Pure platform helpers: per-platform fetch/parse recipes that import NOTHING internal (they read
 # their data via importlib.resources string args, not import edges — see docs/publish_split_design.md).
-PURE_HELPERS = frozenset({"cresco", "curaleaf", "dutchie", "dutchie_plus",
-                          "fluent", "hytiva", "sweedpos", "trulieve"})
+# `jane` was MISSING from this set for six days after it was extracted (#115) — it has zero internal
+# imports and ARCHITECTURE.md documents it as `none (pure)`, but nothing stopped the next commit from
+# making that false. A tier the guard does not know about is not a tier.
+# The six single-store live-locator helpers (canna_cabana/delta9/storerocket/shopify/woocommerce/
+# hybris_occ) are the same shape — per-platform fetch/parse recipes that take a session arg and import
+# NOTHING internal. Each briefly carried a dead `from rung.http import make_session` re-export (noqa
+# F401, no consumer — every caller imports make_session from rung.http directly); removing it made them
+# true zero-import pure helpers, so they join this set instead of forming an unguarded "http-only" tier.
+PURE_HELPERS = frozenset({"cresco", "curaleaf", "dutchie", "dutchie_plus", "fluent", "hytiva",
+                          "jane", "sweedpos", "trulieve",
+                          "canna_cabana", "delta9", "storerocket", "shopify", "woocommerce",
+                          "hybris_occ"})
 # The two aggregator sweeps stay lean: they import only the overlay's `aggregator_http` (the private
 # anti-throttle machinery) and at most the public base-layer `http`
 # (the honest `make_session`) — never the heavier catalogs/extractors. Acyclic, just not zero-import.
@@ -240,10 +265,20 @@ def test_foundation_does_not_depend_on_upper_band() -> None:
 PUBLIC_DATA = frozenset({
     "companies.yml", "company_homepages.yml", "states.yml", "state_geo_anchors.yml",
     "category_aliases.yml", "category_name_overrides.yml", "product_type_aliases.yml",
-    "strain_aliases.yml",
+    "strain_aliases.yml", "obtention_aliases.yml", "brand_parent.yml",
 })
 # Keep PRIVATE_DATA in lockstep with scripts/build_public_repo.py:PRIVATE_DATA (the publish leak
-# guard) and the actual files in rung_intel/.../data/ — the two are independent copies.
+# guard) and the actual files in rung_intel/.../data/ — the two are independent copies, pinned equal by
+# test_build_public_repo.py::test_private_data_denylist_matches_build_tool (that test lives there, not
+# here, because it imports `scripts` — and the build drops any shipped test that imports scripts/, which
+# would silently strip THIS boundary-guard file from the public repo).
+# This is the SCRAPING-INTEL denylist: platform slugs/chains/tokens/store-ids/grower brands whose
+# filename must never surface in a shipped doc or the public tree. It deliberately does NOT list the
+# newer overlay registries (brand_ownership / provincial_monopolies / shopify_storefronts /
+# storerocket_banners): those live in the overlay (already excluded from the public build) and are
+# curated-but-not-secret (brand_ownership is SEC-sourced; provincial_monopolies names public Crown
+# stores and is even referenced by public states.yml, so denylisting it would be wrong). Adding one
+# here is a publish-policy decision, not a mechanical sync.
 PRIVATE_DATA = frozenset({
     "dutchie_chains.yml", "dutchie_plus_tokens.yml", "grower_brands.yml",
     "jane_store_ids.yml", "leafly_slugs.yml", "weedmaps_slugs.yml",

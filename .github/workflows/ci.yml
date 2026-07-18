@@ -66,11 +66,14 @@ jobs:
           PGPASSWORD: rung
         run: psql -h localhost -U rung -d rung -c 'CREATE DATABASE rung_test;'
 
+      # These two MUST match scripts/qa_gate.sh's target lists. `research/` (the librarian
+      # toolchain) was deliberately gated in the local gate but never added here — so the
+      # authoritative check, the one that actually blocks a PR, was not looking at it.
       - name: Lint (ruff)
-        run: uv tool run ruff check rung/ tests/
+        run: uv tool run ruff check rung/ tests/ research/
 
       - name: Type-check (ty)
-        run: uv tool run ty check rung/ rung_intel/ scripts/
+        run: uv tool run ty check rung/ rung_intel/ scripts/ research/
 
       - name: Tests + coverage (pytest)
         run: uv run pytest

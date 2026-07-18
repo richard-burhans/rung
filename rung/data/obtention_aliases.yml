@@ -1,0 +1,95 @@
+# Canonical OBTENTION METHOD -> substring keywords. The facet that answers:
+#
+#     did the cannabinoids in this product come from the plant as grown?
+#
+# text.normalize_obtention(name, category) alnum-normalizes the product NAME and the platform's RAW
+# category, then returns the FIRST value below (top-to-bottom = PRIORITY) whose any keyword is a
+# substring — else **None**, meaning "neither the name nor the raw category declares an obtention
+# method". See docs/product_type_hierarchy.md for the sibling facet and the design in
+# reports/obtention_facet_design.md.
+#
+# ── There is deliberately no `Natural` value, and no `_defaults` ─────────────────────────────────────
+#
+# 96.35% of Flower rows (903,819 of 938,042, measured 2026-07-16) name no obtention method at all.
+# Stamping those `Natural` would manufacture 903,819 observations nobody made — the exact failure this
+# project has already shipped twice: Weedmaps `strain_type` defaulted to "Indica" on 98.2% of rows (the
+# E1 retraction), and our own `product_type_std` `_defaults` putting a "Bud" on 759,927 flower rows no
+# name ever said. **A default read as an observation.** So the vocabulary is positive-only: we record
+# what a name SAYS, and NULL means it said nothing.
+#
+# That is why the natural-flower guard reads `obtention_std IS NULL` rather than `= 'Natural'`: the
+# claim it makes is the honest one — "the source called this Flower and nothing contradicts it" — not
+# "we determined this is unadulterated".
+#
+# ── This is a MOVE, not an invention ────────────────────────────────────────────────────────────────
+#
+# Every keyword below comes from the regex previously inlined in reference_db.NATURAL_FLOWER_WHERE.
+# Moving it here buys three things that regex could not have:
+#   1. It COMPOSES. Three live scripts hand-rolled the filter because the bare constant would not, and
+#      all three kept an older, shorter copy that admitted concentrates AS FLOWER.
+#   2. It reads the RAW category too, not just the name — 267 rows carry the signal only there
+#      ("Infused Flower", "Moonrocks") and the name-only regex missed every one.
+#   3. Alnum-normalization catches what a raw regex could not: `Sherb Cherry THCA In fused preroll`
+#      normalizes to "infused", where the `infus` regex saw "In fused" and passed it through.
+#
+# `diamond` and `caviar` stay ALLOWED, as they were in the regex: they are mostly legitimate strain
+# names carrying normal THC ("Black Diamond"), so excluding them would drop real flower.
+#
+# ── TWO kinds of keyword, and the split is load-bearing ──────────────────────────────────────────────
+#
+#   contains:  matched as a substring of the ALNUM-NORMALIZED text ("In fused" -> "infused").
+#   words:     matched as a WHOLE WORD against the raw text.
+#
+# The original regex spelled short keywords with word boundaries — `carts?\y`, `\ypods?\y`, `\ywax\y`,
+# `\ydabs?\y` — and those boundaries are load-bearing. Alnum-normalization DESTROYS them, and worse, it
+# JOINS words and manufactures substrings that were never in the name. Measured on 200k distinct Flower
+# names (2026-07-16), matching these as plain substrings would have wrongly excluded:
+#
+#     dab   166 names — "Panda: Blue Sugar" -> "pan-DAB-luesugar"
+#     cart  516 names — "Candy Cartel", "CARTOONS"
+#     pod    29 names — "Poddy Mouth"
+#     wax    12 names — "Beezwax", "Waxstix"
+#
+# ~723 legitimate flower names, silently dropped, to "faithfully move" a regex. So they live under
+# `words:`. A long keyword ("cartridge", "distillate") has no such collision and stays a substring,
+# which is what buys the "In fused" fix.
+
+# Added cannabinoids — the bud is real, but its chemistry is not only its own.
+Infused:
+  contains:
+    # `infus`, not `infused` — a PREFIX, exactly as the retired regex had it. The full word missed
+    # `Good Time 11 Infuse Flower`, `Pineapple Express OZ Shake | Infuse Trim` and
+    # `Revert - Galactic Jack - Infusd Ground Flower`: three real infused products, found only because
+    # --verify printed the disagreements instead of counting them.
+    - infus
+    - moonrock          # joins "Moon Rock" -> "moonrock", and catches category='Moonrocks' (119 rows)
+    - dusted
+    - coated
+    - covered
+    # the adulterant substances, which appear in the NAME of a coated bud
+    - distillate
+    - shatter
+    - badder
+    - batter
+  words:
+    # Measured on 250k distinct Flower names (2026-07-16): each of these matches ACROSS a joined word
+    # boundary as a substring, so each must be a whole word.
+    - kief              # "Cookie" + "Flower" -> "coo-KIEF-lower"      (160 names)
+    - rosin             # "3 Bros | Indoor"   -> "3b-ROSIN-door"       (136 names, 1,430 rows)
+    - powder            # "Gunpowder"                                   (27 names)
+    - wax               # "Beezwax", "Waxstix"                          (12 names)
+    - dab               # "Panda: Blue Sugar" -> "pan-DAB-luesugar"    (166 names)
+    - dabs
+
+# The cannabinoids were extracted from the plant, not left in it. On a Flower-category row this is a
+# STORE's mislabel on the platform (169 rows, measured 2026-07-16) — the raw category really does say
+# "Flower" and we record it faithfully; the name is what gives it away.
+Extracted:
+  contains:
+    - cartridge
+    - syringe
+  words:
+    - cart
+    - carts
+    - pod
+    - pods

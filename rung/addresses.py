@@ -4,6 +4,12 @@ Used by both the state-list extractor (`sources/extract.py`) and the company-sto
 extractor (`sources/company_stores.py`) so neither reaches into the other's private
 helpers. Sits just above `models` in the dependency order (imports only `models` +
 third-party).
+
+Also hosts the **structured street parse** (`parse_address` → house number + `street_key`) that the
+geocoders join on. It lives here rather than in either geocoder because both must agree exactly: an
+address-point rung and an address-range rung that disagree about what "4A-1861 MEADOWBROOK DR SE"
+means would silently return different answers for the same input, which is the failure a shared key
+exists to prevent. Kept dependency-light so importing it never drags in the geo stack.
 """
 
 import re
@@ -191,3 +197,101 @@ def extract_line_blocks(html: str) -> list[DispensaryRecord]:
             city=clean(found.city), state=found.state, zip_code=found.zip_code,
         ))
     return records
+
+
+# Free address text -> a canonical street-TYPE token. The vocabulary is the StatCan Road Network
+# File's, deliberately: it is an authoritative national reference, so normalising toward ITS tokens
+# means a reference dataset needs no translation layer and our text meets it where it already is.
+_TYPE = {
+    "STREET": "ST", "ST": "ST", "AVENUE": "AVE", "AVE": "AVE", "AV": "AVE",
+    "ROAD": "RD", "RD": "RD", "DRIVE": "DR", "DR": "DR",
+    "BOULEVARD": "BLVD", "BLVD": "BLVD", "CRESCENT": "CRES", "CRES": "CRES",
+    "HIGHWAY": "HWY", "HWY": "HWY", "TRAIL": "TRAIL", "TRL": "TRAIL",
+    "PLACE": "PL", "PL": "PL", "WAY": "WAY", "CLOSE": "CLOSE",
+    "COURT": "CRT", "CRT": "CRT", "CT": "CRT", "LANE": "LANE", "LN": "LANE",
+    "TERRACE": "TERR", "TERR": "TERR", "TER": "TERR", "PARKWAY": "PKY", "PKWY": "PKY", "PKY": "PKY",
+    "CIRCLE": "CIR", "CIR": "CIR", "GATE": "GATE", "GREEN": "GREEN", "GROVE": "GROVE",
+    "LINK": "LINK", "MEWS": "MEWS", "POINT": "PT", "PT": "PT", "RISE": "RISE",
+    "SQUARE": "SQ", "SQ": "SQ", "BAY": "BAY", "COVE": "COVE", "HEIGHTS": "HTS", "HTS": "HTS",
+    "LANDING": "LANDNG", "MANOR": "MANOR", "PARK": "PARK", "RIDGE": "RIDGE", "VIEW": "VIEW",
+    "VILLAS": "VILLAS", "COMMON": "COMMON", "CIRCUIT": "CIRCT", "HILL": "HILL",
+}
+# Directionals fold to the abbreviation the reference files publish. The spelled-out forms are NOT
+# cosmetic: "2130 Glenmore Court Southeast" parsed to street name "GLENMORE COURT SOUTHEAST" with no
+# type and no direction, matching nothing — in a grid city (Calgary/Edmonton quadrants) the direction
+# is part of the street's identity, so losing it loses the address.
+_DIR = {
+    "N": "N", "S": "S", "E": "E", "W": "W", "NE": "NE", "NW": "NW", "SE": "SE", "SW": "SW",
+    "NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W",
+    "NORTHEAST": "NE", "NORTHWEST": "NW", "SOUTHEAST": "SE", "SOUTHWEST": "SW",
+}
+
+# Unit prefixes to strip BEFORE the house number is read. Alberta's rosters lead with forms the
+# generic US-shaped unit regex in sources/dedupe.py does not know ("Bay 6, 5221 46 Street";
+# "4A-1861 MEADOWBROOK DR SE"), and a missed unit token becomes the house number — silently
+# geocoding to the wrong end of the block, or to nothing.
+_UNIT_PREFIX = re.compile(
+    # `#?` before the unit token: "Unit #101 3342 Parsons Road NW" puts a hash INSIDE the unit, and
+    # `[\w-]+` cannot match it, so the whole prefix failed and the address went unparsed.
+    # Trailing `[-,]?`: "UNIT 3170R - 5850 88 AVE NE" separates unit from number with a dash.
+    r"^\s*(?:(?:BAY|SUITE|STE|UNIT|APT|APARTMENT|BLDG|BUILDING|FL|FLOOR|RM|ROOM|#)\s*\.?\s*"
+    r"#?[\w-]+\s*[-,]?\s*)+",
+    re.IGNORECASE,
+)
+# "4A-1861 …" / "1005-401 …": a leading unit joined to the house number by a hyphen. The unit is on
+# the LEFT in Canadian usage, so the house number is what follows the hyphen.
+#
+# The lookahead demands a COMPLETE numeric token (digits then a space), not merely a leading digit.
+# With `(?=[0-9])` this rule ate the house number of "1230-11Th Avenue" — house 1230 on 11th Avenue —
+# leaving "11TH AVENUE" and no number. "1005-401 COOPERS BLVD SW" still strips, because "401 " is a
+# whole number; "11Th " is not. The two forms are only distinguishable here.
+_UNIT_DASH = re.compile(r"^\s*[0-9]+[A-Z]?\s*-\s*(?=[0-9]+\s)", re.IGNORECASE)
+# A civic number may carry a letter suffix ("11032A Elbow Drive SW"). Capture the digits and drop
+# the letter: reference files publish the numeric part, so keeping it matched nothing.
+_HOUSE_NUM = re.compile(r"^\s*([0-9]+)[A-Z]?\s+", re.IGNORECASE)
+
+
+def normalize_city(city: str | None) -> str:
+    """Fold a municipality name to the RNF's CSDNAME form (case/punctuation-insensitive)."""
+    if not city:
+        return ""
+    return re.sub(r"[^A-Z0-9 ]+", "", city.upper()).strip()
+
+
+def street_key(name: str, type_: str, dir_: str) -> str:
+    """The join key for a street: canonical NAME|TYPE|DIR, matching the RNF's own vocabulary."""
+    nm = re.sub(r"[^A-Z0-9 ]+", " ", (name or "").upper())
+    nm = " ".join(nm.split())
+    d = (dir_ or "").upper()
+    return f"{nm}|{_TYPE.get((type_ or '').upper(), (type_ or '').upper())}|{_DIR.get(d, d)}"
+
+
+def parse_address(address: str | None) -> tuple[int, str] | None:
+    """"5017 22 Ave SW" -> (5017, "22|AVE|SW"); None when no house number is readable.
+
+    Unit prefixes are stripped first (see `_UNIT_PREFIX`/`_UNIT_DASH`) so the unit can never be
+    mistaken for the house number.
+    """
+    if not address:
+        return None
+    text = address.strip().upper()
+    text = _UNIT_PREFIX.sub("", text)
+    text = _UNIT_DASH.sub("", text)
+    text = re.sub(r"[.,]", " ", text)
+    text = " ".join(text.split())
+    m = _HOUSE_NUM.match(text)
+    if not m:
+        return None
+    number = int(m.group(1))
+    tokens = text[m.end():].split()
+    if not tokens:
+        return None
+    direction = ""
+    if len(tokens) > 1 and tokens[-1] in _DIR:
+        direction = tokens.pop()
+    type_ = ""
+    if len(tokens) > 1 and tokens[-1].upper() in _TYPE:
+        type_ = tokens.pop()
+    if not tokens:
+        return None
+    return number, street_key(" ".join(tokens), type_, direction)

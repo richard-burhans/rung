@@ -252,3 +252,44 @@ def test_winner_absent_from_current_catalog_falls_back_to_cheapest() -> None:
     method, records = _run(access.run_target(conn, "t", "k", [access.AccessMethod("cheap", 0, cheap)]))
     assert method == "cheap"        # present cheapest wins; the absent winner is not tried
     assert cheap.calls == 1 and len(records) == 1
+
+
+def test_a_crashing_rung_is_recorded_broken_and_the_ladder_continues() -> None:
+    """A rung that raises an UNLABELLED exception must be recorded `broken`, not vanish.
+
+    THE BUG THIS PINS. `_attempt` caught only `MethodOutcome` and let everything else propagate — on the
+    stated reasoning that a silent crash must not be swallowed. But `run_target`'s only two callers both
+    wrap it in `except Exception: return None, []`, so the crash WAS swallowed, one frame up:
+
+      * no `access_methods` row was written — not `broken`, not `failed`, NOTHING. The target read as
+        *has no method*, which is a failure of OURS reported as a fact about the world (the top-of-file
+        comment names this the project's signature bug);
+      * and the rest of the ladder never ran, so one shape-changed payload in a CHEAP rung silently
+        disabled every EXPENSIVE rung that would have worked.
+
+    The extractors walk raw dicts/lists, so `TypeError`/`AttributeError` from an upstream shape change is
+    the EXPECTED trigger, not a hypothetical.
+    """
+    conn = _conn()
+
+    async def crashes(conn, target_key, hint):
+        raise TypeError("'NoneType' object is not subscriptable")   # the real shape-change signature
+
+    catalog = [
+        access.AccessMethod(name="cheap_and_crashing", cost_rank=1, run=crashes),
+        access.AccessMethod(name="expensive_and_working", cost_rank=9, run=_Method([_store()])),
+    ]
+    winner, records = _run(access.run_target(conn, "store_menu", "XX:crash", catalog))
+
+    # 1. The ladder CONTINUED past the crash — the expensive rung that works still got its turn.
+    assert winner == "expensive_and_working"
+    assert len(records) == 1
+
+    # 2. The crash is ON THE RECORD, as `broken` — the rung is asking to be repaired — and it carries the
+    #    exception type, so `access_health` can show what actually happened instead of showing nothing.
+    rows = {row[0]: row for row in db.get_access_methods(conn, "store_menu", "XX:crash")}
+    assert "cheap_and_crashing" in rows, "a crashed rung wrote NO ROW — the target reads as 'no method'"
+    status = rows["cheap_and_crashing"][db.ACCESS_METHOD_COLUMNS.index("status")]
+    error = rows["cheap_and_crashing"][db.ACCESS_METHOD_COLUMNS.index("error")]
+    assert status == "broken", f"a crashed rung must be `broken`, got {status!r}"
+    assert "TypeError" in error

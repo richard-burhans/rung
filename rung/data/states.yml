@@ -535,3 +535,42 @@
   # map id) gives name + coordinates per store, parsed by the generic kml handler.
   list_url: https://www.google.com/maps/d/u/0/kml?mid=1jTYtNQgB0CVC27Bn_xIsFGeVuCh_KCdR&forcekml=1
   list_type: kml
+
+# ── Government-monopoly provinces (Quebec + Maritimes) ────────────────────────
+# These provinces run RETAIL as a Crown monopoly: a single provincial retailer sells
+# the whole province online, so there is no private-store roster and none of these
+# appear on the Dutchie/Weedmaps/Jane/Leafly aggregators the private provinces ride.
+# The monopoly's own storefront IS the roster and the menu — seeded + scraped via
+# `seed-monopolies` (rung_intel/data/provincial_monopolies.yml). known_url is the
+# regulator/retailer; no list_url (the storefront is the source of truth, Stage 2/3).
+- abbr: QC
+  name: Quebec
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Société québécoise du cannabis (SQDC)
+  known_url: https://www.sqdc.ca/
+
+- abbr: NS
+  name: Nova Scotia
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Nova Scotia Liquor Corporation (NSLC)
+  known_url: https://www.mynslc.com/en/products/cannabis
+
+- abbr: NB
+  name: New Brunswick
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: Cannabis NB
+  known_url: https://www.cannabis-nb.com/
+
+- abbr: PE
+  name: Prince Edward Island
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  agency: PEI Cannabis Management Corporation
+  known_url: https://peicannabiscorp.com/

@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 from collections.abc import Callable
 from typing import Any
 
@@ -31,6 +32,40 @@ def _stage(name: str) -> Callable[..., Any]:
 def recon_cmd(state: str, discover: bool) -> None:
     """Probe company homepages and detect dispensary platform technology."""
     asyncio.run(_run_recon(state=state.strip().upper() or None, discover=discover))
+
+
+@click.command("fetch-fx")
+@click.option(
+    "--since", default="",
+    help="Backfill start date (YYYY-MM-DD). Default: the earliest priced observation date.",
+)
+def fetch_fx_cmd(since: str) -> None:
+    """Fetch/refresh the daily FX series (CAD->USD, Bank of Canada) for cross-currency price
+    normalization. Idempotent; run daily from a cron. See docs/fx_series_design.md."""
+    from rung import fx
+
+    start = datetime.date.fromisoformat(since.strip()) if since.strip() else None
+
+    async def _run() -> dict:
+        conn = db.get_connection()
+        summary = await fx.refresh_fx_rates(conn, since=start)
+        conn.close()
+        return summary
+
+    summary = asyncio.run(_run())
+    if not summary["pairs"]:
+        click.echo(f"fetch-fx: {summary['note']}")
+        return
+    cov = summary["coverage"]
+    click.echo(
+        f"fetch-fx {', '.join(summary['pairs'])}: {summary['start']} -> {summary['end']} | "
+        f"{summary['fetched_business_days']} business days fetched, {summary['days_written']} "
+        f"calendar days written"
+    )
+    click.echo(
+        f"  fx_rates CAD/USD coverage: {cov['min']} .. {cov['max']} "
+        f"({cov['days']} days, {cov['carried']} carried forward)"
+    )
 
 
 @click.command("bootstrap-dutchie")
@@ -144,6 +179,23 @@ def scrape_states(only: str, render: bool, ai: bool, record_history: bool) -> No
     ))
 
 
+def _dedupe_state(abbr: str) -> None:
+    """Fold shared-brand / cross-listed duplicate stores for one state (``canonical_company_id``).
+
+    Run right after a company-store scrape: dedupe must FOLLOW a scrape, or fragmentation (an operator
+    seeded as N per-location companies that each re-scrape the same site) and dangling fold pointers
+    accumulate until someone remembers to run ``dedupe-stores`` — the gap that left Ontario's "One Plant"
+    as 13 phantom operators across 1,022 store rows.
+    """
+    from rung.sources.dedupe import print_dedupe_report, run_dedupe
+    conn = db.get_connection()
+    try:
+        report = run_dedupe(conn, abbr)
+    finally:
+        conn.close()
+    print_dedupe_report(report, abbr)
+
+
 @click.command("scrape-company-stores")
 @click.option("--state", default="PA", help="State to scrape company-owned store lists for (e.g. PA).")
 @click.option("--ai", is_flag=True, help="Enable the slow AI (Ollama) rung for companies no other method covers.")
@@ -170,10 +222,16 @@ def scrape_company_stores_cmd(
     state: str, ai: bool, only: str, remax: bool, record_history: bool
 ) -> None:
     """Scrape each company's OWN site for its stores via the access-method registry."""
+    abbr = state.strip().upper()
+    only_terms = _only_terms(only)
     asyncio.run(_run_company_stores(
-        state=state.strip().upper(), use_ai=ai, only=_only_terms(only), remax=remax,
-        record_history=record_history,
+        state=abbr, use_ai=ai, only=only_terms, remax=remax, record_history=record_history,
     ))
+    # Fold the state's duplicates immediately so fragmentation + dangling folds never accumulate between
+    # a scrape and a forgotten `dedupe-stores`. A scoped --only probe stays narrow (it must not disturb
+    # the rest of the state, per the pipeline contract), so it does not trigger the full-state fold.
+    if not only_terms:
+        _dedupe_state(abbr)
 
 
 @click.command("scrape-menus")

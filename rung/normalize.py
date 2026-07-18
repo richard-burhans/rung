@@ -88,12 +88,22 @@ def size_to_grams(raw: object) -> float | None:
     if fraction:
         numerator, denominator = float(fraction.group(1)), float(fraction.group(2))
         if denominator:
-            return round((numerator / denominator) * _GRAMS_PER_OUNCE * count, 4)
+            return _plausible_g((numerator / denominator) * _GRAMS_PER_OUNCE * count)
     match = _NUMERIC_UNIT_RE.search(text)
     if match:
         grams = float(match.group(1)) * _UNIT_TO_GRAMS[match.group(2).lower()]
-        return round(grams * count, 4)
+        return _plausible_g(grams * count)
     return None
+
+
+# A retail cannabis unit tops out near a pound (454 g bulk flower); a "size" past ~1 kg is a unit-parse
+# error (a 10,416 g "flower", a 2,000 g vape — mg read as g, or a runaway multipack), not a sellable
+# weight. Reject it rather than stamp a nonsense size the shelf never sold.
+_MAX_PLAUSIBLE_G = 1000.0
+
+
+def _plausible_g(grams: float) -> float | None:
+    return round(grams, 4) if 0 < grams <= _MAX_PLAUSIBLE_G else None
 
 
 def grams_to_label(grams: object) -> str | None:
@@ -275,18 +285,16 @@ def _repair_total(totals: dict[str, float]) -> dict[str, float]:
     return totals
 
 
-def normalize_terpenes(terpenes: object) -> tuple[dict[str, float] | None, float | None]:
-    """Fold a raw terpene list to canonical ``({Name: percent}, total)``.
+def _fold_terpenes(terpenes: object) -> dict[str, float]:
+    """Fold a raw terpene list to canonical ``{Name: percent}`` BEFORE any repair.
 
-    Names collapse via ``text.normalize_terpene`` (so ``b_myrcene``/``Beta Myrcene`` → Myrcene
-    and α-/β-pinene sum into one Pinene), values convert to percent, and duplicates of one
-    canonical terpene are summed. Entries with no numeric value (strain-reference names) and
-    terpenes outside the tracked set are dropped, then `_repair_total` fixes an impossible total
-    (lone spike dropped / unlabeled mg/g row rescaled); ``(None, None)`` when nothing
-    quantifiable remains. ``total`` is the sum of the canonical percents (consistent with dict).
+    Names collapse via ``text.normalize_terpene`` (so ``b_myrcene``/``Beta Myrcene`` → Myrcene and
+    α-/β-pinene sum into one Pinene), values convert to percent, and duplicates of one canonical
+    terpene are summed. Entries with no numeric value and untracked terpenes are dropped. Shared by
+    ``normalize_terpenes`` and ``terpenes_repaired`` so the two cannot drift (the fold is defined once).
     """
     if not isinstance(terpenes, list):
-        return None, None
+        return {}
     totals: dict[str, float] = {}
     for terpene in terpenes:
         if not isinstance(terpene, dict):
@@ -298,6 +306,21 @@ def normalize_terpenes(terpenes: object) -> tuple[dict[str, float] | None, float
         if percent is None:
             continue
         totals[canonical] = round(totals.get(canonical, 0.0) + percent, 4)
+    return totals
+
+
+def normalize_terpenes(terpenes: object) -> tuple[dict[str, float] | None, float | None]:
+    """Fold a raw terpene list to canonical ``({Name: percent}, total)``.
+
+    Names collapse via ``text.normalize_terpene`` (so ``b_myrcene``/``Beta Myrcene`` → Myrcene
+    and α-/β-pinene sum into one Pinene), values convert to percent, and duplicates of one
+    canonical terpene are summed. Entries with no numeric value (strain-reference names) and
+    terpenes outside the tracked set are dropped, then `_repair_total` fixes an impossible total
+    (lone spike dropped / unlabeled mg/g row rescaled); ``(None, None)`` when nothing
+    quantifiable remains. ``total`` is the sum of the canonical percents (consistent with dict).
+    ``terpenes_repaired`` reports whether the repair below actually altered the values.
+    """
+    totals = _fold_terpenes(terpenes)
     if not totals:
         return None, None
     totals = _repair_total(totals)  # drop a lone spike / rescale an mg/g-misscaled row
@@ -307,16 +330,46 @@ def normalize_terpenes(terpenes: object) -> tuple[dict[str, float] | None, float
     totals = {name: value for name, value in totals.items() if value <= _MAX_PLAUSIBLE_TERPENE}
     if not totals:
         return None, None
+    # An ALL-ZERO map is "not tested", not "tested and found to contain nothing". Several platforms
+    # publish the full terpene panel with every value 0.0 for an untested product, and we were
+    # faithfully storing it — 75,086 rows (10% of the observation history) carrying a plausible-looking
+    # {Myrcene: 0.0, Limonene: 0.0, …} that passes every `terpenes_std IS NOT NULL` gate and then
+    # contributes a real zero to any mean, quantile or ICC computed over "products with terpenes".
+    # A measured zero for ONE terpene is meaningful (it is below the LOQ); a measured zero for EVERY
+    # terpene is an empty panel. Store NULL, which is what "we do not know" already means everywhere.
+    if all(value == 0.0 for value in totals.values()):
+        return None, None
     ordered = dict(sorted(totals.items(), key=lambda item: -item[1]))
     return ordered, round(sum(totals.values()), 4)
 
 
+def terpenes_repaired(terpenes: object) -> bool:
+    """True when :func:`normalize_terpenes` ALTERED the raw values to produce ``terpenes_std``.
+
+    The same shape as :func:`text.product_type_defaulted`: a repaired row's stored terpene numbers are
+    OUR corrections — a lone spurious spike dropped, an unlabeled mg/g row rescaled ÷10 (both by
+    ``_repair_total``), or a single terpene above the per-terpene ceiling dropped — not the profile the
+    platform published, yet downstream they are byte-indistinguishable from a clean read. These numbers
+    feed D1's ICC/variance flagship, so an analysis must be able to exclude the corrected rows. Returns
+    False when the row yields no ``terpenes_std`` (nothing to flag): the flag qualifies a stored value.
+    """
+    raw = _fold_terpenes(terpenes)
+    if not raw:
+        return False
+    repaired = _repair_total(raw)
+    kept = {name: value for name, value in repaired.items() if value <= _MAX_PLAUSIBLE_TERPENE}
+    if not kept or all(value == 0.0 for value in kept.values()):
+        return False                       # normalize_terpenes returns (None, None) — no stored value
+    # A repair happened iff _repair_total changed the map OR the per-terpene ceiling dropped a terpene.
+    return repaired != raw or len(kept) != len(repaired)
 
 
 # ── stamp onto a record ─────────────────────────────────────────────────────────
 
 def enrich_record(record: StoreProductRecord) -> None:
-    """Stamp the normalized fields (``size_g``, ``terpenes_std``, ``terp_total``, and the
-    per-variant ``size_g``/``price_per_g``) onto a record from its own raw fields. Idempotent."""
+    """Stamp the normalized fields (``size_g``, ``terpenes_std``, ``terp_total``,
+    ``terpenes_repaired``, and the per-variant ``size_g``/``price_per_g``) onto a record from its own
+    raw fields. Idempotent."""
     record.size_g = enrich_variants(record.variants, record.category_std)
     record.terpenes_std, record.terp_total = normalize_terpenes(record.terpenes)
+    record.terpenes_repaired = terpenes_repaired(record.terpenes)

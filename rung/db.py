@@ -1,5 +1,6 @@
 import datetime
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, LiteralString
 
@@ -8,14 +9,24 @@ import psycopg
 if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ delegates (no runtime import,
     # so the engine stays cannabis-free); keeps LiteralString-typed constants like NATURAL_FLOWER_WHERE
     # inferring correctly at db.* call sites. Retire when callers re-point to rung.reference_db (B5).
+    #
+    # A NAME MISSING FROM THIS BLOCK IS NOT A COSMETIC MISS. It resolves through `__getattr__` to `Any`,
+    # `ty` then swallows every use of it, and the LiteralString SQL-composition guarantee — the whole
+    # reason this block exists — is silently OFF for exactly that name. The four guards added after the
+    # db/reference_db split were all missing here, i.e. the guards that exist BECAUSE analyses were
+    # retracted were the ones the type system had stopped checking.
     from rung.reference_db import (  # noqa: F401
         CA_PROVINCES_SUBQUERY,
+        GEOCODED_TABLES,
         NATURAL_FLOWER_WHERE,
         NATURAL_FLOWER_WHERE_NORMALIZED,
+        TRUSTED_LINEAGE_WHERE,
+        TRUSTED_POTENCY_WHERE,
         US_EXCL_TERRITORIES_SUBQUERY,
         US_JURISDICTIONS_SUBQUERY,
         US_TERRITORIES,
         append_store_observation,
+        apply_geocode_cache,
         clear_store_canonical_for_state,
         count_company_stores,
         count_store_products,
@@ -26,6 +37,7 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         get_all_state_programs,
         get_company_store_rows,
         get_company_stores_for_dedupe,
+        get_geocode_cache,
         get_menu_stores_for_state,
         get_recon_companies_for_state,
         get_state_program,
@@ -34,6 +46,8 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         insert_store_product,
         latest_snapshot_times,
         latest_store_observations,
+        natural_flower_where,
+        put_geocode_cache,
         realign_store_products_company,
         record_location_observations,
         record_observations,
@@ -44,8 +58,10 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         set_store_canonical,
         set_store_location,
         set_store_storefront,
+        trusted_potency_where,
         upsert_recon,
         upsert_state_program,
+        us_jurisdictions_where,
     )
 
 type DBConn = psycopg.Connection
@@ -255,10 +271,19 @@ CREATE TABLE IF NOT EXISTS token_buckets (
 """
 
 def get_connection() -> DBConn:
-    """Open and return a connection to the dispensaries database.
+    """Open and return a connection to the dispensaries data source.
 
-    Reads DATABASE_URL from the environment (default: local dev Postgres container).
+    Live Postgres by default (``DATABASE_URL``, or the local dev container). When
+    ``RUNG_DATA_SOURCE=static`` is set, returns a DuckDB-backed, psycopg-shaped connection over a frozen
+    clean-dataset export at ``RUNG_STATIC_PATH`` instead — so the analysis scripts run unchanged off a
+    portable file, with no database and no credentials (see ``rung.static_source``). This is the seam a
+    Galaxy tool flips to reproduce an analysis from the published dataset.
     """
+    from rung import (
+        static_source,  # local import: keep the engine store free of the static dep
+    )
+    if static_source.is_static():
+        return static_source.connect()  # ty: ignore[invalid-return-type]  (duck-typed psycopg surface)
     url = os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
     try:
         return psycopg.connect(url)
@@ -266,6 +291,53 @@ def get_connection() -> DBConn:
         raise psycopg.OperationalError(
             f"{exc} — is the dev Postgres running?"
         ) from exc
+
+
+class VerificationError(RuntimeError):
+    """A migration's post-commit read on a FRESH connection disagreed with what it expected — the change
+    did not land as reported. See :func:`apply_and_verify`."""
+
+
+_UNSET: Any = object()
+
+
+def apply_and_verify(
+    conn: DBConn,
+    apply: Callable[[DBConn], object],
+    verify: Callable[[DBConn], object],
+    *,
+    expected: object = _UNSET,
+    connect: Callable[[], DBConn] = get_connection,
+) -> object:
+    """Run a DML change, COMMIT it, and confirm it on a BRAND-NEW connection.
+
+    ``apply(conn)`` performs the change; ``verify(fresh)`` reads the post-state on a fresh connection
+    from ``connect()`` and returns a value; when ``expected`` is given it must equal that value, else
+    :class:`VerificationError`. Returns the verified value. The fresh connection is closed here.
+
+    **Verifying on a new connection is the load-bearing part, not a nicety.** ``get_connection()`` hands
+    back an ``autocommit=False`` connection, so once any statement runs psycopg holds an implicit
+    transaction and a ``with conn.transaction()`` block nests inside it as a mere SAVEPOINT — leaving that
+    block releases the savepoint but commits NOTHING, and closing the connection rolls it all back. A
+    verify query in the SAME session cannot catch this: it reads its own UNCOMMITTED work. That is
+    incident 5 — ``scripts/refold_companies.py`` reported "APPLIED: 9 companies merged", a same-session
+    count confirmed it, and a fresh connection still saw all 15. So the explicit ``conn.commit()`` below
+    is the fix, and reading the result on a new connection is the proof that it landed. Any migration that
+    reports success should confirm it through this, not through the applying session's own rowcounts.
+    """
+    apply(conn)
+    conn.commit()
+    fresh = connect()
+    try:
+        got = verify(fresh)
+    finally:
+        fresh.close()
+    if expected is not _UNSET and got != expected:
+        raise VerificationError(
+            f"post-commit verify read {got!r} on a fresh connection, expected {expected!r}: the change "
+            "did not land — a `with conn.transaction()` savepoint that never committed? (incident 5)"
+        )
+    return got
 
 
 def one(conn: DBConn, query: LiteralString, params: tuple = ()) -> tuple:

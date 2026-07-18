@@ -75,15 +75,30 @@ def test_find_lists_blank_only_is_none(monkeypatch) -> None:
 def test_scrape_company_stores_default_state_pa(monkeypatch) -> None:
     calls, fake = _recorder()
     monkeypatch.setattr(cli, "_run_company_stores", fake)
+    monkeypatch.setattr(cli, "_dedupe_state", lambda abbr: None)
     CliRunner().invoke(cli.scrape_company_stores_cmd, [])
     assert calls == [
         {"state": "PA", "use_ai": False, "only": None, "remax": False, "record_history": False}
     ]
 
 
+def test_scrape_company_stores_auto_dedupes_a_full_scrape_but_not_a_scoped_probe(monkeypatch) -> None:
+    # A full scrape must fold its duplicates immediately (dedupe FOLLOWS the scrape) so fragmentation +
+    # dangling folds never accumulate; a scoped --only probe stays narrow and does NOT fold the state.
+    monkeypatch.setattr(cli, "_run_company_stores", _recorder()[1])
+    folded: list[str] = []
+    monkeypatch.setattr(cli, "_dedupe_state", folded.append)
+    CliRunner().invoke(cli.scrape_company_stores_cmd, ["--state", "on"])
+    assert folded == ["ON"]                        # full scrape → auto-fold, state upper-cased
+    folded.clear()
+    CliRunner().invoke(cli.scrape_company_stores_cmd, ["--only", "One Plant"])
+    assert folded == []                            # scoped probe → no fold
+
+
 def test_scrape_company_stores_remax_flag(monkeypatch) -> None:
     calls, fake = _recorder()
     monkeypatch.setattr(cli, "_run_company_stores", fake)
+    monkeypatch.setattr(cli, "_dedupe_state", lambda abbr: None)
     CliRunner().invoke(cli.scrape_company_stores_cmd, ["--remax"])
     assert calls[0]["remax"] is True
 

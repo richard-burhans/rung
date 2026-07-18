@@ -5,14 +5,32 @@ engine (``db``, imported by ``queue``/``access``) no longer drags in the cannabi
 taxonomy. Holds the cannabis tables (dispensaries / company_stores / store_products / products /
 product_observations / store_locations / store_observations / store_lifecycle_events /
 state_programs + the ``products_normalized`` view), their
-migrations, all the CRUD, ``NATURAL_FLOWER_WHERE``, and ``create_reference_tables`` / ``create_tables``.
+migrations, all the CRUD, and ``create_reference_tables`` / ``create_tables``.
 Imports the engine primitives from ``db``. Back-compat: ``db.<reference fn>`` still works via
 ``db.__getattr__`` delegating here.
+
+IT ALSO OWNS THE **ANALYSIS GUARDS** — and those exist because analyses were RETRACTED:
+
+* ``NATURAL_FLOWER_WHERE`` / ``natural_flower_where(alias)`` — natural flower only. Infused flower
+  inflated a producer→THC effect 0.226 → 0.372. **Take the aliased form** when your query needs a
+  prefix: three live scripts hand-rolled the filter because the bare constant would not compose, and
+  all three kept an older, shorter regex that admitted concentrates AS FLOWER.
+* ``TRUSTED_LINEAGE_WHERE`` — excludes Weedmaps, whose ``strain_type`` is a defaulted field (98.2%
+  "Indica"); a lineage finding built on it was retracted.
+* ``TRUSTED_POTENCY_WHERE`` / ``trusted_potency_where(alias)`` — excludes Leafly, which is 8.4% of
+  natural-flower rows but supplies **60% of the impossible (≥40% THC) tail**, differentially by state.
+* ``US_JURISDICTIONS_SUBQUERY`` / ``US_EXCL_TERRITORIES_SUBQUERY`` / ``CA_PROVINCES_SUBQUERY`` and
+  ``us_jurisdictions_where(col)`` — country partitioning, so a CAD price never pools with a USD one.
+
+All are ``LiteralString`` so they compose into SQL without defeating psycopg's injection guard. **Reach
+them from HERE, not through ``db.*``** — the ``db.__getattr__`` shim erases ``LiteralString`` to ``Any``
+for any name missing from its ``TYPE_CHECKING`` block.
 """
 
 import contextlib
 import datetime
 import json
+from typing import LiteralString
 
 from psycopg.types.json import Jsonb
 
@@ -48,6 +66,35 @@ CREATE TABLE IF NOT EXISTS dispensaries (
 # company_id logically references companies(id), but the companies table is owned
 # (and created later) by seed_companies.py, so no FK constraint — Postgres would
 # reject DDL referencing a not-yet-existing table. SQLite never enforced it either.
+# Geocoded locations survive a roster re-scrape ONLY because they are cached here.
+#
+# `scrape-states` replaces a state's rows with DELETE + INSERT (`delete_dispensaries_for_state`), and
+# the source republishes only what the source publishes. For the rosters that carry a street but no
+# ZIP — NV, IL, UT, MD and others — the latitude/longitude/zip_code/city that `backfill_geocode.py`
+# derived are therefore DESTROYED by the next successful scrape. `compare.geo_key` is `@lat,lon|zip`
+# and `_match_key` is `number street|zip`, so a roster with no ZIP matches NOTHING: the deliverable
+# silently stops working for that state, with no error, on a scrape that succeeded.
+#
+# That is not hypothetical. It happened on 2026-07-12, reverting the NV and MD fixes that
+# `WORK_BACKLOG.md` still records as DONE, and nobody saw it because the one instrument that checks
+# (`coverage_healthcheck.py`) was muted in the sweep.
+#
+# The existing guard in `scrape_all_states` protects against the failure that was ANTICIPATED (an
+# empty scrape wiping good rows) and is blind to the one that occurred (a successful scrape wiping
+# DERIVED rows). So: cache every geocode keyed by the one-line query (`text.geocode_query`), and have
+# the command that destroys the enrichment restore it, in the same commit. Re-applying costs zero
+# geocoder calls, which is what makes "restore on every scrape" affordable.
+_CREATE_GEOCODE_CACHE = """
+CREATE TABLE IF NOT EXISTS geocode_cache (
+    query        TEXT PRIMARY KEY,
+    latitude     DOUBLE PRECISION,
+    longitude    DOUBLE PRECISION,
+    zip_code     TEXT,
+    city         TEXT,
+    geocoded_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
 _CREATE_COMPANY_RECON = """
 CREATE TABLE IF NOT EXISTS company_recon (
     company_id     INTEGER NOT NULL,
@@ -140,7 +187,25 @@ CREATE TABLE IF NOT EXISTS store_products (
     brand               TEXT,
     category            TEXT,
     category_std        TEXT,
+    -- TRUE when category_std was CORRECTED from the product NAME (category_name_overrides.yml) rather
+    -- than read from the platform's raw category — OUR correction (a capsule sold as an "edible"), not
+    -- the platform's own label. Same shape as product_type_defaulted below. See `text.category_overridden`.
+    category_overridden BOOLEAN,
     product_type_std    TEXT,
+    -- TRUE when product_type_std was MANUFACTURED from absence (no keyword matched, so the category's
+    -- `_defaults` label fired) rather than read from the product name. This is the `strain_type` bug's
+    -- shape on OUR side of the wire: Weedmaps shipped a defaulted lineage field, we read it as an
+    -- observation, and we retracted a finding (E1) over it. 82.5% of flower rows carry a `Bud` that no
+    -- name ever said. The default is a defensible prior; it is not an observation, and an analysis must
+    -- be able to tell them apart. See `text.product_type_defaulted`.
+    product_type_defaulted BOOLEAN,
+    -- The obtention method the NAME or the platform's RAW category declares: 'Infused' (added to the
+    -- bud) / 'Extracted' (taken out of the plant) / NULL = neither says. There is deliberately NO
+    -- 'Natural' value: 96.35% of Flower rows declare nothing, and stamping those would manufacture
+    -- 903,819 observations nobody made — the `product_type_defaulted` comment above is the same
+    -- lesson, learned the hard way. So NULL means "unstated", and NATURAL_FLOWER_WHERE asks for
+    -- exactly that. See `text.normalize_obtention` + reports/obtention_facet_design.md.
+    obtention_std       TEXT,
     strain_type         TEXT,
     strain_type_std     TEXT,
     price               DOUBLE PRECISION,
@@ -152,6 +217,11 @@ CREATE TABLE IF NOT EXISTS store_products (
     terpenes            JSONB,
     terpenes_std        JSONB,
     terp_total          DOUBLE PRECISION,
+    -- TRUE when normalize_terpenes ALTERED the raw values to produce terpenes_std/terp_total (a lone
+    -- spike dropped, an unlabeled mg/g row rescaled ÷10, or a single terpene above the per-terpene
+    -- ceiling dropped) — OUR correction, not the published profile, and these feed D1's ICC/variance
+    -- flagship, so an analysis must be able to exclude them. See `normalize.terpenes_repaired`.
+    terpenes_repaired   BOOLEAN,
     cannabinoids_std    JSONB,
     variants            JSONB,
     scraped_at          TEXT    NOT NULL,
@@ -169,11 +239,15 @@ _STORE_PRODUCT_ADDED_COLUMNS = {
     "thc_mg": "DOUBLE PRECISION",
     "cbd_mg": "DOUBLE PRECISION",
     "category_std": "TEXT",
+    "category_overridden": "BOOLEAN",
     "product_type_std": "TEXT",
+    "obtention_std": "TEXT",
+    "product_type_defaulted": "BOOLEAN",
     "strain_type_std": "TEXT",
     "size_g": "DOUBLE PRECISION",
     "terpenes_std": "JSONB",
     "terp_total": "DOUBLE PRECISION",
+    "terpenes_repaired": "BOOLEAN",
     "cannabinoids_std": "JSONB",
 }
 
@@ -221,12 +295,25 @@ CREATE TABLE IF NOT EXISTS products (
     name             TEXT,
     category_std     TEXT,
     product_type_std TEXT,
+    obtention_std    TEXT,
     strain_type_std  TEXT,
     size_g           DOUBLE PRECISION,
     first_seen       TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen        TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 """
+
+#: Columns added to `products` after its first release — the seam `products` DID NOT HAVE, and whose
+#: absence is the whole bug. `natural_flower_where(alias)` is aliasable **precisely so it can be used on
+#: this table** (`p.category_std = 'Flower' AND p.obtention_std IS NULL`), so the guard's design assumes
+#: the facet exists here. When #293 introduced `obtention_std` it landed in `_STORE_PRODUCT_ADDED_COLUMNS`
+#: and had nowhere to land for `products` — every sibling table has a `_migrate_*`, this one did not — so
+#: the master silently stayed behind and `thc_inflation_by_jurisdiction.py`'s history half died with
+#: `UndefinedColumn`. `test_reference_db.py` now asserts every aliasable-guard column exists on every
+#: table the guard is aliased onto, which is the check that would have caught it.
+_PRODUCT_ADDED_COLUMNS = {
+    "obtention_std": "TEXT",
+}
 _CREATE_PRODUCT_OBSERVATIONS = """
 CREATE TABLE IF NOT EXISTS product_observations (
     id            BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
@@ -334,7 +421,33 @@ ON store_lifecycle_events (location_id)
 # so a per-row column would only duplicate it (design decision D2, docs/canada_expansion.md).
 # `price`/`price_per_g` stay numeric in their native currency; any cross-country price analysis
 # MUST partition or convert by this column, never pool CAD with USD.
-_CREATE_PRODUCTS_NORMALIZED_VIEW = """
+# Currency is a total function of the store's country (state_programs.country): every CA-province
+# store is CAD, every other store USD (design decision D2, docs/canada_expansion.md). Defined once
+# here so the normalized surface and the FX-converted observations view derive it identically. Both
+# views MUST alias state_programs as `prog` for this to resolve.
+_CURRENCY_FROM_COUNTRY: LiteralString = "CASE WHEN prog.country = 'CA' THEN 'CAD' ELSE 'USD' END"
+
+# Daily foreign-exchange series for cross-currency price normalization (docs/fx_series_design.md).
+# `rate` is quote_ccy per 1 base_ccy (a base-priced value * rate = that value in quote_ccy). We store
+# the direction analyses need — base=CAD, quote=USD — so a CAD price converts by a plain multiply.
+# FX sources publish business days only; a row exists for EVERY calendar day, and the forward-filled
+# ones (weekend/holiday) carry is_carried=TRUE, so the join is a plain equality while "what the
+# source actually published" stays auditable. A missing rate is an ABSENT row, never a fabricated
+# 1.0 — a self-inflicted fetch gap must not become a fact about the day.
+_CREATE_FX_RATES = """
+CREATE TABLE IF NOT EXISTS fx_rates (
+    rate_date   DATE NOT NULL,
+    base_ccy    TEXT NOT NULL,
+    quote_ccy   TEXT NOT NULL,
+    rate        DOUBLE PRECISION NOT NULL,
+    source      TEXT NOT NULL,
+    is_carried  BOOLEAN NOT NULL DEFAULT FALSE,
+    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (rate_date, base_ccy, quote_ccy)
+)
+"""
+
+_CREATE_PRODUCTS_NORMALIZED_VIEW = f"""
 CREATE OR REPLACE VIEW products_normalized AS
 SELECT
     sp.id, sp.company_id, sp.state, sp.store_key, sp.platform, sp.source, sp.external_product_id,
@@ -346,19 +459,55 @@ SELECT
     sp.scraped_at,
     sp.product_type_std AS product_type,
     sp.cannabinoids_std,  -- appended: CREATE OR REPLACE VIEW only allows adding columns at the end
-    CASE WHEN prog.country = 'CA' THEN 'CAD' ELSE 'USD' END AS currency
+    {_CURRENCY_FROM_COUNTRY} AS currency,
+    sp.obtention_std      -- appended (same constraint); NOT renamed, so the natural-flower predicate
+                          -- reads identically here and against store_products
 FROM store_products sp
 LEFT JOIN state_programs prog ON prog.abbr = sp.state
 """
 
+# The durable price series (product_observations) converted to a common numeraire (USD) at the rate
+# that prevailed ON EACH OBSERVATION'S DATE — the reason to hold a series and not one flat rate. USD
+# rows need no conversion (fx_rate 1.0); a CAD row with no same-day rate gets a NULL price_usd
+# (LEFT JOIN) rather than a wrong one. price_usd is a SPOT-FX conversion, not purchasing-power
+# parity — read docs/fx_series_design.md §0 before pooling it across markets.
+_CREATE_PRODUCT_OBSERVATIONS_FX_VIEW = f"""
+CREATE OR REPLACE VIEW product_observations_fx AS
+SELECT
+    po.id, po.product_id, po.store_key, po.state, po.scraped_at,
+    po.price, po.thc, po.cbd, po.thc_mg, po.cbd_mg, po.terp_total, po.terpenes_std,
+    {_CURRENCY_FROM_COUNTRY} AS currency,
+    CASE WHEN {_CURRENCY_FROM_COUNTRY} = 'USD' THEN 1.0 ELSE fx.rate END AS fx_rate,
+    CASE
+        WHEN po.price IS NULL THEN NULL
+        WHEN {_CURRENCY_FROM_COUNTRY} = 'USD' THEN po.price
+        WHEN fx.rate IS NULL THEN NULL
+        ELSE round((po.price * fx.rate)::numeric, 2)
+    END AS price_usd
+FROM product_observations po
+LEFT JOIN state_programs prog ON prog.abbr = po.state
+LEFT JOIN fx_rates fx
+       ON fx.base_ccy = {_CURRENCY_FROM_COUNTRY}
+      AND fx.quote_ccy = 'USD'
+      AND fx.rate_date = (po.scraped_at AT TIME ZONE 'UTC')::date
+"""
+
+# NOTE the column list is EXHAUSTIVE and hand-maintained: a stamped field that is missing here is
+# computed at `menu_extractors._record` and then silently dropped on the floor. That is not
+# hypothetical — `product_type_defaulted` was absent from this list from the day it was added, so
+# every row scraped after the one-off backfill carried NULL: 3.19M rows (100% of 2026-07-15/16) with
+# no value for the very flag that exists to keep a DEFAULT from being read as an OBSERVATION. The
+# backfill made the column look populated, which is what hid it. Add the column here when you add the
+# field, or the field does not exist.
 _INSERT_STORE_PRODUCT = """
 INSERT INTO store_products
   (company_id, state, store_key, platform, external_id, source,
-   external_product_id, name, brand, category, category_std, product_type_std,
+   external_product_id, name, brand, category, category_std, category_overridden, product_type_std,
+   product_type_defaulted, obtention_std,
    strain_type, strain_type_std,
-   price, size_g, thc, cbd, thc_mg, cbd_mg, terpenes, terpenes_std, terp_total,
+   price, size_g, thc, cbd, thc_mg, cbd_mg, terpenes, terpenes_std, terp_total, terpenes_repaired,
    cannabinoids_std, variants, scraped_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _INSERT_COMPANY_STORE = """
@@ -381,6 +530,7 @@ def create_reference_tables(conn: DBConn) -> None:
     Does not create the companies table — that is owned by seed_companies.py.
     """
     conn.execute(_CREATE_DISPENSARIES)
+    conn.execute(_CREATE_GEOCODE_CACHE)
     conn.execute(_CREATE_COMPANY_RECON)
     conn.execute(_CREATE_COMPANY_STORES)
     conn.execute(_CREATE_STATE_PROGRAMS)
@@ -392,6 +542,7 @@ def create_reference_tables(conn: DBConn) -> None:
     conn.execute(_CREATE_PRODUCT_OBSERVATIONS)
     conn.execute(_CREATE_PRODUCT_OBSERVATIONS_PRODUCT_INDEX)
     conn.execute(_CREATE_PRODUCT_OBSERVATIONS_STORE_INDEX)
+    conn.execute(_CREATE_FX_RATES)
     conn.execute(_CREATE_STORE_LOCATIONS)
     conn.execute(_CREATE_STORE_OBSERVATIONS)
     conn.execute(_CREATE_STORE_OBSERVATIONS_LOCATION_INDEX)
@@ -401,9 +552,11 @@ def create_reference_tables(conn: DBConn) -> None:
     _migrate_company_stores(conn)
     _migrate_state_programs(conn)
     _migrate_store_products(conn)
+    _migrate_products(conn)
     _migrate_product_observations(conn)
     _migrate_dispensaries(conn)
     conn.execute(_CREATE_PRODUCTS_NORMALIZED_VIEW)  # after the migration adds its columns
+    conn.execute(_CREATE_PRODUCT_OBSERVATIONS_FX_VIEW)  # depends on fx_rates + product_observations
     conn.commit()
 
 
@@ -415,6 +568,93 @@ def create_tables(conn: DBConn) -> None:
     """
     create_engine_tables(conn)
     create_reference_tables(conn)
+
+
+# --- FX series (docs/fx_series_design.md) -----------------------------------------------------------
+
+def ensure_fx_rates(conn: DBConn) -> None:
+    """Idempotently create the ``fx_rates`` table and the ``product_observations_fx`` view.
+
+    For the ``fetch-fx`` command, which may run on a database created before this schema landed;
+    ``create_reference_tables`` also creates them. Commits.
+    """
+    conn.execute(_CREATE_FX_RATES)
+    conn.execute(_CREATE_PRODUCT_OBSERVATIONS_FX_VIEW)
+    conn.commit()
+
+
+def upsert_fx_rates(
+    conn: DBConn, rows: list[tuple[datetime.date, str, str, float, str, bool]]
+) -> None:
+    """Insert/refresh FX rows ``(rate_date, base_ccy, quote_ccy, rate, source, is_carried)``.
+
+    ``fetched_at`` is stamped ``now()``. Idempotent on the ``(rate_date, base_ccy, quote_ccy)`` key —
+    a re-fetch is a better reading of the day, not a second fact about it. Caller commits.
+    """
+    if not rows:
+        return
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO fx_rates "
+            "  (rate_date, base_ccy, quote_ccy, rate, source, is_carried, fetched_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, now()) "
+            "ON CONFLICT (rate_date, base_ccy, quote_ccy) DO UPDATE SET "
+            "  rate = EXCLUDED.rate, source = EXCLUDED.source, "
+            "  is_carried = EXCLUDED.is_carried, fetched_at = now()",
+            rows,
+        )
+
+
+def fx_backfill_start(conn: DBConn) -> datetime.date | None:
+    """Earliest priced observation date across the durable series and the snapshot — the day the FX
+    backfill must reach. ``None`` if no priced rows exist yet.
+
+    ``store_products.scraped_at`` is ISO-8601 TEXT, so its date is the leading 10 chars;
+    ``product_observations.scraped_at`` is ``timestamptz``. ``LEAST`` ignores NULLs, so an empty
+    table on either side does not swallow the other.
+    """
+    row = conn.execute(
+        "SELECT LEAST("
+        "  (SELECT min((scraped_at AT TIME ZONE 'UTC')::date) "
+        "     FROM product_observations WHERE price IS NOT NULL),"
+        "  (SELECT min(substr(scraped_at, 1, 10)::date) "
+        "     FROM store_products WHERE price IS NOT NULL)"
+        ")"
+    ).fetchone()
+    return row[0] if row else None
+
+
+def currencies_needing_conversion(conn: DBConn) -> set[str]:
+    """Non-USD currencies present in the priced snapshot — the base currencies whose FX pairs we must
+    fetch. Empty when the data is US-only.
+    """
+    rows = conn.execute(
+        f"SELECT DISTINCT {_CURRENCY_FROM_COUNTRY} "
+        "FROM store_products sp LEFT JOIN state_programs prog ON prog.abbr = sp.state "
+        "WHERE sp.price IS NOT NULL"
+    ).fetchall()
+    return {row[0] for row in rows if row[0] and row[0] != "USD"}
+
+
+def fx_rate_coverage(conn: DBConn, base: str, quote: str) -> tuple:
+    """``(min_date, max_date, n_days, n_carried)`` for one pair — the ``fetch-fx`` summary line."""
+    row = conn.execute(
+        "SELECT min(rate_date), max(rate_date), count(*), "
+        "       count(*) FILTER (WHERE is_carried) "
+        "FROM fx_rates WHERE base_ccy = %s AND quote_ccy = %s",
+        (base, quote),
+    ).fetchone()
+    return row if row else (None, None, 0, 0)
+
+
+def latest_fx_rate(conn: DBConn, base: str, quote: str) -> float | None:
+    """Most recent stored rate for a pair, or ``None`` if the pair has never been fetched."""
+    row = conn.execute(
+        "SELECT rate FROM fx_rates WHERE base_ccy = %s AND quote_ccy = %s "
+        "ORDER BY rate_date DESC LIMIT 1",
+        (base, quote),
+    ).fetchone()
+    return row[0] if row else None
 
 
 # dispensaries columns removed after first release — always-NULL dead columns never set by any
@@ -435,6 +675,18 @@ def _migrate_product_observations(conn: DBConn) -> None:
         # DDL with hardcoded column/type from a module constant (see _migrate_company_stores).
         conn.execute(  # ty: ignore[no-matching-overload]
             f"ALTER TABLE product_observations ADD COLUMN IF NOT EXISTS {column} {col_type}"
+        )
+
+
+def _migrate_products(conn: DBConn) -> None:
+    """Add any products columns missing from an older database.
+
+    The seam that did not exist until 2026-07-17. See `_PRODUCT_ADDED_COLUMNS`.
+    """
+    for column, col_type in _PRODUCT_ADDED_COLUMNS.items():
+        # DDL with hardcoded column/type from a module constant (see _migrate_company_stores).
+        conn.execute(  # ty: ignore[no-matching-overload]
+            f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} {col_type}"
         )
 
 
@@ -701,7 +953,10 @@ def insert_store_product(conn: DBConn, record: StoreProductRecord) -> None:
             record.brand,
             record.category,
             record.category_std,
+            record.category_overridden,
             record.product_type_std,
+            record.product_type_defaulted,
+            record.obtention_std,
             record.strain_type,
             record.strain_type_std,
             record.price,
@@ -713,6 +968,7 @@ def insert_store_product(conn: DBConn, record: StoreProductRecord) -> None:
             Jsonb(record.terpenes) if record.terpenes is not None else None,
             Jsonb(record.terpenes_std) if record.terpenes_std is not None else None,
             record.terp_total,
+            record.terpenes_repaired,
             Jsonb(record.cannabinoids_std) if record.cannabinoids_std is not None else None,
             Jsonb(record.variants) if record.variants is not None else None,
             now,
@@ -841,10 +1097,11 @@ def record_observations(
     for fingerprint, record in by_fp.items():
         row = conn.execute(
             "INSERT INTO products (fingerprint, brand, name, category_std, product_type_std, "
-            "strain_type_std, size_g) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+            "obtention_std, strain_type_std, size_g) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (fingerprint) DO UPDATE SET last_seen = now() RETURNING id",
             (fingerprint, text.normalize_brand(record.brand or ""), record.name,
-             record.category_std, record.product_type_std, record.strain_type_std, record.size_g),
+             record.category_std, record.product_type_std, record.obtention_std,
+             record.strain_type_std, record.size_g),
         ).fetchone()
         assert row is not None  # INSERT ... RETURNING always yields a row
         fp_to_id[fingerprint] = row[0]
@@ -1033,23 +1290,140 @@ _KEPT_HANDLE_ORDER = "ORDER BY platform, external_id, company_id"
 
 
 # The "natural flower" filter for product analyses (potency forensics, chemovar clustering): the
-# Flower category MINUS adulterated/enhanced bud — flower sprayed or coated with added cannabinoids
-# (so its potency/terpenes aren't the plant's own fingerprint). Excludes the `Infused` product type
-# plus the name-tells the taxonomy misses (moonrock, kief-/dusted-/coated-/covered-). "diamond" and
-# "caviar" are deliberately NOT excluded — they're mostly legitimate strain names with normal THC,
-# not adulteration. A WHERE fragment over `store_products`; callers add their own SELECT-list/filters.
-NATURAL_FLOWER_WHERE = (
-    "category_std = 'Flower' AND product_type_std IS DISTINCT FROM 'Infused' "
-    "AND coalesce(name, '') !~* '(infus|moonrock|moon rock|kief|dusted|coated|covered)'"
+# Flower category MINUS anything whose potency/terpenes are not the PLANT'S OWN fingerprint.
+#
+# Two exclusions, and they are different in kind:
+#
+# (a) ADULTERATED bud — sprayed/coated with added cannabinoids. The `Infused` product type plus the
+#     name-tells the taxonomy misses (moonrock, kief-/dusted-/coated-/covered-), and the adulterant
+#     substances that appear in the name of a coated bud (distillate, rosin, shatter, badder, wax,
+#     dab, powder). "diamond" and "caviar" stay ALLOWED — they are mostly legitimate strain names
+#     with normal THC ("Black Diamond"), so excluding them would drop real flower.
+#
+# (b) NOT BUD AT ALL — 168 rows whose name says cartridge/cart/pod/syringe. These are a STORE's
+#     mislabel on the platform: the raw category really is "Flower" and we record it faithfully.
+#
+# A note on (b), because it corrects an earlier misdiagnosis in this file's history: there is NO
+# category-misclassification bug in `normalize_category`. It was suspected 2026-07-13 when 11,117
+# "natural flower" rows turned out to carry a physically impossible >45% THC — but recomputing the
+# category for every one of them reproduces the stored value exactly, and 20k+ of them arrive with
+# raw category "Flower" straight from Dutchie/Leafly/Weedmaps/Jane. The impossible numbers are the
+# SOURCE's, not a bucketing error of ours; they are the infused-flower label problem (finding #108),
+# whose name-based filter is explicitly a LOWER bound. This predicate contains what a name can catch;
+# it cannot catch a mislabeled potency on a product that says nothing but "flower".
+#
+# A WHERE fragment over `store_products`; callers add their own SELECT-list/filters.
+# Lineage (indica/sativa/hybrid) you may actually ANALYZE. Weedmaps' consumer payload carried a
+# DEFAULTED lineage field, so every product it served came back "Indica" whether or not anyone had
+# said so. The mapper was fixed on 2026-07-10 (#181: read `genetics_tag`, never `category.name`), but
+# the fix only reaches rows scraped AFTER it — and Weedmaps is ~35% of all lineage rows, so the stale
+# ones swamp any pooled analysis.
+#
+# The signature is unmistakable, and it is why this guard is a date and not a judgment call:
+#
+#   weedmaps scrapes 2026-06-18 .. 07-05 (pre-fix):  44.7% - 64.6% "Indica"   <- defaulted
+#   weedmaps scrape  2026-07-10        (post-fix):   28.0% "Indica"           <- matches Dutchie's 28.0%
+#   flower only, pre-fix:                            97.2% "Indica"           <- against a Hybrid-majority market
+#
+# Two shipped analyses were computed over the contaminated pool and had to be RETRACTED (see
+# docs/analysis/indica_sativa_form.md). Gate every lineage analysis on this, not on `strain_type_std
+# IS NOT NULL`, which is exactly the check that let it through.
+_WEEDMAPS_LINEAGE_FIX = "2026-07-10T19:15:00+00:00"   # commit c3c89d3, 2026-07-10 15:15 -0400
+TRUSTED_LINEAGE_WHERE = (
+    "strain_type_std IS NOT NULL "
+    f"AND NOT (platform = 'weedmaps' AND scraped_at < '{_WEEDMAPS_LINEAGE_FIX}')"
 )
 
-# The same predicate against the `products_normalized` VIEW, which renames the two columns
-# (`category_std AS category`, `product_type_std AS product_type`). Same semantics, same name-tells —
-# `test_reference_db.py` asserts the two stay in sync so the regex can't drift apart.
-NATURAL_FLOWER_WHERE_NORMALIZED = (
-    "category = 'Flower' AND product_type IS DISTINCT FROM 'Infused' "
-    "AND coalesce(name, '') !~* '(infus|moonrock|moon rock|kief|dusted|coated|covered)'"
-)
+NATURAL_FLOWER_WHERE = "category_std = 'Flower' AND obtention_std IS NULL"
+
+# ── LEAFLY'S POTENCY IS NOT TRUSTWORTHY (verified 2026-07-14) ────────────────────────────────────────
+#
+# THE FOURTH INSTANCE OF THE SAME CLASS: a value manufactured UPSTREAM and read by us as an observation.
+#   1. Weedmaps `strain_type` — a defaulted field, 98.2% "Indica". Finding E1 RETRACTED.
+#   2. Our own `product_type_std` `_defaults` — 759,927 flower rows carry a "Bud" no name ever said.
+#   3. (Jane's `lab_result_urls`: a field that exists and is empty on 100% of products.)
+#   4. **Leafly `thc`.**
+#
+# On NATURAL FLOWER (this file's own guard applied), the share of rows claiming an IMPOSSIBLE >= 40% THC:
+#
+#       leafly    13.29%      <-- 21x Dutchie
+#       jane       3.03%
+#       sweedpos   1.62%
+#       weedmaps   0.74%
+#       dutchie    0.62%
+#
+# Leafly is **8.4% of natural-flower rows and supplies 60% of the ENTIRE impossible tail.** Excluding it,
+# the corpus-wide impossible share falls **1.85% -> 0.81%**. Cured bud cannot exceed ~35% total THC, so
+# these are not products; they are a number. It is NOT our parser — the extractor regex-matches a single
+# percent and structurally cannot double anything; Leafly's own feed returns `thcContentLabel='THC 62.39%'`
+# for flower. And it is DIFFERENTIAL BY STATE (MD 50.5%, MO 40.5% vs CO 3.9%, OR 3.7%), which is the
+# dangerous kind: STATE IS THE UNIT OF ANALYSIS in the potency-ceiling and inflation-by-jurisdiction work.
+#
+# CONTAMINATED AND MUST BE RE-RUN: #44 `potency_ceiling` (its "1.6-1.9% impossible" headline is >half a
+# Leafly artifact), #108 `infused_flower` (its "2,191 unexplained impossible natural rows" is very likely
+# this), and D2, whose forensic spine IS the impossible tail.
+#
+# Use this guard for ANY analysis of the potency DISTRIBUTION, its tail, or a jurisdiction contrast.
+TRUSTED_POTENCY_WHERE: LiteralString = "platform IS DISTINCT FROM 'leafly'"
+
+
+def trusted_potency_where(alias: LiteralString = "") -> LiteralString:
+    """`TRUSTED_POTENCY_WHERE`, qualified for a joined query. See the block comment above.
+
+    **Why the list is Leafly and ONLY Leafly — the test to apply before adding a platform (2026-07-17).**
+
+    The convicting evidence is the *impossible* tail, never a high headline. Dried flower cannot assay
+    >= 40% THC, so that share is a manufactured-value detector; ">= 30% looks high" is a market signal and
+    excluding on it DELETES FINDINGS. The decisive form is WITHIN-STATE, which holds market and regulation
+    fixed so platform is the only variable. Missouri, natural flower:
+
+        leafly   n=5,649   >=30%: 50.31%   >=40%: 40.01%
+        dutchie  n=26,048  >=30%:  4.56%   >=40%:  0.11%     <- same state. 364x on the impossible tail.
+
+    **hytiva was TESTED AND ACQUITTED — do not add it.** It shows the corpus's highest >=30% share
+    (63.85%), which looks damning until you measure: **100% of its rows are PA** (3,815/3,815), and PA is
+    the inflation frontier. Within PA every platform runs high (jane 49.41, dutchie 45.37, sweedpos 39.62)
+    and hytiva's impossible >=40% tail is **0.87% — LOWER than jane's 3.03%**, with >=50% at exactly zero.
+    It respects the physical ceiling; its headline was a state effect read as a platform effect. Guarding
+    it would delete PA's frontier, which is the D1/D2 flagship contrast (PA ~42% vs WA ~5%).
+
+    So: a high share earns a MEASUREMENT, not a guard. Convict on the impossible tail, within state.
+    """
+    return f"{alias}.platform IS DISTINCT FROM 'leafly'" if alias else TRUSTED_POTENCY_WHERE
+
+
+def natural_flower_where(alias: LiteralString = "") -> LiteralString:
+    """`NATURAL_FLOWER_WHERE`, qualified for a joined query (`natural_flower_where("sp")`).
+
+    **THE UNALIASED CONSTANT IS WHY THE GUARD GOT COPIED, AND THE COPY WAS WRONG.**
+    `scripts/indica_sativa_consumer.py` needed `sp.`-prefixed columns, could not reuse the bare constant,
+    and hand-rolled its own — which kept the OLD, SHORT regex and therefore silently admitted
+    `cartridge | pods | syringe | distillate | rosin | shatter | wax | dabs | powder` rows that the
+    canonical guard excludes. Concentrate rows mislabeled as `Flower` passed a live terpene→lineage
+    analysis feeding D11.
+
+    A constant that cannot be used in the query you have is a constant that will be retyped. So this is a
+    FUNCTION: there is now no reason to copy it, and `test_reference_db.py` fails any script that does.
+    """
+    if not alias:
+        return NATURAL_FLOWER_WHERE
+    q: LiteralString = alias + "."   # `alias` is a LiteralString, so the f-string below stays one (PEP 675)
+    return f"{q}category_std = 'Flower' AND {q}obtention_std IS NULL"
+
+
+def us_jurisdictions_where(col: LiteralString = "state") -> LiteralString:
+    """`<col> IN (SELECT abbr FROM state_programs WHERE country='US')` — the US-only guard, aliasable.
+
+    Same lesson as above: the bare subquery constant was hand-inlined in **11 scripts** because they needed
+    `po.state` / `sc.state` / `p.state` rather than a bare `state`. Give them a function and the copies stop.
+    """
+    return f"{col} IN {US_JURISDICTIONS_SUBQUERY}"
+
+
+# The same predicate against the `products_normalized` VIEW, which renames `category_std AS category`.
+# `obtention_std` is deliberately NOT renamed by the view, so this differs from the store_products
+# spelling by exactly one word — `test_db.py` asserts the two stay in sync.
+NATURAL_FLOWER_WHERE_NORMALIZED = "category = 'Flower' AND obtention_std IS NULL"
 
 # US territories we hold menu data for. Federal territories price in USD and license their own
 # programs, so they belong in a US price analysis — but they are NOT states, and an analysis that
@@ -1376,6 +1750,103 @@ def delete_dispensaries_for_state(conn: DBConn, abbr: str) -> int:
     """Delete all dispensary rows for a state so a re-scrape replaces them.
 
     Returns the number of rows deleted; caller must commit.
+
+    **This destroys derived location columns**, which the source will not republish. Every caller
+    that re-inserts must follow the insert with :func:`apply_geocode_cache` — see the block comment
+    above ``_CREATE_GEOCODE_CACHE``.
     """
     cur = conn.execute("DELETE FROM dispensaries WHERE state = %s", (abbr,))
     return cur.rowcount
+
+
+# The tables carrying geocodable addresses: the ROSTER side (`dispensaries`) and the company's own
+# store list (`company_stores`). Both feed `compare`, and both are replaced wholesale by a re-scrape.
+GEOCODED_TABLES: tuple[LiteralString, ...] = ("dispensaries", "company_stores")
+
+
+def put_geocode_cache(conn: DBConn, query: str, latitude: float | None, longitude: float | None,
+                      zip_code: str | None, city: str | None) -> None:
+    """Remember one geocoder result, keyed by its one-line query. Caller must commit.
+
+    Overwrites on conflict: a later geocode of the same address is a better reading of it, not a
+    second fact about it.
+    """
+    conn.execute(
+        "INSERT INTO geocode_cache (query, latitude, longitude, zip_code, city) "
+        "VALUES (%s, %s, %s, %s, %s) "
+        "ON CONFLICT (query) DO UPDATE SET latitude = EXCLUDED.latitude, "
+        "longitude = EXCLUDED.longitude, zip_code = EXCLUDED.zip_code, city = EXCLUDED.city, "
+        "geocoded_at = now()",
+        (query, latitude, longitude, zip_code, city),
+    )
+
+
+def get_geocode_cache(conn: DBConn, queries: list[str]) -> dict[str, tuple]:
+    """Look up many cached geocodes at once -> ``{query: (lat, lon, zip_code, city)}``.
+
+    Missing queries are simply absent from the mapping.
+    """
+    if not queries:
+        return {}
+    rows = conn.execute(
+        "SELECT query, latitude, longitude, zip_code, city FROM geocode_cache "
+        "WHERE query = ANY(%s)",
+        (queries,),
+    ).fetchall()
+    return {row[0]: (row[1], row[2], row[3], row[4]) for row in rows}
+
+
+def apply_geocode_cache(conn: DBConn, table: LiteralString, state: str | None = None) -> int:
+    """Restore cached lat/lon/ZIP/city onto rows that are missing them. Caller must commit.
+
+    Returns the number of rows that gained at least one value. Costs no geocoder calls, so it is
+    cheap enough to run after every roster replace — which is the point: the command that destroys
+    the enrichment is the command that puts it back.
+
+    Each column is guarded by its own ``IS NULL``, so a value the SOURCE published is never
+    overwritten by a cached geocoder guess. The source stays authoritative; the cache only fills
+    what the source left empty.
+    """
+    if table not in GEOCODED_TABLES:
+        raise ValueError(f"{table!r} is not a geocoded table; expected one of {GEOCODED_TABLES}")
+    where = "(latitude IS NULL OR zip_code IS NULL OR city IS NULL) AND address IS NOT NULL"
+    params: tuple = ()
+    if state:
+        where += " AND state = %s"
+        params = (state,)
+    rows = conn.execute(
+        f"SELECT id, address, city, state, zip_code FROM {table} WHERE {where} ORDER BY id",
+        params,
+    ).fetchall()
+    keyed = {
+        row[0]: query
+        for row in rows
+        if (query := text.geocode_query(row[1], row[2], row[3], row[4])) is not None
+    }
+    cached = get_geocode_cache(conn, sorted(set(keyed.values())))
+
+    restored = 0
+    for row_id, query in keyed.items():
+        hit = cached.get(query)
+        if hit is None:
+            continue
+        latitude, longitude, zip_code, city = hit
+        touched = 0
+        if latitude is not None and longitude is not None:
+            touched += conn.execute(
+                f"UPDATE {table} SET latitude = %s, longitude = %s "
+                "WHERE id = %s AND latitude IS NULL",
+                (latitude, longitude, row_id),
+            ).rowcount
+        if zip_code:
+            touched += conn.execute(
+                f"UPDATE {table} SET zip_code = %s WHERE id = %s AND zip_code IS NULL",
+                (zip_code, row_id),
+            ).rowcount
+        if city:
+            touched += conn.execute(
+                f"UPDATE {table} SET city = %s WHERE id = %s AND city IS NULL",
+                (city, row_id),
+            ).rowcount
+        restored += bool(touched)
+    return restored

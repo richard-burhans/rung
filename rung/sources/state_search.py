@@ -36,6 +36,8 @@ _BETWEEN_SEARCHES = 2.5  # seconds between requests (human-like pacing)
 
 # Search backend URLs
 _DDG_URL = "https://html.duckduckgo.com/html/?q={query}"
+# The literal text of DDG's rate-limit/anti-bot interstitial (served with HTTP 202).
+_DDG_CHALLENGE = "bots use DuckDuckGo too"
 _BING_URL = "https://www.bing.com/search?q={query}&cc=US&setlang=en&count=10"
 _GOOGLE_URL = "https://www.google.com/search?q={query}&num=10&gl=us&hl=en"
 
@@ -162,6 +164,22 @@ class _DDGBackend(_Backend):
         url = _DDG_URL.format(query=quote_plus(query))
         async with make_session() as session:
             resp = await session.get(url, timeout=20)
+
+        # DDG'S ANTI-BOT CHALLENGE ANSWERS **HTTP 202**, WHICH IS A SUCCESS CODE.
+        #
+        # After one or two queries from an IP it serves a page reading "Unfortunately, bots use
+        # DuckDuckGo too. Please complete the following challenge" — with 0 results and a 202. This
+        # code only treated 403 as blocked and anything under 400 as fine, so a challenge page read as
+        # "the search worked and the operator has no website". The fallback below (fewer than 5 links
+        # => blocked) never fired either: the challenge page is a full page, with a form and a footer.
+        #
+        # So the search silently died two queries into a 56-company run, Bing's boilerplate was all
+        # that remained, and `recon --discover` fabricated homepages for 19 Nevada operators
+        # (BATTLE BORN -> battle.net). A dead instrument answering 202 is the most comfortable sentence
+        # in this whole codebase: it does not raise, it does not warn, and it looks like an answer.
+        if resp.status_code == 202 or _DDG_CHALLENGE in resp.text:
+            self.blocked = True
+            return []
         if resp.status_code == 403:
             self.blocked = True
             return []

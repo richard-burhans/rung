@@ -19,6 +19,7 @@ won the slot without them, so the surviving row still maps.
 import math
 import re
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from rung import db
@@ -82,6 +83,40 @@ def zip_key(zip_code: str | None) -> str:
     if _CA_POSTAL_RE.match(raw):
         return raw.replace(" ", "")
     return raw[:5]
+
+
+def identity_handle(platform: str | None, external_id: str | None) -> str:
+    """``platform:external_id``, or '' when either is absent. See :func:`ambiguous_handles`."""
+    return f"{platform}:{external_id}" if platform and external_id else ""
+
+
+def ambiguous_handles(rows: Iterable[tuple]) -> set[str]:
+    """Handles that are NOT a store identity, because they name more than one physical address.
+
+    A store handle is normally a *stronger* identity than a fuzzy address — a platform's store id is
+    unique to one rooftop, which is what lets an alias (Delta 9 / Sunnyside) collapse. But that holds
+    only when the id comes from a platform that owns an id space. When recon cannot identify the
+    platform it stamps `custom`/`unknown`, and the extractor's `external_id` is then whatever field the
+    operator's own page happened to call "id" — on a JS locator, the ARRAY INDEX. Ontario had
+    `custom:9`, `custom:10`, `custom:11` … each "shared" by 14-15 unrelated operators, because every
+    locator numbers its own stores from zero. Unioning on those chained 75 unrelated operators into one
+    cluster.
+
+    The discriminator is NOT the platform name — `custom:899` is a perfectly real Cresco handle from the
+    browser menu intercept. It is this: **a real handle names ONE rooftop.** So a handle seen at two or
+    more distinct addresses is, by its own evidence, not an identity, and is refused as a merge key.
+    (An address-less twin keys to '' and does not count against it — that duplicate is exactly what the
+    handle is there to catch.)
+    """
+    seen: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        (_id, _company_id, _canonical, _name, address, _city, zip_code,
+         _lat, _lng, platform, external_id) = row
+        handle = identity_handle(platform, external_id)
+        akey = address_key(address, zip_code)
+        if handle and akey:
+            seen[handle].add(akey)
+    return {handle for handle, addresses in seen.items() if len(addresses) > 1}
 
 
 def address_key(address: str | None, zip_code: str | None) -> str:
@@ -263,6 +298,9 @@ class DedupeReport:
 def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
     """Mark shared-brand duplicate stores in a state. Commits; returns a report."""
     rows = db.get_company_stores_for_dedupe(conn, state)
+    # Handles that name more than one rooftop are not identities — refuse them as merge keys BEFORE
+    # the union-find runs, or one bogus id chains every operator that happens to reuse the number.
+    bogus = ambiguous_handles(rows)
     names: dict[int, str] = {}
     store_names: dict[int, list[str]] = defaultdict(list)
 
@@ -280,7 +318,9 @@ def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
          platform, external_id) = row
         names[company_id] = canonical_name
         store_names[company_id].append(name or "")
-        handle = f"{platform}:{external_id}" if platform and external_id else ""
+        handle = identity_handle(platform, external_id)
+        if handle in bogus:
+            handle = ""
         keys = [
             k for k in (address_key(address, zip_code), geo_key(lat, lng, zip_code), handle) if k
         ]

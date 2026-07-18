@@ -104,14 +104,35 @@ def test_a_signalling_rung_never_becomes_the_winner() -> None:
     assert db.get_access_winner(conn, "t", "k") is None
 
 
-def test_an_unexpected_exception_still_propagates() -> None:
-    # A rung that crashes has not told us why it failed. Swallowing it here would recreate exactly the
-    # silence this vocabulary exists to break.
+def test_an_unexpected_exception_is_recorded_broken_and_does_not_stop_the_ladder() -> None:
+    """INVERTED 2026-07-14. This test used to assert the exception PROPAGATES — and its own comment said
+    why that was right: *"a rung that crashes has not told us why it failed; swallowing it would recreate
+    exactly the silence this vocabulary exists to break."*
+
+    The principle was right. The test asserted the behaviour that CAUSED the silence.
+
+    Because `run_target` has exactly two callers and both wrap it in `except Exception: return None, []`,
+    the propagated crash was caught one frame up and dropped. The target finished the run with **no
+    `access_methods` row at all** — not `broken`, not `failed`, nothing — so it read as *this target has
+    no method*: a failure of OURS, persisted as a fact about the world, which is the exact bug the
+    vocabulary at the top of `access.py` was built to prevent. And the ladder below the crash never ran.
+
+    A green test asserting the wrong invariant is worse than no test: it defends the bug.
+
+    An exception a rung did not raise deliberately means WE are wrong — a dead URL, a changed payload, a
+    missing credential. That is `Broken`.
+    """
     import asyncio
     conn = _conn()
-    ladder = [_method("boom", 0, _raises(RuntimeError("kaboom")))]
-    with pytest.raises(RuntimeError, match="kaboom"):
-        asyncio.run(access.run_target(conn, "t", "k", ladder))
+    ladder = [
+        _method("boom", 0, _raises(RuntimeError("kaboom"))),
+        _method("dear", 1, _yields([_Record()])),
+    ]
+    winner, records = asyncio.run(access.run_target(conn, "t", "k", ladder))
+
+    assert winner == "dear", "the ladder must CONTINUE past a crashing rung"
+    assert len(records) == 1
+    assert _status_of(conn, "boom") == "broken", "a crash is `broken` — we are wrong — never silence"
 
 
 def test_every_non_ok_outcome_advances_last_fail_at() -> None:

@@ -9,6 +9,7 @@ Persistence lives in the `access_methods` table
 (db.record_access_attempt / get_access_winner).
 """
 
+import asyncio
 import datetime
 import json
 import random
@@ -16,6 +17,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
+
+import psycopg
 
 from rung import db
 
@@ -196,14 +199,39 @@ async def _attempt(
 ) -> tuple[list, str | None, dict | None, MethodOutcome | None]:
     """Run one rung. Returns its result, or the outcome it raised to explain producing nothing.
 
-    Only the explicit signals are caught. An unexpected exception still propagates: a rung that
-    crashes has not told us why it failed, and swallowing it here would recreate the very silence
-    this vocabulary exists to break.
+    A CRASHING RUNG IS A `Broken` RUNG — IT IS NOT A SILENT TARGET.
+
+    This used to let an unexpected exception propagate, on the reasoning that a rung which crashes has
+    not told us why it failed and swallowing it would recreate the very silence this vocabulary exists
+    to break. The reasoning was right and the code did the opposite, because `run_target` has exactly two
+    callers and BOTH wrap it in a bare `except Exception: return None, []` — so the propagated crash was
+    caught one frame up, dropped on the floor, and the target ended the run with **no `access_methods`
+    row at all**: not broken, not failed, nothing. It read as *this target has no method* — the precise
+    mistake the comment at the top of this file says has bitten the project three times. And the ladder
+    below the crashing rung never ran: one shape-changed payload in a CHEAP rung silently disabled every
+    EXPENSIVE rung that would have worked.
+
+    So we name it. An exception a rung did not raise deliberately means WE are wrong — a dead URL, a
+    changed payload shape, a missing credential — which is `Broken`'s definition. It is recorded as
+    `broken` (surfacing in `access_health`), and the ladder CONTINUES to the next rung.
+
+    `CancelledError` still propagates: that is the caller shutting us down, not a rung failing.
     """
     try:
         records, resource_url, params = await method.run(conn, target_key, hint)
     except MethodOutcome as outcome:
         return [], None, None, outcome
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # The rung may have left the connection in an ABORTED transaction (it holds `conn` for its hint
+        # lookups), and the caller is about to write an attempt row on it — which would itself fail. So
+        # reset it. But ONLY when it is actually poisoned: an unconditional `conn.rollback()` here also
+        # discards the CALLER's uncommitted work, which is not ours to throw away. (The first draft of
+        # this did exactly that, and the test below caught it by losing its own `CREATE TABLE`.)
+        if conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
+            conn.rollback()
+        return [], None, None, Broken(f"{type(exc).__name__}: {exc}")
     return records, resource_url, params, None
 
 

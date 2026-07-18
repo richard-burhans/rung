@@ -6,7 +6,9 @@ dataclasses — no mocked DB, no crafted external payloads.
 
 import datetime
 
-from conftest import pg_conn
+import psycopg
+import pytest
+from conftest import _TEST_URL, pg_conn
 
 from rung import db, seed_companies
 from rung.models import (
@@ -382,6 +384,63 @@ def test_natural_flower_predicates_stay_in_sync() -> None:
     assert plain.replace("category_std", "category").replace("product_type_std", "product_type") == view
 
 
+def _view_output_columns(create_view_sql: str) -> list[tuple[str, str]]:
+    """The ordered ``(output_name, normalized_source_expression)`` pairs of a
+    ``CREATE VIEW … AS SELECT <list> FROM …`` statement.
+
+    Paren-aware split on top-level commas (so `round(x, 2)` and a CASE don't fool it). Each item's
+    output name is its `AS <alias>`, else the last dotted/word token; the expression is the item minus
+    that trailing alias, whitespace-collapsed and with `::<type>` dialect casts dropped (so the Postgres
+    `::numeric` and its DuckDB `::double` twin compare equal). Comparing the *expression*, not just the
+    name, is what catches a same-name/different-source divergence (e.g. one view repointing `price` to a
+    different underlying column while keeping the alias). Comments are stripped first."""
+    import re
+
+    m = re.search(r"\bSELECT\b(.*?)\bFROM\b", create_view_sql, re.S | re.I)
+    assert m is not None, "no top-level `SELECT … FROM` found in the view SQL"
+    body = re.sub(r"--[^\n]*", "", m.group(1))  # strip line comments FIRST: they carry stray commas/parens
+    items: list[str] = []
+    depth = 0
+    cur: list[str] = []
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            items.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if "".join(cur).strip():
+        items.append("".join(cur))
+    cols: list[tuple[str, str]] = []
+    for item in items:
+        clean = item.strip()
+        alias = re.search(r"\bAS\s+(\w+)\s*$", clean, re.I)
+        if alias:
+            name, expr = alias.group(1), clean[: alias.start()]
+        else:
+            name, expr = re.split(r"[\s.]+", clean)[-1], clean
+        expr = re.sub(r"::\w+", "", expr)         # drop dialect casts: ::numeric ≡ ::double
+        expr = re.sub(r"\s+", " ", expr).strip()  # collapse whitespace
+        cols.append((name.lower(), expr))
+    return cols
+
+
+def test_products_normalized_views_stay_in_sync() -> None:
+    # Two spellings of one view: reference_db builds `products_normalized` over Postgres; static_source
+    # rebuilds it over DuckDB (the Galaxy / outside-researcher path that runs the D1 scripts off a frozen
+    # Parquet). Only the dialect differs (::numeric vs ::double, the local currency CASE). If a column is
+    # added, dropped, reordered, or repointed to a different source column in one but not the other, the
+    # static export silently diverges from live Postgres — and the import-layering guard can't see it (it
+    # inspects imports, not SQL). Pin the output NAME + normalized source EXPRESSION of every column equal.
+    from rung import reference_db, static_source
+
+    assert (_view_output_columns(reference_db._CREATE_PRODUCTS_NORMALIZED_VIEW)
+            == _view_output_columns(static_source._PRODUCTS_NORMALIZED_VIEW_SQL))
+
+
 def test_country_subqueries_partition_state_programs() -> None:
     # `state = 'CA'` is California; Canada is `country = 'CA'`. Guard the trap: the two subqueries must
     # be disjoint and, together, cover every seeded program row.
@@ -425,3 +484,67 @@ def test_us_subqueries_differ_by_exactly_the_declared_territories() -> None:
     assert "PR" in everything, "the price guard must keep PR: it is a US territory pricing in USD"
     assert "DC" in states_only, "DC is not a territory — holding it out would be a different bug"
     assert "ON" not in everything
+
+
+# ── apply_and_verify: a migration must confirm itself on a FRESH connection (incident 5) ──────────────
+#
+# `refold_companies` reported "APPLIED: 9 companies merged", a query in its OWN session confirmed it (it
+# was reading its own uncommitted work), and a fresh connection still saw all 15 — the `with
+# conn.transaction()` block had committed nothing. These pin the helper that encodes the fix.
+
+def _fresh_into(schema: str) -> db.DBConn:
+    """A brand-new backend into `schema` — unregistered, so apply_and_verify owns and closes it."""
+    conn = psycopg.connect(_TEST_URL)
+    conn.execute(f"SET search_path TO {schema}")
+    return conn
+
+
+def test_apply_and_verify_confirms_a_committed_change_on_a_fresh_connection():
+    conn = pg_conn()
+    conn.execute("CREATE TABLE widget (id int)")
+    conn.commit()
+    schema = conn.execute("SELECT current_schema()").fetchone()[0]
+
+    got = db.apply_and_verify(
+        conn,
+        apply=lambda c: c.execute("INSERT INTO widget VALUES (1), (2), (3)"),
+        verify=lambda c: c.execute("SELECT count(*) FROM widget").fetchone()[0],
+        expected=3,
+        connect=lambda: _fresh_into(schema),
+    )
+    assert got == 3
+    # and it really committed: a brand-new connection still sees the rows
+    other = _fresh_into(schema)
+    assert other.execute("SELECT count(*) FROM widget").fetchone()[0] == 3
+    other.close()
+
+
+def test_apply_and_verify_raises_when_the_fresh_read_disagrees():
+    conn = pg_conn()
+    conn.execute("CREATE TABLE widget (id int)")
+    conn.commit()
+    schema = conn.execute("SELECT current_schema()").fetchone()[0]
+
+    with pytest.raises(db.VerificationError, match="did not land"):
+        db.apply_and_verify(
+            conn,
+            apply=lambda c: c.execute("INSERT INTO widget VALUES (1)"),
+            verify=lambda c: c.execute("SELECT count(*) FROM widget").fetchone()[0],
+            expected=99,                               # the migration claims 99; the DB says 1
+            connect=lambda: _fresh_into(schema),
+        )
+
+
+def test_a_fresh_connection_cannot_see_uncommitted_work():
+    """Why the verify must run on a NEW connection: uncommitted work is visible to its own session
+    (which fooled incident 5's same-session confirm) but invisible to a fresh connection."""
+    conn = pg_conn()
+    conn.execute("CREATE TABLE widget (id int)")
+    conn.commit()
+    schema = conn.execute("SELECT current_schema()").fetchone()[0]
+
+    conn.execute("INSERT INTO widget VALUES (1), (2)")          # NOT committed
+    assert conn.execute("SELECT count(*) FROM widget").fetchone()[0] == 2   # same session: sees its own work
+    other = _fresh_into(schema)
+    assert other.execute("SELECT count(*) FROM widget").fetchone()[0] == 0  # fresh connection: the truth
+    other.close()

@@ -1,0 +1,84 @@
+# Brand → parent-company (MSO) crosswalk.
+#
+# WHOLE-TOKEN match on the lowercased brand: an alias matches only when not flanked by an alphanumerics
+# (rung/brands.py), so `legend` matches "Legend"/"Legend Cannabis" but not "Legends"/"4Front - Legends";
+# Matching is first-hit in DOCUMENT ORDER (rung/brands.py), so put a more specific alias earlier if two
+# could collide. This is the crosswalk the cultivar-identity "MSO parent-collapse" robustness check uses
+# to test whether the cultivar->terpene signal survives collapsing co-owned brands to one producer, and
+# the source of the `brand_parent` reference table shipped in the clean cultivar-identity dataset.
+#
+# PROVENANCE. Each parent carries `source` (sec_filing | website | trade_press | regulator) + `evidence`
+# (a URL). Ownership is TIME-VARYING; SEC rows are the latest FY2024–FY2025 filings (retrieved 2026-07-17).
+# The queryable fact store is the `attestations` table (brand `owned_by`/`licensed_to`/`not_owned_by`
+# parent, with the same evidence) — this file is the offline analysis view of it.
+#
+# ALIAS DISCIPLINE (learned from mis-matches): NEVER use a generic word that catches an unrelated brand.
+# Excluded on purpose — `haze` (Purple Haze…), `foundry` (Flower Foundry ≠ Jushi), `amber`/`press`/`the lab`
+# (too common), a bare `essence` (would catch GreenThumb's "Essence" *dispensary* — an attestation
+# `not_owned_by` Verano), a bare `supply` (would catch Cresco's "High Supply"). LICENSED, multi-producer
+# brands are NOT collapsed to one parent — `Cookies` (a franchise grown by a different licensee per state)
+# is deliberately absent.
+#
+# Expanded 2026-07-17 from SEC 10-K/40-F brand schedules + operators' own brand pages (see PR).
+# `source`: heuristic | sec (a filing) | website (operator's own brand page) | regulator | trade_press.
+
+parents:
+  GTI:            # Green Thumb Industries — SEC CIK 0001795139
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1795139/000119312526071672/gtbif-20251231.htm
+    note: >-
+      IP for RYTHM/Beboe/Dogwalkers/Good Green/&Shine sold to Agrify→"RYTHM, Inc." 2025-08-27 and
+      licensed back; products still produced+sold by GTI, so the PRODUCER remains GTI.
+    aliases: [rythm, good green, "&shine", beboe, dogwalker, incredibles, "doctor solomon"]
+  Cresco:         # Cresco Labs — SEC CIK 0001832928
+    source: website
+    evidence: https://www.crescolabs.com/brands/
+    # 'remedi' dropped as an alias: it is a minor Cresco brand but its substring wrongly grabs the big
+    # independent "Organic Remedies". 'wonder wellness'/'good news' kept (distinctive).
+    aliases: [cresco, high supply, good news, mindy, floracal, wonder wellness]
+  Curaleaf:       # SEC CIK 0001756770 (FY2025 AIF national-brand list)
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1756770/000175677026000019/q425-exx991xaif.htm
+    # bare 'select' dropped (a common word: "Emerald Gardens Select", "SeCHe Select"…); it is mainly a
+    # Curaleaf VAPE brand, rare in the flower substrate. 'mpx select' (specific) kept.
+    aliases: [curaleaf, grassroots, find, anthem, jams, reef, b-noble, "mpx select"]
+  Verano:         # SEC CIK 0001848416
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1848416/000162828026017011/vrnof-20251231.htm
+    note: "'zen leaf' + 'müv' are also retail banners; '(the) essence' NOT the GTI Essence dispensary."
+    aliases: ["(the) essence", "zen leaf", verano, encore, avexia, "müv", muv, savvy, bits, hyphen, "swift lift"]
+  Trulieve:       # SEC CIK 0001754195
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1754195/000175419526000019/tcnnf-20251231.htm
+    note: "khalifa (Khalifa Kush) is a LICENSED partner brand Trulieve produces, not owned."
+    aliases: [trulieve, "roll one", "modern flower", khalifa, "cultivar collection", muse, momenta, "sweet talk", co2lors]
+  Ascend:         # Ascend Wellness Holdings — SEC CIK 0001756390
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1756390/000162828026017374/aawh-20251231.htm
+    aliases: [ozone, "simply herb", "high wired", "honor roll", royale, "effin"]
+  Ayr:            # Ayr Wellness — SEC CIK 0001847462 (brands page + EDGAR)
+    source: website
+    evidence: https://ayrwellness.com/brands/
+    note: "STIX is trade-press only (reported)."
+    aliases: [kynd, "later days", laterdays, levia, origyn, "secret orchard", "road tripper"]
+  Jushi:          # Jushi Holdings — SEC CIK 0001909747
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1909747/000162828026022436/jush-20251231.htm
+    note: "'beyond hello' is Jushi's retail banner. 'foundry' NOT an alias (Flower Foundry ≠ Jushi)."
+    aliases: [seche, "sèche", "the bank", nira, tasteology, hijinks, "uncommon kind", shayo, "beyond hello"]
+  TerrAscend:     # SEC CIK 0001778129
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1778129/000119312526104092/tsndf-20251231.htm
+    aliases: ["kind tree", legend, gage, "state flower", ilera]
+  Cannabist:      # The Cannabist Company (fka Columbia Care) — SEC CIK 0001776738
+    source: sec
+    evidence: https://www.sec.gov/Archives/edgar/data/1776738/000177673825000003/cbstf-20241231.htm
+    aliases: ["seed & strain", "triple seven", gleaf, classix, dreamt, hedy]
+  Holistic:       # Holistic Industries — folds the Strane tiers (the memory-flagged sub-brand case)
+    source: website
+    evidence: https://holisticindustries.com/our-brands/
+    aliases: [strane]
+  TILT:           # TILT Holdings — SEC CIK 0001761510
+    source: sec
+    evidence: https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001761510&type=10-K
+    aliases: ["standard farms"]

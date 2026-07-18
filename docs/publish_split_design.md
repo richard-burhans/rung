@@ -37,7 +37,7 @@ boundary it enforces.
 takes the `catalog` as a *parameter* (`access.run_target(conn, target_type, target_key, catalog,
 …)`). The ladder-walker, the `ReExploreGovernor`, the plausibility gate, and the `access_methods`
 persistence carry **zero** proprietary knowledge. The secret sauce is the **catalogs** built by
-`sources/company_stores._company_catalog` and `sources/menus._store_catalog`, which wire the
+`rung_intel/company_stores._company_catalog` and `rung_intel/menus._store_catalog`, which wire the
 private per-platform runners.
 
 Therefore the publishable boundary is the **catalog/stage boundary**, not `access.py`:
@@ -68,6 +68,7 @@ move is localized.
 | `addresses.py` | Generic address-extraction primitives. |
 | `proxy.py` | Generic health-aware proxy pool. |
 | `db.py` | Postgres schema + CRUD (generic persistence). |
+| `static_source.py` | DuckDB-over-Parquet adapter `db.get_connection` delegates to under `RUNG_DATA_SOURCE=static` — runs the analysis off a frozen clean dataset (the Galaxy / outside-researcher reproducibility path); takes a file path, never a credential. |
 | `queue.py` | Generic Postgres work queue (`FOR UPDATE SKIP LOCKED`). |
 | `access.py` | The generic access-method **engine** (the plugin socket). |
 | `registry.py` | **NEW** — the plugin seam (stage/catalog registration + entry-point discovery). |
@@ -84,15 +85,15 @@ move is localized.
 
 | Module | Why private |
 |---|---|
-| `sources/company_stores.py` | Stage-2 catalogs + per-platform runners (scraping know-how). |
-| `sources/company_store_fetch.py` | Discovery/fetch/render helpers (know-how). |
-| `sources/company_store_extractors.py` | Payload→record mappers (know-how). |
-| `sources/menus.py` | Stage-3 menu catalogs (know-how). |
-| `sources/menu_extractors.py` | Per-platform menu mappers (know-how). |
-| `sources/compare.py` | Roster-gap comparison — **the intel deliverable**. |
-| `sources/recon.py` | Operator→platform detection (first step of the know-how). |
+| `rung_intel/company_stores.py` | Stage-2 catalogs + per-platform runners (scraping know-how). |
+| `rung_intel/company_store_fetch.py` | Discovery/fetch/render helpers (know-how). |
+| `rung_intel/company_store_extractors.py` | Payload→record mappers (know-how). |
+| `rung_intel/menus.py` | Stage-3 menu catalogs (know-how). |
+| `rung_intel/menu_extractors.py` | Per-platform menu mappers (know-how). |
+| `rung_intel/compare.py` | Roster-gap comparison — **the intel deliverable**. |
+| `rung_intel/recon.py` | Operator→platform detection (first step of the know-how). |
 | `bootstrap.py` | Dutchie/Weedmaps/Leafly pool bootstraps (know-how). |
-| `sources/dutchie.py`, `dutchie_plus.py`, `weedmaps.py`, `leafly.py`, `sweedpos.py`, `trulieve.py`, `cresco.py`, `curaleaf.py`, `fluent.py`, `hytiva.py` | Per-platform scraping recipes. |
+| `rung_intel/dutchie.py`, `dutchie_plus.py`, `weedmaps.py`, `leafly.py`, `sweedpos.py`, `trulieve.py`, `cresco.py`, `curaleaf.py`, `fluent.py`, `hytiva.py` | Per-platform scraping recipes. |
 | `dev/analyze.py` | Dev-only AI inspector. |
 
 > `recon.py` and `homepage_discovery.py` are the two debatable ones. `recon` is classified private
@@ -117,7 +118,8 @@ move is localized.
   `jane_store_ids.yml`, `leafly_slugs.yml`, `weedmaps_slugs.yml` (moved to the overlay; see
   `PRIVATE_DATA`). **Public** (intentionally): the operational seeds the public CLI + homepage
   discovery need — `companies.yml`, `company_homepages.yml`, `states.yml`, `state_geo_anchors.yml`,
-  and the taxonomy/brand alias maps. These are operator rosters + own-site homepages (public-record,
+  the taxonomy/brand alias maps, and `brand_parent.yml` (the brand→parent-MSO crosswalk — public-record
+  ownership, powers the analysis's parent-collapse and the clean-dataset `brand_parent` table). These are operator rosters + own-site homepages (public-record,
   not evasion); the public build strips the inline platform/override annotations from
   `company_homepages.yml`.
 - `scripts/` — the analysis/conference/backfill scripts (intel); a small infra subset

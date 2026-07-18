@@ -7,7 +7,18 @@ from rung.normalize import (
     grams_to_label,
     normalize_terpenes,
     size_to_grams,
+    terpenes_repaired,
 )
+
+
+def test_size_to_grams_rejects_implausible_kilogram_weights():
+    # A retail cannabis unit tops out near a pound; a parse yielding kilograms is a unit error (mg read
+    # as g, a runaway multipack — a 10,416 g "flower" was live), so size_to_grams returns None rather
+    # than stamp a nonsense weight. Real ounces and pounds survive.
+    assert 28 <= size_to_grams("1 oz") < 29
+    assert 400 < size_to_grams("1 lb") < 500          # a pound (bulk flower) is fine
+    assert size_to_grams("2000g") is None             # 2 kg
+    assert size_to_grams("10416g") is None            # the observed 10,416 g "flower"
 
 
 def test_size_to_grams_numeric_units():
@@ -173,6 +184,37 @@ def test_normalize_terpenes_keeps_high_but_plausible_single_terpene():
     std, total = normalize_terpenes([{"name": "Limonene", "value": 20.0}, {"name": "Myrcene", "value": 2.0}])
     assert std == {"Limonene": 20.0, "Myrcene": 2.0}
     assert total == 22.0
+
+
+def test_terpenes_repaired_flags_exactly_the_rows_normalize_altered():
+    # True on every row the repair touched — spike, unlabeled mg/g, both, and the per-terpene ceiling —
+    # using the SAME fixtures as the repair tests above, so the flag can never drift from the repair.
+    assert terpenes_repaired([{"name": "Limonene", "value": 6102.0},
+                              {"name": "Caryophyllene", "value": 0.22}]) is True            # lone spike
+    assert terpenes_repaired([{"name": "Beta Caryophyllene", "value": 34.59},
+                              {"name": "Beta Myrcene", "value": 30.21},
+                              {"name": "Alpha Pinene", "value": 6.32}]) is True             # mg/g rescale
+    assert terpenes_repaired([{"name": "Linalool", "value": 32.0},
+                              {"name": "Caryophyllene", "value": 1.2},
+                              {"name": "Limonene", "value": 0.8}]) is True                  # ceiling drop
+    # False on a clean, plausible profile — nothing was altered.
+    assert terpenes_repaired([{"name": "Limonene", "value": 5.0},
+                              {"name": "Myrcene", "value": 4.0},
+                              {"name": "Caryophyllene", "value": 3.0}]) is False
+    # False when the row yields no terpenes_std at all — the flag qualifies a STORED value.
+    assert terpenes_repaired([{"name": "Myrcene"}]) is False        # no numeric value -> (None, None)
+    assert terpenes_repaired(None) is False
+
+
+def test_enrich_record_stamps_terpenes_repaired():
+    # The flag rides along with terpenes_std/terp_total at the enrich_record choke point.
+    record = StoreProductRecord(
+        company_id=1, state="CA", store_key="s", platform="p", external_id="x", source="src",
+        terpenes=[{"name": "Limonene", "value": 6102.0}, {"name": "Caryophyllene", "value": 0.22}],
+    )
+    enrich_record(record)
+    assert record.terpenes_std == {"Caryophyllene": 0.22}
+    assert record.terpenes_repaired is True
 
 
 def test_enrich_variants_stamps_size_and_price_per_gram():

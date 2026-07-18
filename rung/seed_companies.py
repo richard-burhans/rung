@@ -61,6 +61,27 @@ def create_companies_table(conn: db.DBConn) -> None:
     conn.commit()
 
 
+def ensure_company(conn: db.DBConn, canonical_name: str, state: str) -> int:
+    """Get-or-create the operator's companies row for (canonical_name, state); return its id.
+
+    The get-or-create shared by the direct seeders (government monopolies, Shopify storefronts)
+    that bypass the roster-derived `seed-companies` flow. Caller commits.
+    """
+    row = conn.execute(
+        "SELECT id FROM companies WHERE canonical_name = %s AND state = %s",
+        (canonical_name, state),
+    ).fetchone()
+    if row is not None:
+        return int(row[0])
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    inserted = conn.execute(
+        "INSERT INTO companies (canonical_name, state, created_at) VALUES (%s,%s,%s) RETURNING id",
+        (canonical_name, state, now),
+    ).fetchone()
+    assert inserted is not None                  # INSERT ... RETURNING always yields the new row
+    return int(inserted[0])
+
+
 def _seed(
     conn: db.DBConn, pairs: list[tuple[str, str]]
 ) -> tuple[list[tuple[str, str]], int]:
