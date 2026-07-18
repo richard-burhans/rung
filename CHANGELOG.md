@@ -53,7 +53,35 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   attestations** (`not_owned_by`) are first-class, because a brand-name collision is the failure a
   brand→producer join actually hits.
 
+- **`fx` — a foreign-exchange series fetcher** (Bank of Canada Valet) for cross-currency price
+  normalization. It stores a daily quote-per-base series, forward-fills weekend/holiday gaps with an
+  `is_carried` flag, and never fabricates a missing rate; a companion `*_fx` view converts each
+  observation at the rate that prevailed **on its own date**, so a series in mixed currencies pools
+  correctly. Spot FX, not PPP.
+
+- **Two offline geocoding rungs** (`geocode_rnf`, `geocode_points`) — an address→coordinate ladder over
+  open government data with no API and no quota: address-range interpolation over the StatCan Road
+  Network File, and exact lookup in a municipality's own published address-point file. Both are measured
+  against ground truth, and a **precision floor** bars a rung that cannot clear it rather than ranking it
+  last. Not yet wired into any pipeline.
+
+- **`static_source` — a DuckDB-over-Parquet data source.** Selected with `RUNG_DATA_SOURCE=static`, it
+  runs the read/analysis surface against a frozen Parquet export instead of live Postgres (a
+  reproducibility path for outside researchers), behind a psycopg-cursor-shaped adapter so the same
+  queries run unchanged on either backend.
+
+- **`brands` — a brand→parent-company crosswalk** over `data/brand_parent.yml`: one source of truth for
+  "who owns this brand?", substring-matched in document order, with an unmapped brand treated as its own
+  parent (an independent producer).
+
 ### Changed
+
+- **The persistence layer split into a generic engine store and a reference schema.** `db` now owns
+  only the domain-neutral engine tables (the work queue, the access registry, proxies, rate-limit
+  buckets, attestations) and imports nothing domain-flavored; the new **`reference_db`** holds the
+  reference-pipeline schema, its migrations, and the SQL analysis guards. A build-your-own-domain
+  plugin creates just the engine tables; a back-compat shim keeps the old `db.<reference fn>` call
+  sites resolving. This is the seam that lets the engine be reused for a non-cannabis domain.
 
 - `examples/paper_fetcher.py`: replaced the Europe PMC rung with a **`pmc_oa`** rung built on PMC's
   OA Web Service. The old rung fetched an endpoint that now returns 404 for every article — including
