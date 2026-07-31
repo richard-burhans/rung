@@ -158,7 +158,11 @@ and not their contents.
     `claim_target`s only those targets, leaving a concurrent full run untouched.
 - **Rungs live (2026-06-15, all verified live; PA = 175/175 handled stores, ~125k product
   rows):** `jane_algolia` (public Algolia index), `dutchie_products` (consumer
-  persisted product query, med-then-rec), `trulieve_rest` (operator REST wrapper,
+  persisted product query, med-then-rec; can re-resolve a rotated store id from the stable
+  `cName` slug on an empty menu — but that self-heal is **opt-in, OFF by default**
+  (`RUNG_DUTCHIE_CNAME_RESOLVE=1`) because it hits the Cloudflare-walled directory endpoint and
+  tripped a box-wide IP ban 2026-07-29),
+  `trulieve_rest` (operator REST wrapper,
   routed by trulieve.com store_url; menu id discovered from the store page), `cresco_api`
   (Sunnyside + white-labels like Verilife; captured ids validated via /p/stores and
   re-resolved by address from the state directory when wrong-namespace), `sweedpos_ssr`
@@ -235,6 +239,18 @@ consumers (`scrape-company-stores`, `scrape-menus`) check the return and roll ba
 `dedupe-stores` consumer (one exclusive claim per state, `run_dedupe` self-commits before
 `complete`) is race-safe by exclusivity + idempotence and does not — and cannot — roll back, so it
 ignores the return.
+
+A claim now ends **three** ways, not two. Besides `done` and `failed`, `queue.release` returns a
+target to `pending` **unworked** — the load-shedding path taken when the cross-worker rate gate
+(`rung.rate_gate`, `docs/distributed_scraping_design.md` §4) has no budget for that target's host.
+It is worker-scoped exactly like `complete`, and it *decrements* the `attempts` that `_CLAIM`
+stamped, because nothing was attempted: without that, sustained throttling would walk every
+deferred target to `max_attempts` and permanently fail work that was never once tried. The
+decrement removes the queue's own loop guard, so `release` also pushes `scheduled_at` out — a shed
+target is not claimable again this drain, which is what makes a saturated host terminate the run
+instead of spinning claim→shed→claim. The Stage-2/3 consumers pair it with a per-run rule that
+stops *waiting* on a bucket already found exhausted, so the sheds cost one gate deadline rather
+than one per remaining target.
 
 Two hazards existed before claims; both are contract violations now closed:
 

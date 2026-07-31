@@ -73,7 +73,13 @@ nav:
       - Postgres for everything: postgres_for_everything.md
       - Provenance: provenance_design.md
       - Public/private split: publish_split_design.md
-      - Related work: design_references.md
+      # The engineering-track "Related work" page is deliberately absent. It went private on
+      # 2026-07-20 (it carried internal annotations that do not belong in a published site) and is
+      # in `build_public_repo.EXCLUDE_PATHS` — but this nav entry survived, so the shipped site
+      # advertised a page that is not there: a 404 that still named the private doc.
+      # **Excluding a doc means deleting its nav entry too.** The private roadmap and its Track-S
+      # detail doc are missing from this nav for the same reason, and a test now pins the rule.
+      # Do not name the excluded files here: the leak guard greps this file for their names.
   - Reference application (cannabis):
       - Stage contracts: stage_contracts.md
       - Dedupe design: dedupe_design.md

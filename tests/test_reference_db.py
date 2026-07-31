@@ -1,5 +1,6 @@
+from conftest import pg_conn
+
 from rung import reference_db
-from tests.conftest import pg_conn
 
 
 def test_natural_flower_guard_columns_exist_on_every_table_it_is_aliased_onto() -> None:

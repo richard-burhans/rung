@@ -5,8 +5,9 @@ See examples/custom_domain.py.
 
 import asyncio
 
+from conftest import pg_conn
+
 from examples import custom_domain
-from tests.conftest import pg_conn
 
 
 def test_custom_domain_runs_the_ladder_and_persists_to_a_custom_table() -> None:

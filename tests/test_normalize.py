@@ -238,6 +238,23 @@ def test_enrich_variants_uses_lowest_price_field():
     assert variants[0]["price_per_g"] == 12.0
 
 
+def test_enrich_variants_original_price_alone_is_not_an_effective_price():
+    # Hytiva/Weedmaps stamp `original_price` even when the current price field is absent. That
+    # pre-promo marketing price must NEVER become the effective/shelf price: a variant carrying ONLY
+    # `original_price` yields no price_per_g at all (and the lone context stamp is cleared), rather
+    # than reporting the marketing high as what the shelf charges.
+    lone = [{"option": "gram", "original_price": 20.0}]
+    enrich_variants(lone, "Flower")
+    assert "price_per_g" not in lone[0]
+    assert "original_price" not in lone[0]
+    # A real current price alongside the original still works: effective tracks the current, and the
+    # higher original is recovered as the strike-through.
+    withprice = [{"option": "gram", "price": 12.0, "original_price": 20.0}]
+    enrich_variants(withprice, "Flower")
+    assert withprice[0]["price_per_g"] == 12.0
+    assert withprice[0]["original_price"] == 20.0
+
+
 def test_enrich_variants_stamps_original_price_on_real_discounts():
     # Dutchie: special_price_med undercuts price_med (same channel) -> original_price = the regular,
     # price_per_g tracks the special (effective) price.

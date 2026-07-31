@@ -11,9 +11,9 @@ empty world means you stop looking.
 """
 
 import pytest
+from conftest import pg_conn
 
 from rung import access, db
-from tests.conftest import pg_conn
 
 
 def _conn() -> db.DBConn:
@@ -143,6 +143,28 @@ def test_every_non_ok_outcome_advances_last_fail_at() -> None:
         conn.commit()
         [row] = db.get_access_methods(conn, "t", f"k{i}")
         assert row[db.ACCESS_METHOD_COLUMNS.index("last_fail_at")] is not None, status
+
+
+@pytest.mark.parametrize("later_status", ["blocked", "broken", "unavailable"])
+def test_a_later_failure_on_an_existing_ok_row_advances_last_fail_at(later_status) -> None:
+    # The ON CONFLICT (UPSERT) path, not the INSERT path the test above exercises. A target that was
+    # `ok` and later goes Cloudflare-dark (`blocked`) — or breaks, or falls unavailable — must get
+    # last_fail_at > last_ok_at on the SAME row, or the dashboard's silent-failure signal
+    # (last_fail_at > last_ok_at while the snapshot ages) can never fire. Before the fix the CASE
+    # advanced only for 'failed', so these outcomes left last_fail_at untouched.
+    conn = _conn()
+    db.record_access_attempt(conn, "t", "k", "m", 0, "ok")
+    conn.commit()
+    db.record_access_attempt(conn, "t", "k", "m", 0, later_status)
+    conn.commit()
+
+    [row] = db.get_access_methods(conn, "t", "k")
+    last_ok_at = row[db.ACCESS_METHOD_COLUMNS.index("last_ok_at")]
+    last_fail_at = row[db.ACCESS_METHOD_COLUMNS.index("last_fail_at")]
+    assert row[db.ACCESS_METHOD_COLUMNS.index("status")] == later_status
+    assert last_ok_at is not None                 # the earlier success is still recorded
+    assert last_fail_at is not None, later_status  # and the failure now has its own timestamp
+    assert last_fail_at > last_ok_at, later_status
 
 
 def test_the_database_refuses_a_status_outside_the_vocabulary() -> None:

@@ -6,6 +6,7 @@ import datetime
 
 import conftest
 import psycopg
+import pytest
 from conftest import pg_conn, pg_conn_sharing
 
 from rung import db, queue
@@ -130,6 +131,69 @@ def test_complete_only_succeeds_for_the_holding_worker() -> None:
     assert conn.execute("SELECT status FROM jobs WHERE id=%s", (job.id,)).fetchone() == ("done",)
 
 
+def test_release_hands_a_claim_back_unworked() -> None:
+    """Load shedding: the target returns to pending with the claim cleared and its claim-time
+    attempt un-counted, because nothing was ever attempted against it."""
+    conn = _conn()
+    queue.enqueue(conn, "t", "k")
+    conn.commit()
+    job = queue.claim_next(conn, "t", "w1")
+    assert job is not None and job.attempts == 1
+    assert queue.release(conn, job.id, worker="w1") is True
+    conn.commit()
+    row = conn.execute(
+        "SELECT status, claimed_by, claimed_at, lease_until, attempts FROM jobs WHERE id=%s",
+        (job.id,),
+    ).fetchone()
+    assert row == ("pending", None, None, None, 0)
+
+
+def test_release_defers_the_target_rather_than_leaving_it_claimable() -> None:
+    """The push-out is the termination condition, not politeness: a shed target that stayed
+    immediately claimable would let one worker claim → shed → re-claim it without bound, since
+    release also gives back the `attempts` increment that normally caps the cycle."""
+    conn = _conn()
+    queue.enqueue(conn, "t", "k")
+    conn.commit()
+    job = queue.claim_next(conn, "t", "w1")
+    assert job is not None
+    queue.release(conn, job.id, worker="w1", delay_seconds=300)
+    conn.commit()
+    assert queue.claim_next(conn, "t", "w1") is None  # not claimable again this drain
+
+
+def test_release_only_succeeds_for_the_holding_worker() -> None:
+    """A reaper may already have handed this target to someone else; releasing then would clear
+    THEIR claim — the same hazard complete() guards against."""
+    conn = _conn()
+    queue.enqueue(conn, "t", "k")
+    conn.commit()
+    job = queue.claim_next(conn, "t", "w1")
+    assert job is not None
+    assert queue.release(conn, job.id, worker="w2") is False
+    assert conn.execute(
+        "SELECT status, claimed_by FROM jobs WHERE id=%s", (job.id,)
+    ).fetchone() == ("claimed", "w1")
+
+
+def test_release_never_drives_attempts_negative() -> None:
+    """GREATEST(0, …): a double release (or a release of a row claimed before the counter existed)
+    must not leave a negative attempt count that would then absorb real failures."""
+    conn = _conn()
+    queue.enqueue(conn, "t", "k")
+    conn.commit()
+    job = queue.claim_next(conn, "t", "w1")
+    assert job is not None
+    queue.release(conn, job.id, worker="w1", delay_seconds=0)
+    conn.commit()
+    again = queue.claim_next(conn, "t", "w1")
+    assert again is not None
+    queue.release(conn, again.id, worker="w1", delay_seconds=0)
+    queue.release(conn, again.id, worker="w1", delay_seconds=0)  # no longer the holder: no-op
+    conn.commit()
+    assert conn.execute("SELECT attempts FROM jobs WHERE id=%s", (job.id,)).fetchone() == (0,)
+
+
 def test_reclaim_isolation_holds_across_two_live_connections() -> None:
     # The same resurrection race as below, but the reclaim and the orphaned completion happen on
     # SEPARATE connections — the real shape workers hit. Proves the worker-scoped complete() guard
@@ -193,6 +257,28 @@ def test_claim_next_target_prefix_scopes_to_state() -> None:
     # Unscoped drain still reaches the OK job.
     ok = queue.claim_next(conn, "store_menu", "w2")
     assert ok is not None and ok.target_key == "OK:dutchie:b"
+
+
+def test_claim_next_target_suffix_scopes_to_state() -> None:
+    """Stage-2's key is '{company_id}:{state}' (state as SUFFIX), so a per-state run must scope by
+    suffix — the prefix trick can't reach it. Same orphan-jobs guarantee as the prefix test."""
+    conn = _conn()
+    queue.enqueue(conn, "company_stores", "12:NY")
+    queue.enqueue(conn, "company_stores", "34:OK")
+    conn.commit()
+    job = queue.claim_next(conn, "company_stores", "w1", target_suffix=":NY")
+    assert job is not None and job.target_key == "12:NY"
+    # No NY jobs left → None even though OK is still pending (it is NOT stolen and then failed).
+    assert queue.claim_next(conn, "company_stores", "w1", target_suffix=":NY") is None
+    # The ':NY' suffix does not spuriously match a different state (e.g. a hypothetical '…:MNY').
+    ok = queue.claim_next(conn, "company_stores", "w2")
+    assert ok is not None and ok.target_key == "34:OK"
+
+
+def test_claim_next_rejects_both_prefix_and_suffix() -> None:
+    conn = _conn()
+    with pytest.raises(ValueError):
+        queue.claim_next(conn, "company_stores", "w1", target_prefix="NY:", target_suffix=":NY")
 
 
 # ── Lease / heartbeat / reaper (distributed-worker hardening, issue #16) ──────────────────────────

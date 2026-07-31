@@ -9,9 +9,9 @@ failure mode a brand→producer join actually hits.
 """
 
 import pytest
+from conftest import pg_conn
 
 from rung import db
-from tests.conftest import pg_conn
 
 
 def _conn() -> db.DBConn:

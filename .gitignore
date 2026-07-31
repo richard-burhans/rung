@@ -9,6 +9,15 @@ wheels/
 # Virtual environments
 .venv
 
+# Test + tooling output. A contributor who runs `pytest` gets `.coverage`; without this line
+# `git add -A` stages it, which is how a binary coverage database ends up in a pull request.
+# Found 2026-07-31 when a publish run staged exactly that.
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
 # Local scrape output (regenerable via the pipeline)
 dispensaries.db
 

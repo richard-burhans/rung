@@ -23,6 +23,11 @@ SCRIPTS_DIR: Path = REPO_ROOT / "scripts"
 # The private overlay (Phase-3b carve-out) also routes all networking through make_session, so the
 # chokepoint guard must cover it too.
 INTEL_DIR: Path = REPO_ROOT / "rung_intel"
+# NOT the library. `biblio` stopped routing through `rung.http` on 2026-07-30 and vendors its own
+# honest session, because `make_sync_session`'s honesty depended on a module global the private
+# overlay sets — so the librarian could impersonate on Unpaywall without asking to. It has its own
+# chokepoint guard, `tests/test_library_http.py`. Two guards, deliberately: the cost of the split is
+# that no single test proves both, and both docstrings say so.
 
 # Session factories may only be CALLED inside this module; every other module receives a
 # session as a parameter.
@@ -43,7 +48,7 @@ BANNED_IMPORTS: frozenset[str] = frozenset(
 
 
 def _gated_sources() -> list[Path]:
-    """Every ``.py`` file the QA gate covers — the package + ``scripts/`` — sans caches."""
+    """Every ``.py`` file this guard covers — the two packages + ``scripts/`` — sans caches."""
     return sorted(
         p
         for root in (PACKAGE_DIR, INTEL_DIR, SCRIPTS_DIR)

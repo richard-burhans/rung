@@ -270,6 +270,77 @@ CREATE TABLE IF NOT EXISTS token_buckets (
 )
 """
 
+# Fleet/infra heartbeat — one row per scraping machine (the menu host, the aggregator VPS), upserted
+# at the end of each of its sweeps. It is how the scrape-health dashboard shows the DISTRIBUTED side a
+# store-level view can't: is a fleet member alive, on current code, and are its proxy exits healthy? A
+# stalled VPS cron or a box left on stale code shows here as a heartbeat that stopped advancing. Public
+# infra (like `token_buckets`); the emitter is `scripts/emit_heartbeat.py`. Keyed by host, so a machine
+# has exactly one current row (history is not the point — liveness is).
+_CREATE_INFRA_HEARTBEAT = """
+CREATE TABLE IF NOT EXISTS infra_heartbeat (
+    host             TEXT PRIMARY KEY,
+    role             TEXT NOT NULL,
+    git_sha          TEXT,
+    proxy_tier       TEXT,
+    pool_total       INTEGER,
+    pool_healthy     INTEGER,
+    pool_quarantined INTEGER,
+    last_run_at      TIMESTAMPTZ,
+    last_status      TEXT,
+    rows_written     INTEGER,
+    note             TEXT,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+
+def record_heartbeat(
+    conn: DBConn,
+    host: str,
+    role: str,
+    *,
+    git_sha: str | None = None,
+    proxy_tier: str | None = None,
+    pool_total: int | None = None,
+    pool_healthy: int | None = None,
+    pool_quarantined: int | None = None,
+    last_run_at: str | None = None,
+    last_status: str | None = None,
+    rows_written: int | None = None,
+    note: str | None = None,
+) -> None:
+    """Upsert one fleet member's heartbeat (one row per ``host``). Caller commits.
+
+    Called at the end of a machine's sweep (`scripts/emit_heartbeat.py`); ``last_run_at`` defaults to
+    ``now()`` when None so a bare heartbeat still stamps liveness."""
+    conn.execute(
+        "INSERT INTO infra_heartbeat "
+        "(host, role, git_sha, proxy_tier, pool_total, pool_healthy, pool_quarantined, "
+        " last_run_at, last_status, rows_written, note, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, now()), %s, %s, %s, now()) "
+        "ON CONFLICT (host) DO UPDATE SET "
+        "  role = excluded.role, git_sha = excluded.git_sha, proxy_tier = excluded.proxy_tier, "
+        "  pool_total = excluded.pool_total, pool_healthy = excluded.pool_healthy, "
+        "  pool_quarantined = excluded.pool_quarantined, last_run_at = excluded.last_run_at, "
+        "  last_status = excluded.last_status, rows_written = excluded.rows_written, "
+        "  note = excluded.note, updated_at = now()",
+        (host, role, git_sha, proxy_tier, pool_total, pool_healthy, pool_quarantined,
+         last_run_at, last_status, rows_written, note),
+    )
+
+
+HEARTBEAT_COLUMNS = (
+    "host", "role", "git_sha", "proxy_tier", "pool_total", "pool_healthy", "pool_quarantined",
+    "last_run_at", "last_status", "rows_written", "note", "updated_at",
+)
+
+
+def get_heartbeats(conn: DBConn) -> list[tuple]:
+    """Every fleet member's current heartbeat, freshest first (columns = :data:`HEARTBEAT_COLUMNS`)."""
+    return conn.execute(
+        f"SELECT {', '.join(HEARTBEAT_COLUMNS)} FROM infra_heartbeat ORDER BY updated_at DESC"
+    ).fetchall()
+
 def get_connection() -> DBConn:
     """Open and return a connection to the dispensaries data source.
 
@@ -356,7 +427,8 @@ def one(conn: DBConn, query: LiteralString, params: tuple = ()) -> tuple:
 def create_engine_tables(conn: DBConn) -> None:
     """Create the **generic engine** tables only — the domain-neutral infrastructure any pipeline
     needs: the ``jobs`` work queue, the ``access_methods`` registry, the ``token_buckets`` rate
-    limiter, and the ``proxies``/``proxy_tiers`` egress pool. Creates **no** domain tables.
+    limiter, the ``proxies``/``proxy_tiers`` egress pool, and the ``infra_heartbeat`` fleet liveness
+    table. Creates **no** domain tables.
 
     This is the table-creation call for a *build-your-own-domain* plugin (see
     ``docs/build-your-own-domain.md``): call it, then create your own record tables with your own DDL.
@@ -369,6 +441,7 @@ def create_engine_tables(conn: DBConn) -> None:
     _migrate_jobs(conn)
     _migrate_access_methods(conn)
     conn.execute(_CREATE_TOKEN_BUCKETS)
+    conn.execute(_CREATE_INFRA_HEARTBEAT)
     conn.execute(_CREATE_PROXIES)
     conn.execute(_CREATE_PROXIES_CLAIM_INDEX)
     conn.execute(_CREATE_PROXY_TIERS)
@@ -423,7 +496,11 @@ ON CONFLICT (target_type, target_key, method) DO UPDATE SET
   attempts     = access_methods.attempts + 1,
   last_ok_at   = CASE WHEN excluded.status = 'ok'
                       THEN excluded.updated_at ELSE access_methods.last_ok_at END,
-  last_fail_at = CASE WHEN excluded.status = 'failed'
+  -- Every non-ok, non-never outcome is a failure timestamp — 'blocked'/'broken'/'unavailable'
+  -- must advance last_fail_at too (mirrors record_access_attempt's fail_at set), or an ok row that
+  -- later goes Cloudflare-dark never gets last_fail_at > last_ok_at and the silent-failure signal
+  -- never fires.
+  last_fail_at = CASE WHEN excluded.status NOT IN ('ok', 'never')
                       THEN excluded.updated_at ELSE access_methods.last_fail_at END,
   updated_at   = excluded.updated_at
 """

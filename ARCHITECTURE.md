@@ -40,7 +40,7 @@ in a different domain:
   `FOR UPDATE SKIP LOCKED` work queue), `registry` (the plugin seam), `rate_limit` (the cross-worker
   token bucket), `http` (the honest session chokepoint), `browser` (the pydoll primitives), plus the
   **generic-infra tables** in `db` (`jobs`, `access_methods`, `token_buckets`, `proxies`,
-  `proxy_tiers`, `attestations`). Reuse these for any scraping domain. `access_methods.status` carries
+  `proxy_tiers`, `attestations`, `infra_heartbeat`). Reuse these for any scraping domain. `access_methods.status` carries
   the **outcome vocabulary** — `ok | unavailable | blocked | broken | failed` — so a rung that is *broken*
   can never be recorded as the world being *empty* ( §Outcomes). `attestations` stores the
   **external premises an analysis stands on** — a subject-predicate-object fact with its source, the
@@ -52,7 +52,7 @@ in a different domain:
   `state_programs` tables + `models`), `seed_companies`, and the `cli` front-end.
 
 **The persistence half of that split is DONE (B1/B3).** `db.py` is now the *generic engine* store — it
-creates only `access_methods`/`jobs`/`proxies`/`proxy_tiers`/`attestations`/`token_buckets` and imports
+creates only `access_methods`/`jobs`/`proxies`/`proxy_tiers`/`attestations`/`token_buckets`/`infra_heartbeat` and imports
 **nothing** domain-flavored (not `models`, not `text`; `tests/test_import_layering.py` asserts it in a
 subprocess). Every cannabis table, migration and CRUD helper moved to **`reference_db.py`**. `db.__getattr__`
 still forwards the old `db.insert_dispensary(...)` call sites to it, so public import paths did not break —
@@ -74,7 +74,7 @@ the enforced `BASE` set; it is tabled here only for locality with the other sing
 | Module | Defines | Role |
 |---|---|---|
 | `models.py` | `DispensaryRecord`, `CompanyReconRecord`, `CompanyStoreRecord`, `StoreProductRecord`, `StateProgramRecord` | Canonical home of the **persisted** record dataclasses. |
-| `http.py` | `make_session()`, `set_impersonation()`/`current_impersonation()`, `HONEST_USER_AGENT` | The honest curl_cffi `AsyncSession` factory — the single session chokepoint (enforced by `tests/test_http.py`), nothing else. **Browser TLS impersonation is opt-in; the public default is honest** (a self-identifying `HONEST_USER_AGENT`, no fingerprint spoofing) so the published core circumvents nothing by default (`docs/publish_split_design.md`). The private overlay calls `set_impersonation(...)` at plugin load (the Chrome-profile choice + `RUNG_IMPERSONATE` pin + the `check_impersonation` health-check live on the private side); a public user may opt in via `RUNG_IMPERSONATE` (legacy `DISPENSARY_IMPERSONATE` still honored). `make_session(proxy=…)` forwards a CONNECT-tunnel URL (generic); the pool that picks/rotates it is private. **The anti-throttle machinery is NOT here** — it is private (in the overlay); imports only third-party (no internal deps). |
+| `http.py` | `make_session`, `set_impersonation`/`current_impersonation`, `HONEST_USER_AGENT` | The honest curl_cffi `AsyncSession` factory — the single session chokepoint (enforced by `tests/test_http.py`), nothing else. **Browser TLS impersonation is opt-in; the public default is honest** (a self-identifying `HONEST_USER_AGENT`, no fingerprint spoofing) so the published core circumvents nothing by default (`docs/publish_split_design.md`). The private overlay calls `set_impersonation(...)` at plugin load (the Chrome-profile choice + `RUNG_IMPERSONATE` pin + the `check_impersonation` health-check live on the private side); a public user may opt in via `RUNG_IMPERSONATE` (legacy `DISPENSARY_IMPERSONATE` still honored). `make_session(proxy=…)` forwards a CONNECT-tunnel URL (generic); the pool that picks/rotates it is private. It also takes `cookies=`/`impersonate=` so a session can carry a Cloudflare `cf_clearance` token minted by a browser and match the solving Chrome (see `rung_intel.cf_clearance` +). **The anti-throttle machinery is NOT here** — it is private (in the overlay); imports only third-party (no internal deps). |
 | `browser.py` | `make_browser_options()`, `render_html()`, `get_script_value()` | pydoll/Chrome primitives (Playwright-installed Chromium). |
 | `fx.py` | `refresh_fx_rates`, `_fetch_boc_usdcad`, `_forward_fill` | Foreign-exchange series fetcher (Bank of Canada Valet, via `http.make_session`) for cross-currency price normalization. Stores USD-per-CAD in `fx_rates` (a plain multiply converts a CAD price); forward-fills weekend/holiday gaps with an `is_carried` flag and never fabricates a missing rate. Driven by `fetch-fx`; consumed by the `product_observations_fx` view. Spot FX, not PPP —. |
 | `geocode_rnf.py` | `RnfGeocoder.load/.geocode`, `RNF_URL`, `OFFSET_M`, `END_OFFSET_M` | **Offline Canadian address→coordinate**: address-range interpolation over the StatCan Road Network File (one 310 MB national download, 2.24 M segments; no API, no quota, reproducible). Imports only `http`. Interpolates in the RNF's native **EPSG:3347 Lambert (metres)** and reprojects ONE point per answer — a metric CRS makes "40% along the block" mean 40% of its length (needs pyshp + pyproj; the.dbf is cp1252, not utf-8). **Measured, not guessed** — median 38 m / 64% within 60 m against retailer-API coordinates (AB/SK, n=279), comparable to a commercial Canadian geocoder on the same stores (64.7%) but with no quota. It CLEARS the floor only since 2026-07-17, when Zandbergen (2009) supplied the END offset (dropback) we lacked — Cayo & Talbot's 50 m optimum replicated on our data, 54.1% -> 64.4%. Not yet wired into any pipeline; is the ground-truth harness. Its `parse_address` also resolves the Canadian unit-dash form (`4A-1861 MEADOWBROOK DR SE` ≡ `#5, 1861 Meadowbrook Dr SE`) that `compare._match_key` still splits. |
@@ -88,7 +88,7 @@ the enforced `BASE` set; it is tabled here only for locality with the other sing
 
 * **`db.py` — the GENERIC ENGINE store.** Postgres access (psycopg3, raw SQL; `DBConn` is the connection
   type alias every signature uses) plus the tables that have nothing to do with cannabis: `access_methods`,
-  `jobs`, `proxies`, `proxy_tiers`, `attestations`, `token_buckets`. **It imports NOTHING internal** — not
+  `jobs`, `proxies`, `proxy_tiers`, `attestations`, `token_buckets`, `infra_heartbeat`. **It imports NOTHING internal** — not
   `models`, not `text` — which is what makes the engine domain-free, and `tests/test_import_layering.py`
   enforces it in a subprocess. It also carries a `__getattr__` shim that forwards the legacy `db.<domain
   helper>` call sites to `reference_db`, so the old import paths still resolve; that shim is a deprecation
@@ -185,13 +185,24 @@ distributed-scraping design doc, §4-5. The per-run companion to the durable `ac
 closes the two concurrency hazards in `docs/stage_contracts.md` §5 (concurrent
 `scrape-company-stores` runs partition companies; `dedupe-stores` is exclusive per state).
 
-**Rate limiting:** `rate_limit.py` — the public cross-worker per-host token-bucket primitive
-(`try_acquire(conn, host, *, rate_per_sec, burst, cost)`) over the `token_buckets` table: one
-atomic `INSERT … ON CONFLICT` refills from elapsed time then deducts iff enough remains, with
-Postgres `now()` as the authoritative clock. Generic infra (imports `db` only) for the shared-IP
-case where per-worker in-process limiters would multiply; the aggregator throttle *policy* (the
-adaptive 406 cooldown + the `backoff_delay` retry governor) stays private in the overlay's
-`aggregator_http`. See §3-4.
+**Rate limiting:** two public modules, split primitive from orchestrator. `rate_limit.py` is the
+cross-worker per-host token bucket (`try_acquire(conn, host, *, rate_per_sec, burst, cost)`) over
+the `token_buckets` table: one atomic `INSERT … ON CONFLICT` refills from elapsed time then deducts
+iff enough remains, with Postgres `now()` as the authoritative clock. It is non-blocking and leaves
+the transaction to its caller. `rate_gate.py` is the waiting gate over it — a `HostGate` with its
+**own** connection (the runners share one psycopg connection across their consumers, so a token
+commit on that connection would commit a sibling's in-flight work — the same reason
+`queue.heartbeat_forever` opens its own), an `asyncio.Lock` around a `to_thread`'d round trip, a
+jittered wait floored at `cost/rate`, a deadline, and a fail-open-and-latch on any DB fault. It
+lives in its own module so `rate_limit.py` stays a pure caller-commits primitive
+(`test_commit_discipline.py` enforces that).
+
+Both are generic infra (they import `db` only) and name no target. The *policy* stays private in
+the overlay: which platforms get a budget and how big (`host_limits.py` — also the `{egress_id}|
+{host}` bucket key and the request-vs-target granularity split), and the aggregator throttle
+behaviour (the adaptive 406 cooldown + the `backoff_delay` retry governor, in `aggregator_http`,
+whose limiter carries the optional per-request budget). See
+§3-4 and §9 Phase 3.
 
 **Generic mechanism:** `access.py` — the access-method registry.
 - `AccessMethod(name, cost_rank, run)` — one extraction method; `cost_rank` is
@@ -244,6 +255,10 @@ through the core's `db.py` or return records):
 | `weedmaps.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `leafly.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `aggregator_http.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `browser_drivers.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `cf_clearance.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `stealth_validation.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — | — | — |
+| `virtual_display.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `proxy.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `proxy_store.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `proxy_tiers.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
@@ -262,6 +277,11 @@ through the core's `db.py` or return records):
 | `shopify.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `woocommerce.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `hybris_occ.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `sqdc.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `cannabis_nb.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `shopapps_locator.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `monopoly_stores.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `shopapps_stores.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `monopolies.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `hytiva.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `dedupe.py` | Collapse duplicate stores (cross- & intra-company) by physical address, coordinate cell (~11 m), **or platform handle** (`platform:external_id` — folds an address-less duplicate of the same store), **plus a same-operator ~100 m geo-merge** for cross-platform geocode drift (scoped to one `canonical_name` — never across operators); pick canonical operator; **keep the richest-menu handle per rooftop** (Dutchie/first-party > Weedmaps/Leafly) as the surviving menu-scrape row; carry a folded sibling's coords onto a kept row that lacks them; stamp `storefront_name`; **realign `store_products.company_id`** onto each handle's kept row so menus scraped under a since-folded alias re-attribute to the operator. **Full design: [`docs/dedupe_design.md`](docs/dedupe_design.md).** | `run_dedupe`, `DedupeReport`, `print_dedupe_report`, `normalize_address`, `address_key`, `geo_key`, `location_key`, `physical_key`, `pick_canonical` | `company_stores.canonical_company_id` + `storefront_name` + coords; `store_products.company_id`; **commits** |
@@ -320,8 +340,9 @@ platform tier pool; hybris_occ/shopify/woocommerce are the government-monopoly /
 `menu_extractors→{models, text, normalize}`; `normalize→{models, text}` (base-layer
 number/normalization helpers, acyclic);
 `dutchie`/`dutchie_plus`/`sweedpos`/`trulieve`/`cresco`/`curaleaf`/`fluent`/`hytiva`/`jane`/
-`canna_cabana`/`delta9`/`storerocket`/`shopify`/`woocommerce`/`hybris_occ` →
-*nothing internal* (pure platform helpers; only third-party + `data/*.yml` — the six single-store
+`canna_cabana`/`delta9`/`storerocket`/`shopify`/`woocommerce`/`hybris_occ`/`sqdc`/`cannabis_nb`/
+`shopapps_locator` →
+*nothing internal* (pure platform helpers; only third-party + `data/*.yml` — the single-store
 live-locator helpers take a session arg like the rest, so they too carry zero internal imports); the two
 aggregator-sweep helpers `weedmaps`/`leafly` → **overlay `aggregator_http` only** (private HTTP
 helpers; lean — they reach no heavier catalog); `aggregator_http→proxy` (both overlay);
@@ -496,7 +517,8 @@ overlay (its proprietary stages then resolve to registry stubs).
 | Engine DB (generic) | `db.py` | connection + the 5 infra tables (`jobs`/`access_methods`/`token_buckets`/`proxies`/`proxy_tiers`) + `create_engine_tables` + the access-registry CRUD; imports **no** `models`/`text` (genericization B1/B3) |
 | Reference DB schema & CRUD | `reference_db.py` | the cannabis tables + `products_normalized` view + migrations + all domain CRUD + `create_reference_tables`/`create_tables` + the shared analysis predicates: `NATURAL_FLOWER_WHERE` and its view-column twin `NATURAL_FLOWER_WHERE_NORMALIZED` (kept in sync by `test_db.py`), plus `US_JURISDICTIONS_SUBQUERY` (states + DC + PR) / `US_EXCL_TERRITORIES_SUBQUERY` (holds out `US_TERRITORIES`, for analyses that report PR as its own column) / `CA_PROVINCES_SUBQUERY` (the trap: `state = 'CA'` is California — Canada is `country = 'CA'`). The two US constants exist because "US" named two different populations in two live scripts; `test_db.py` pins their difference to `US_TERRITORIES`; imports `db` + `models` + `text`. `db.<reference fn>` still resolves via `db.__getattr__` (back-compat shim) |
 | Work queue | `queue.py` | SKIP LOCKED claims + lease/heartbeat/reaper; `docs/stage_contracts.md` §5 §4-5 |
-| Cross-worker rate limit | `rate_limit.py` (`token_buckets`) | per-host token bucket; §3-4 |
+| Cross-worker rate limit | `rate_limit.py` (`token_buckets`) | per-host token bucket, non-blocking + caller-commits; §3-4 |
+| Cross-worker rate gate | `rate_gate.py` | the waiting orchestrator over it — own connection, jittered wait, deadline, fail-open-and-latch. Separate module so `rate_limit.py` stays commit-free |
 | Stage contracts | `docs/stage_contracts.md` | read/write matrix, write isolation, claim keys |
 | Access-method registry | `access.py` | `AccessMethod`, `run_target`, `ReExploreGovernor` |
 | Dedup + storefront | `sources/dedupe.py` | physical-address clustering |

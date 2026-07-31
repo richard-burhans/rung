@@ -12,9 +12,9 @@ tests pin the behaviour that closes it.
 """
 
 import pytest
+from conftest import pg_conn
 
 from rung import db, models
-from tests.conftest import pg_conn
 
 
 def _roster_row(name: str, address: str, state: str) -> models.DispensaryRecord:

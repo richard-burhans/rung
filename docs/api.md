@@ -87,12 +87,19 @@ http.HONEST_USER_AGENT                                     # the self-identifyin
 
 All network access must go through `make_session()` (AST-enforced by `tests/test_http.py`).
 
-## `rung.rate_limit` / `rung.browser`
+## `rung.rate_limit` / `rung.rate_gate` / `rung.browser`
 
 ```python
 rate_limit.try_acquire(conn, host, *, rate_per_sec, burst, cost) -> bool   # cross-worker token bucket
+rate_gate.HostGate(conn_factory, *, max_wait_s)          # the waiting gate over it (own connection)
+await gate.acquire(key, *, rate_per_sec, burst, cost)    # True = go; False = over budget, shed
+gate.stats.summary() / gate.close()                      # telemetry; release the connection
 browser.render_html(...) / browser.make_browser_options() / browser.get_script_value(...)  # pydoll/Chrome
 ```
+
+`try_acquire` is non-blocking and leaves the transaction to its caller; `HostGate` is what waits,
+on a connection of its own. A gate is per process, so with egress-scoped keys it coordinates the
+processes sharing one egress — it is not a substitute for giving each worker its own IP.
 
 ---
 

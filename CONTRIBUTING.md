@@ -35,15 +35,20 @@ psql postgresql://rung:rung@localhost:5432/rung \
 The test database URL defaults to `postgresql://rung:rung@localhost:5432/rung_test`;
 override it with the `DATABASE_URL_TEST` environment variable.
 
-## The checks (mirrored by CI)
+## The checks
 
 Every PR runs lint → type-check → tests. Run them locally before pushing:
 
 ```bash
 uv tool run ruff check rung/ tests/    # lint
 uv tool run ty check rung/             # type-check
-uv run pytest                                        # tests + coverage floor
+uv run pytest                          # tests
 ```
+
+Coverage is ratcheted with `--cov-fail-under`. Where that flag is applied differs by checkout — it
+rides on `pytest`'s own `addopts` in some, and on the QA gate script in others, so that a bare
+`pytest` while iterating stays uninstrumented. `grep -rn cov-fail-under pyproject.toml scripts/
+.github/` shows which applies here.
 
 A few contracts are **AST-enforced** by the test suite, so they fail loudly rather than at runtime:
 

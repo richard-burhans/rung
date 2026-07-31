@@ -20,7 +20,10 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TREES = ("rung", "rung_intel", "scripts", "research", "tests", "examples")
+#: `library` was removed on 2026-07-30 (it is its own repository) and `faces` was added the same
+#: day and never listed — so this guard silently covered one fewer tree than it named, and the
+#: branch's largest new package was outside it. Found by the escalated pre-PR audit.
+TREES = ("rung", "rung_intel", "scripts", "faces", "tests", "examples")
 
 # `Path.read_text`/`write_text` and builtin `open` are text-mode by default. `read_bytes`/`write_bytes`
 # take no encoding, and a `"b"` mode makes `open` binary — those are skipped below.

@@ -179,6 +179,31 @@ def scrape_states(only: str, render: bool, ai: bool, record_history: bool) -> No
     ))
 
 
+def _run_dedupe_claimed(conn: db.DBConn, abbr: str):
+    """Run one state's fold under the one-dedupe-per-state claim, or return ``None`` if another worker
+    already holds it (skip — that run folds this state).
+
+    The fold is a clear-then-mark pass that reads the WHOLE state and commits once, so two concurrent
+    folds of the same state would work from each other's stale rows. Both the manual ``dedupe-stores``
+    command AND the auto-fold after a full ``scrape-company-stores`` go through this claim so they
+    can't race each other (docs/stage_contracts.md §5). Caller owns the connection (and any
+    ``create_tables``); on a real run this commits the ``done`` completion.
+    """
+    from rung import queue
+    from rung.sources.dedupe import run_dedupe
+    worker = queue.worker_id()
+    queue.requeue_stale(conn, "dedupe")
+    queue.enqueue(conn, "dedupe", abbr)
+    conn.commit()
+    job = queue.claim_target(conn, "dedupe", abbr, worker)
+    if job is None:
+        return None
+    report = run_dedupe(conn, abbr)
+    queue.complete(conn, job.id, "done", worker=worker)
+    conn.commit()
+    return report
+
+
 def _dedupe_state(abbr: str) -> None:
     """Fold shared-brand / cross-listed duplicate stores for one state (``canonical_company_id``).
 
@@ -186,11 +211,19 @@ def _dedupe_state(abbr: str) -> None:
     seeded as N per-location companies that each re-scrape the same site) and dangling fold pointers
     accumulate until someone remembers to run ``dedupe-stores`` — the gap that left Ontario's "One Plant"
     as 13 phantom operators across 1,022 store rows.
+
+    Goes through the same per-state dedupe claim as ``dedupe-stores`` so this auto-fold can't race a
+    concurrent same-state scrape's fold or a manual ``dedupe-stores`` on the clear-then-mark pass.
     """
-    from rung.sources.dedupe import print_dedupe_report, run_dedupe
+    from rung import queue
+    from rung.sources.dedupe import print_dedupe_report
     conn = db.get_connection()
     try:
-        report = run_dedupe(conn, abbr)
+        report = _run_dedupe_claimed(conn, abbr)
+        if report is None:
+            holder = queue.live_claim_holder(conn, "dedupe", abbr)
+            print(f"  dedupe for {abbr} already running (claimed by {holder}); skipping auto-fold.")
+            return
     finally:
         conn.close()
     print_dedupe_report(report, abbr)
@@ -330,28 +363,21 @@ def store_lifecycle_cmd(state: str, closed_after_cycles: int | None, write: bool
 def dedupe_stores_cmd(state: str) -> None:
     """Collapse shared-brand duplicate stores (e.g. Delta 9 / Keystone IC → Sunnyside)."""
     from rung import queue
-    from rung.sources.dedupe import print_dedupe_report, run_dedupe
+    from rung.sources.dedupe import print_dedupe_report
 
     abbr = state.strip().upper()
     conn = db.get_connection()
     db.create_tables(conn)
 
-    # One dedupe per state at a time: the clear-then-mark pass reads the whole
-    # state and commits once, so a concurrent second run would work from stale rows.
-    worker = queue.worker_id()
-    queue.requeue_stale(conn, "dedupe")
-    queue.enqueue(conn, "dedupe", abbr)
-    conn.commit()
-    job = queue.claim_target(conn, "dedupe", abbr, worker)
-    if job is None:
+    # One dedupe per state at a time: the clear-then-mark pass reads the whole state and commits once,
+    # so a concurrent second run would work from stale rows. Shared with the post-scrape auto-fold.
+    report = _run_dedupe_claimed(conn, abbr)
+    if report is None:
         holder = queue.live_claim_holder(conn, "dedupe", abbr)
         conn.close()
         click.echo(f"dedupe for {abbr} is already running (claimed by {holder}); exiting.", err=True)
         return
 
-    report = run_dedupe(conn, abbr)
-    queue.complete(conn, job.id, "done", worker=worker)
-    conn.commit()
     conn.close()
     print_dedupe_report(report, abbr)
 

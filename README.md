@@ -275,8 +275,9 @@ the standard fields for apples-to-apples queries across platforms.
 
 ## Tests
 
-Run `ruff check` → `ty` → `pytest` (the last with a coverage floor, `--cov-fail-under`). The same gate
-runs in **CI** (`.github/workflows/ci.yml`) on every PR and push to `main`, against a Postgres service
-container. DB tests run against throwaway schemas in the test database; the suite covers the extractor
+Run `ruff check` → `ty` → `pytest` (the last with a coverage floor, `--cov-fail-under`).
+`.github/workflows/ci.yml` runs the same sequence against a Postgres service container, but it is
+`workflow_dispatch`-only — so run the checks locally before opening a PR rather than relying on the
+cloud to catch a failure. DB tests run against throwaway schemas in the test database; the suite covers the extractor
 parsing logic, the DB-replace safety invariants, and the work-queue claim semantics; the
 network/browser/AI tiers are exercised manually.

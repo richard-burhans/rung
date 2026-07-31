@@ -7,7 +7,7 @@ Postgres or the network.
 
 import click
 from click.testing import CliRunner
-from conftest import pg_conn
+from conftest import pg_conn, pg_conn_sharing
 
 from rung import cli, db, queue
 from rung.models import StateProgramRecord
@@ -279,3 +279,23 @@ def test_worker_defaults_to_menus_only(monkeypatch) -> None:
     result = CliRunner().invoke(cli.worker_cmd, ["--state", "OK"])
     assert result.exit_code == 0, result.output
     assert seen == ["OK"]
+
+
+def test_run_dedupe_claimed_skips_when_another_worker_holds_the_state_claim() -> None:
+    """The post-scrape auto-fold (_dedupe_state) and the manual dedupe-stores command share ONE
+    per-state 'dedupe' claim, so a full --state run's auto-fold can't race a concurrent same-state
+    fold on the clear-then-mark pass. When the claim is already held, _run_dedupe_claimed returns
+    None (skip) and never reaches run_dedupe."""
+    conn = pg_conn()
+    db.create_tables(conn)
+    other = pg_conn_sharing(conn)
+    # A concurrent worker holds PA's dedupe claim.
+    queue.enqueue(other, "dedupe", "PA")
+    other.commit()
+    held = queue.claim_target(other, "dedupe", "PA", "other-worker")
+    assert held is not None
+
+    # The auto-fold path sees the live claim and backs off instead of running a racing fold.
+    assert cli._run_dedupe_claimed(conn, "PA") is None
+    # A different state is unaffected — its own claim is free.
+    assert queue.claim_target(conn, "dedupe", "NJ", "auto-fold") is None  # not yet enqueued

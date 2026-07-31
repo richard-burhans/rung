@@ -21,6 +21,22 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Added
 
+- **`rung.rate_gate` — the waiting half of the cross-worker rate limiter, and the wiring that makes
+  it load-bearing.** `rate_limit.try_acquire` (the atomic `token_buckets` refill-and-deduct) had
+  been correct, tested and documented since the queue-hardening work — and had **zero call sites**.
+  It answers "may I go now?"; a scraper needs "wait for my turn". `HostGate` supplies that: a
+  dedicated connection (the Stage-2/3 runners share ONE psycopg connection across 6-8 concurrent
+  consumers, so committing a token deduction there would commit a sibling's in-flight transaction —
+  the same hazard `queue.heartbeat_forever` avoids the same way), an `asyncio.Lock` around a
+  `to_thread`'d round trip so the event loop keeps serving, a wait floored at `cost/rate` and
+  jittered so simultaneous waiters de-synchronise, a deadline instead of an unbounded block, and a
+  fail-open-**and-latch** on any database fault. It is a separate module so `rate_limit.py` remains
+  a caller-commits primitive.
+- **`queue.release()`** — hand a claim back UNWORKED: `pending`, claim cleared, and the claim-time
+  `attempts` increment undone, because nothing was attempted. The `scheduled_at` push-out is the
+  termination condition rather than politeness: the decrement removes the queue's own loop guard,
+  so a shed target that stayed immediately claimable could be claimed and shed without bound.
+
 - **A Harvard DASH rung in the paper-fetcher example.** DASH lists a repository *landing page* as an OA
   copy's `url_for_pdf`, so the Unpaywall rung fetches HTML and the paper looks paywalled; the new `dash`
   rung follows the landing to its `/bitstreams/<uuid>/download` link and fetches the real PDF. The

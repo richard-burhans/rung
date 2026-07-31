@@ -48,18 +48,43 @@ reap-jobs      = "rung.cli:reap_jobs_cmd"
 worker         = "rung.cli:worker_cmd"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-cov>=5"]
+# 2026-07-30 and this repo consumes it as committed files under `refs/`, not as an import. See
+# `[tool.uv.sources]` for why a wheel dependency was tried and rejected.
+dev = ["pytest>=8", "pytest-cov>=5", "pytest-xdist>=3", "pytest-timeout>=2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Put the repo root on sys.path for test imports.
 pythonpath = ["."]
 # --strict-markers/--strict-config catch typos in markers/config; coverage runs as a
-# ratchet (fail-under just below the measured core-only floor (~69%)) so it flags regressions
-# without churning on small uncovered branches. The uncovered remainder is the
+# ratchet (fail-under just below the current 70.1% measurement of 2026-07-18) so it flags
+# regressions without churning on small uncovered branches. The uncovered remainder is the
 # scrape runners) that a unit test can't drive without a real target — the pure logic
 # and the CLI wiring around it are tested. Raise the floor as more of it gets covered.
-addopts = "--strict-markers --strict-config --cov=rung --cov-fail-under=60"
+#
+# 68, not 70: 70 was proposed on 2026-07-14 and refuted by measurement at 69.6%. The floor had
+# sat at 60 against an actual 70.1, which is 10 points of slack — ~880 statements could lose
+# coverage and stay green. A ratchet that trails the truth by 10 points is not a ratchet.
+#
+# COVERAGE IS NOT HERE. It lives on the `pytest` line in `scripts/qa_gate.sh` and `.github/workflows/ci.yml`
+# — the two places that GATE — so a bare `pytest` while iterating is not instrumented. It stayed in
+# `addopts` for a long time because that guaranteed it could never be forgotten; the replacement guarantee
+# is `tests/test_gate_targets.py`, which asserts BOTH files still carry `--cov-fail-under=68`. Moving it
+# without that test would have been exactly the silent weakening this repo keeps paying for.
+#
+# The gate also passes `--dist loadgroup`, which IS load-bearing: several tests regenerate a committed
+# view into the working tree and restore it, from DIFFERENT files, so `loadfile` would still run them
+# concurrently and they would restore each other's intermediate state — a stale view reporting clean.
+# They carry @pytest.mark.xdist_group("repo_tree"); loadgroup pins the whole group to one worker.
+addopts = "--strict-markers --strict-config --cov=rung --cov-fail-under=68"
+# A wedged subprocess (the librarian generators shell out a lot) otherwise hangs the run with no output.
+# tests/conftest.py's _STALE_AFTER derives its safety margin from this number — raising it means raising
+# that too, or the schema sweep could reclaim a schema whose test is still running.
+timeout = 300
+markers = [
+    "slow: takes more than ~2s — the corpus generators and the doc-drift audit",
+    "corpus: needs the full dev tree (gitignored conversions, sibling repos); skipped on a bare checkout",
+]
 
 [build-system]
 requires = ["hatchling"]

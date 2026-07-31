@@ -127,10 +127,14 @@ def grams_to_label(grams: object) -> str | None:
 
 # Variant price keys, across platforms (med/rec split, promos, sales). The variant's "current"
 # price is the lowest of whatever it carries — same rule as the product-level `price` the mappers
-# compute (a marketing "original"/"promo" high price never wins a min).
+# compute (a marketing "original"/"promo" high price never wins a min). `original_price` is
+# DELIBERATELY excluded: it is the pre-promo/strike-through regular, never an effective shelf price,
+# so a variant carrying only `original_price` (Hytiva/Weedmaps set it when the current field is
+# absent) must yield no price rather than the marketing high. It is read separately below for the
+# strike-through recovery.
 _VARIANT_PRICE_KEYS = (
     "price", "price_med", "price_rec", "special_price_med", "special_price_rec",
-    "sale_price", "discounted_price", "unit_price", "original_price",
+    "sale_price", "discounted_price", "unit_price",
 )
 
 
@@ -167,7 +171,14 @@ def _variant_pricing(variant: dict) -> tuple[float | None, float | None]:
     regular = priced.get(_SALE_TO_REGULAR.get(winner, ""))
     if regular is not None and regular > effective:
         original = regular
-    explicit = priced.get("original_price")  # Weedmaps/Hytiva stamp the regular directly
+    # Weedmaps/Hytiva stamp the regular directly (not in `_VARIANT_PRICE_KEYS`, so read it here) —
+    # it records a strike-through but can never itself be the effective price.
+    raw_original = variant.get("original_price")
+    explicit = (
+        float(raw_original)
+        if isinstance(raw_original, (int, float)) and not isinstance(raw_original, bool)
+        else None
+    )
     if explicit is not None and explicit > effective:
         original = max(original, explicit) if original is not None else explicit
     return effective, original

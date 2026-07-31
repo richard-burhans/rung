@@ -17,8 +17,13 @@ variant.) :func:`reap_expired` re-queues any claim whose lease has passed (via a
 dead-worker gap a bare SKIP-LOCKED queue leaves open; runners reap at startup and the ``reap-jobs`` CLI
 is the standalone reaper. :func:`requeue_stale` remains the coarser claimed_at-age fallback.
 
-Commit discipline: enqueue/complete/requeue_stale/reap_expired/bump_heartbeat/bump_worker_heartbeat
-leave committing to the caller (so a job completion commits atomically with the work's data writes);
+:func:`release` is the load-shedding counterpart to :func:`complete`: a worker that claimed a target
+but could not start it (the cross-worker rate gate had no budget for that host — ``rung.rate_gate``)
+hands it back to ``pending`` unworked, with the claim-time ``attempts`` increment undone.
+
+Commit discipline: enqueue/complete/release/requeue_stale/reap_expired/bump_heartbeat/
+bump_worker_heartbeat leave committing to the caller (so a job completion commits atomically with
+the work's data writes);
 claim_next commits internally — a claim must be durable before work starts on it. ``heartbeat_forever``
 commits on its own dedicated connection.
 """
@@ -51,8 +56,10 @@ WHERE id = (SELECT id FROM jobs
 RETURNING id, task_type, target_key, payload, attempts
 """
 
-# Same as _CLAIM but scoped to a target_key prefix: a per-state run claims ONLY its state's jobs, so it
-# never drains (and then fails as "no store row") another state's jobs that requeue_stale resurrected.
+# Same as _CLAIM but scoped to a target_key LIKE pattern (a prefix "NY:%" for Stage-3's
+# "{state}:{store_key}" keys, or a suffix "%:NY" for Stage-2's "{company_id}:{state}" keys): a
+# per-state run claims ONLY its state's jobs, so it never drains (and then fails as "no store/recon
+# row") another state's jobs that requeue_stale resurrected.
 _CLAIM_SCOPED = """
 UPDATE jobs SET status = 'claimed', claimed_by = %s, claimed_at = now(),
                 last_heartbeat = now(), lease_until = now() + make_interval(mins => %s),
@@ -187,17 +194,24 @@ def _claim(conn: db.DBConn, sql: LiteralString, params: tuple) -> Job | None:
 
 def claim_next(
     conn: db.DBConn, task_type: str, worker: str, target_prefix: str | None = None,
-    *, lease_minutes: int = _LEASE_MINUTES,
+    *, target_suffix: str | None = None, lease_minutes: int = _LEASE_MINUTES,
 ) -> Job | None:
     """Claim the oldest pending job of a type, or None when the queue is drained.
 
-    With ``target_prefix`` (e.g. ``"NY:"``) claim only jobs whose ``target_key`` starts with it — so a
+    With ``target_prefix`` (e.g. ``"NY:"``) claim only jobs whose ``target_key`` STARTS with it; with
+    ``target_suffix`` (e.g. ``":NY"``) only those that END with it — the Stage-2 key is
+    ``"{company_id}:{state}"`` where the state is the SUFFIX, so a prefix can't scope it (Stage-3's
+    ``"{state}:{store_key}"`` uses the prefix). At most one of the two may be given. Either way a
     per-state run drains ITS state's queue (still partitioning across workers via SKIP LOCKED) and never
     steals/fails another state's jobs that ``requeue_stale`` resurrected. The claim stamps a
     ``lease_minutes`` lease window (and the heartbeat) so the reaper can recover a dead worker's job.
     """
+    if target_prefix is not None and target_suffix is not None:
+        raise ValueError("pass target_prefix or target_suffix, not both")
     if target_prefix is not None:
         return _claim(conn, _CLAIM_SCOPED, (worker, lease_minutes, task_type, target_prefix + "%"))
+    if target_suffix is not None:
+        return _claim(conn, _CLAIM_SCOPED, (worker, lease_minutes, task_type, "%" + target_suffix))
     return _claim(conn, _CLAIM, (worker, lease_minutes, task_type))
 
 
@@ -212,13 +226,15 @@ def claim_target(
 
 def make_claimer(
     conn: db.DBConn, task_type: str, worker: str, targeted_keys: list[str] | None,
-    *, target_prefix: str | None = None, lease_minutes: int = _LEASE_MINUTES,
+    *, target_prefix: str | None = None, target_suffix: str | None = None,
+    lease_minutes: int = _LEASE_MINUTES,
 ) -> Callable[[], Job | None]:
     """A no-arg claim closure shared by the Stage-2 and Stage-3 consumers: with ``targeted_keys``
     (a ``--only`` run) claim just those targets — so a concurrent full run's jobs are never stolen —
-    else drain the shared queue, scoped to ``target_prefix`` when given (e.g. one state, so a full
-    ``--state`` run doesn't claim+fail another state's jobs). Only this claim step is common across the
-    stages; their ``_consume`` loops (stop-event, per-stage persist/complete handling) stay per-runner."""
+    else drain the shared queue, scoped to ``target_prefix``/``target_suffix`` when given (one state,
+    so a full ``--state`` run doesn't claim+fail another state's jobs; Stage-2 scopes by suffix because
+    its key ends with the state). Only this claim step is common across the stages; their ``_consume``
+    loops (stop-event, per-stage persist/complete handling) stay per-runner."""
     def _claim() -> Job | None:
         if targeted_keys is not None:
             while targeted_keys:
@@ -227,7 +243,8 @@ def make_claimer(
                 if job is not None:
                     return job
             return None
-        return claim_next(conn, task_type, worker, target_prefix, lease_minutes=lease_minutes)
+        return claim_next(conn, task_type, worker, target_prefix,
+                          target_suffix=target_suffix, lease_minutes=lease_minutes)
     return _claim
 
 
@@ -310,6 +327,43 @@ def complete(
         "UPDATE jobs SET status = %s, error = %s, finished_at = now() "
         "WHERE id = %s AND claimed_by = %s AND status = 'claimed'",
         (status, error, job_id, worker),
+    )
+    return cur.rowcount == 1
+
+
+def release(
+    conn: db.DBConn, job_id: int, *, worker: str, delay_seconds: int = 300
+) -> bool:
+    """Give a claim back UNWORKED — the load-shedding counterpart to :func:`complete`.
+
+    A worker that claimed a target and then could not start it (the cross-worker rate gate's
+    budget for that host was exhausted, ``rung.rate_gate``) should hand the target back rather
+    than fail it: nothing was attempted, so nothing was learned about the target. The row returns
+    to ``pending`` with the claim cleared and ``scheduled_at`` pushed out by ``delay_seconds``.
+
+    ``attempts`` is DECREMENTED to undo the increment ``_CLAIM`` stamped: a shed target burned no
+    attempt, and without this, sustained throttling would walk every deferred target to
+    ``max_attempts`` and permanently fail work that was never once tried.
+
+    **That decrement removes the queue's own loop guard, so `delay_seconds` becomes the thing that
+    makes a saturated host terminate rather than spin.** ``attempts`` is what stops
+    ``requeue_stale``/``reap_expired`` from cycling a row forever; a release that both un-counts
+    the attempt AND leaves the row immediately claimable would let one worker claim → shed →
+    re-claim the same target without bound. The push-out is therefore not a politeness delay, it
+    is the termination condition: a shed target is not claimable again this drain, so the consumer
+    runs out of claimable work and the run ends. Callers that shed should ALSO stop waiting on a
+    bucket they have already found exhausted, so the sheds cost one gate deadline, not N.
+
+    Scoped to the holding worker for the same reason :func:`complete` is — a reaper may already
+    have handed this target to someone else, and releasing then would clear THEIR claim. Returns
+    whether this worker still held it. Caller commits.
+    """
+    cur = conn.execute(
+        "UPDATE jobs SET status = 'pending', claimed_by = NULL, claimed_at = NULL, "
+        "lease_until = NULL, attempts = GREATEST(0, attempts - 1), "
+        "scheduled_at = now() + make_interval(secs => %s) "
+        "WHERE id = %s AND claimed_by = %s AND status = 'claimed'",
+        (delay_seconds, job_id, worker),
     )
     return cur.rowcount == 1
 

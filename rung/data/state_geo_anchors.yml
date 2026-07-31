@@ -424,6 +424,39 @@ MB:
   - [53.8250, -101.2436]  # Flin Flon / The Pas (north)
   - [55.7435, -97.8558]   # Thompson (far north)
 
+# Government-monopoly / Crown-online provinces (QC/NS/NB/NL/PE). There is no private Dutchie
+# retail to sweep — their menus come from the single Crown storefront (seed-monopolies /
+# seed-shopify-storefronts), so these anchors' live job is the MAP city labels (anchor_cities()
+# in scripts/dispensary_maps.py, which had none for these provinces). They also seed future
+# private-retailer discovery where a hybrid market has one (NL's 59 private stores). abbr quoting:
+# none of these are YAML 1.1 booleans, so bare keys are safe (unlike "ON", which is true).
+QC:
+  - [45.5017, -73.5673]   # Montreal
+  - [46.8139, -71.2080]   # Quebec City
+  - [45.4765, -75.7013]   # Gatineau
+  - [45.4042, -71.8929]   # Sherbrooke
+  - [46.3432, -72.5477]   # Trois-Rivières
+  - [48.4280, -71.0520]   # Saguenay
+
+NS:
+  - [44.6488, -63.5752]   # Halifax
+  - [46.1368, -60.1942]   # Sydney
+  - [45.3669, -63.2733]   # Truro
+
+NB:
+  - [46.0878, -64.7782]   # Moncton
+  - [45.2733, -66.0633]   # Saint John
+  - [45.9636, -66.6431]   # Fredericton
+
+NL:
+  - [47.5615, -52.7126]   # St. John's
+  - [48.9500, -57.9522]   # Corner Brook
+  - [48.9330, -55.6640]   # Grand Falls-Windsor
+
+PE:
+  - [46.2382, -63.1311]   # Charlottetown
+  - [46.3950, -63.7902]   # Summerside
+
 # US territory — Puerto Rico (Weedmaps pool, verified 161 listings 2026-07-05). Anchors
 # span the archipelago; the metro San Juan cluster carries most stores.
 PR:

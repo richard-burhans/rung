@@ -493,8 +493,8 @@ def normalize_strain_type(raw: str | None) -> str | None:
     the vocabulary names no taxon (above), **and** the raw field is defaulted on at least one platform
     (Weedmaps: 98.2% "Indica", ~296k wrong rows; a lineage finding built on it was retracted, which is
     why ``reference_db.TRUSTED_LINEAGE_WHERE`` exists). See
-    ``research/papers_md/summaries/clarke-merlin_2013_evolution-ethnobotany.md`` and
-    ``reports/synthesis/identity_and_chemovars.md``.
+    ``library/papers_md/summaries/clarke-merlin_2013_evolution-ethnobotany.md`` and
+    ``library/books/identity_and_chemovars.md``.
     """
     global _strain_rules_cache
     if not raw or not raw.strip():

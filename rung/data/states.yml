@@ -567,6 +567,17 @@
   agency: Cannabis NB
   known_url: https://www.cannabis-nb.com/
 
+- abbr: NL
+  name: Newfoundland and Labrador
+  country: CA
+  programs: recreational
+  program_term: cannabis
+  # Hybrid market: 59 private retailers + the NLC's own online store (Cannabis NL /
+  # shopcannabisnl.com, a Shopify storefront) — seeded via seed-shopify-storefronts. The
+  # private-retailer roster (from nlliquorcorp.com) + aggregator pools are a follow-up.
+  agency: Newfoundland Labrador Liquor Corporation (NLC)
+  known_url: https://shopcannabisnl.com/
+
 - abbr: PE
   name: Prince Edward Island
   country: CA

@@ -42,7 +42,8 @@ CLI = "cli"
 # exactly these and nothing proprietary leaks back in.
 PUBLIC_MODULES = frozenset({
     "models", "http", "browser", "fx", "text", "brands", "normalize", "addresses", "static_source",
-    "db", "reference_db", "queue", "access", "rate_limit", "registry", "cli", "seed_companies",
+    "db", "reference_db", "queue", "access", "rate_limit", "rate_gate", "registry", "cli",
+    "seed_companies",
     "state_search", "state_lists", "extract", "ai_fallback", "homepage_discovery", "dedupe",
     # Offline Canadian geocoding — two rungs of one ladder, both public on purpose: generic
     # address-range interpolation / address-point lookup over open government data, no cannabis
@@ -67,7 +68,7 @@ PUBLIC_MODULES = frozenset({
 PURE_HELPERS = frozenset({"cresco", "curaleaf", "dutchie", "dutchie_plus", "fluent", "hytiva",
                           "jane", "sweedpos", "trulieve",
                           "canna_cabana", "delta9", "storerocket", "shopify", "woocommerce",
-                          "hybris_occ"})
+                          "hybris_occ", "sqdc", "cannabis_nb", "shopapps_locator"})
 # The two aggregator sweeps stay lean: they import only the overlay's `aggregator_http` (the private
 # anti-throttle machinery) and at most the public base-layer `http`
 # (the honest `make_session`) — never the heavier catalogs/extractors. Acyclic, just not zero-import.

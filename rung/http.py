@@ -1,6 +1,6 @@
 import os
 
-from curl_cffi.requests import AsyncSession
+from curl_cffi.requests import AsyncSession, Session
 
 # Browser TLS/JA3 impersonation is OPT-IN, and the public default is OFF: the open-source core
 # makes no attempt to defeat a target's bot detection, so running the published code with defaults
@@ -38,7 +38,12 @@ def current_impersonation() -> str | None:
     return _impersonate
 
 
-def make_session(proxy: str | None = None) -> AsyncSession:
+def make_session(
+    proxy: str | None = None,
+    *,
+    cookies: dict[str, str] | None = None,
+    impersonate: str | None = None,
+) -> AsyncSession:
     """Return an ``AsyncSession``: impersonating when a profile is opted in, else honest.
 
     With impersonation opted in (see :func:`set_impersonation`) the session carries that browser's
@@ -52,13 +57,45 @@ def make_session(proxy: str | None = None) -> AsyncSession:
     URL is generic; the pool that *picks/rotates/benches* URLs is private
     (``rung_intel.proxy``).
 
+    ``cookies`` seeds the session's cookie jar — most usefully a Cloudflare ``cf_clearance`` token that
+    a real browser minted for a challenge this client cannot solve headless (``rung_intel.cf_clearance``).
+    ``impersonate`` overrides the opted-in profile for this one session; it MUST match the browser that
+    minted such a token, because ``cf_clearance`` is bound to the exact IP **and** the UA/TLS
+    fingerprint that solved the challenge — so a mismatched profile (or a different egress) is rejected.
+
     Usage::
 
         async with make_session(proxy=pool.acquire(host)) as session:
             response = await session.get(url)
     """
-    if _impersonate:
+    profile = impersonate or _impersonate
+    if profile:
         # curl_cffi types `impersonate` as a fixed Literal; we pass a runtime str (the
         # opted-in profile) on purpose, so the stub can't verify it.
-        return AsyncSession(impersonate=_impersonate, proxy=proxy)  # ty: ignore[invalid-argument-type, invalid-return-type]
-    return AsyncSession(headers={"User-Agent": HONEST_USER_AGENT}, proxy=proxy)
+        return AsyncSession(impersonate=profile, proxy=proxy, cookies=cookies)  # ty: ignore[invalid-argument-type, invalid-return-type]
+    return AsyncSession(headers={"User-Agent": HONEST_USER_AGENT}, proxy=proxy, cookies=cookies)
+
+
+def make_sync_session(
+    proxy: str | None = None,
+    *,
+    cookies: dict[str, str] | None = None,
+    impersonate: str | None = None,
+) -> Session:
+    """The synchronous sibling of :func:`make_session` — same impersonation chokepoint, a blocking
+    ``Session`` instead of an ``AsyncSession``.
+
+    For the sequential, non-async tools (the librarian's Crossref/DataCite/Unpaywall fetchers) that
+    would gain nothing from async but must still route HTTP through the one place the impersonation
+    decision is made, rather than reaching for raw ``urllib``/``requests`` (banned by
+    ``tests/test_http.py``). Standalone scripts never opt in, so they stay honest by default.
+
+    Usage::
+
+        with make_sync_session() as session:
+            response = session.get(url, timeout=25)
+    """
+    profile = impersonate or _impersonate
+    if profile:
+        return Session(impersonate=profile, proxy=proxy, cookies=cookies)  # ty: ignore[invalid-argument-type, invalid-return-type]
+    return Session(headers={"User-Agent": HONEST_USER_AGENT}, proxy=proxy, cookies=cookies)
