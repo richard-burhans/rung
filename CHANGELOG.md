@@ -106,6 +106,24 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed
 
+- **The test suite passes on a fresh clone.** Nine tests failed and the coverage floor could not be
+  met, for anyone who cloned this repo and ran `pytest` — and none of it was a defect in the shipped
+  code. Four guards sweep the source tree for a contract (*"an orchestrator commits its own unit of
+  work"*, *"every roster replace restores the geocode cache"*) and each carries a floor on how many
+  call sites it expects to find, because a sweep that matches nothing satisfies every assertion
+  perfectly. Those floors were counted over a larger tree than this one, so the guards failed on a
+  number no contributor could reach. They now scope to the directories that exist and derive the
+  floor from them, keeping their teeth here rather than being deleted. Two further tests scanned a
+  directory this repo does not contain — one failed loudly, the other passed over nothing at all,
+  reporting a clean bill of health it had not earned; both now skip and name what they looked for.
+  One test whose entire subject was two undistributed data files is removed rather than emptied.
+  The coverage floor was measured over a wider codebase; measured here it is 65.79%, so the floor
+  is 65 and the build records the measurement with its date.
+
+- **`.gitignore` covers test and tooling output.** Running `pytest` leaves a `.coverage` database;
+  without the entry, `git add -A` staged a binary file into a pull request. `htmlcov/`,
+  `.pytest_cache/` and `.ruff_cache/` are covered too.
+
 - `examples/paper_fetcher.py` now reports **"not open access"** as a verdict distinct from a fetch
   failure. A paper that PMC indexes but places outside the OA subset is free to read and carries no
   redistribution licence; reporting it as "paywalled" was indistinguishable from a broken rung, which
