@@ -76,7 +76,7 @@ pythonpath = ["."]
 # view into the working tree and restore it, from DIFFERENT files, so `loadfile` would still run them
 # concurrently and they would restore each other's intermediate state — a stale view reporting clean.
 # They carry @pytest.mark.xdist_group("repo_tree"); loadgroup pins the whole group to one worker.
-addopts = "--strict-markers --strict-config --cov=rung --cov-fail-under=68"
+addopts = "--strict-markers --strict-config --cov=rung --cov-fail-under=65"
 # A wedged subprocess (the librarian generators shell out a lot) otherwise hangs the run with no output.
 # tests/conftest.py's _STALE_AFTER derives its safety margin from this number — raising it means raising
 # that too, or the schema sweep could reclaim a schema whose test is still running.

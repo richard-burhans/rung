@@ -19,11 +19,14 @@ Parses source with :mod:`ast` rather than importing it, so a regression is repor
 import ast
 from pathlib import Path
 
+import _trees
+
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
-SEARCH_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / "rung",
-    REPO_ROOT / "rung_intel",
-    REPO_ROOT / "scripts",
+#: Scoped to the trees that are actually here. The public build ships `rung/` alone, so a sweep over
+#: all three would find one roster-replacer where the monorepo has three — and the anti-vacuity floor
+#: below would fail on a number a public contributor can neither reach nor act on. See `tests/_trees`.
+SEARCH_DIRS: tuple[Path, ...] = tuple(
+    _trees.present(_trees.PUBLIC_CORE, _trees.OVERLAY, _trees.ANALYSIS)
 )
 
 DESTROYER: str = "delete_dispensaries_for_state"
@@ -82,7 +85,12 @@ def test_every_roster_replace_restores_the_geocode_cache() -> None:
     assert not offenders, "roster replace without a geocode restore:\n  " + "\n  ".join(offenders)
     # If this hits zero the guard has stopped guarding — the call sites were renamed or moved and
     # the test is now vacuously green, which is worse than no test at all.
-    assert checked >= 3, (
-        f"expected at least 3 roster-replacing functions (scrape_all_states, bootstrap's pool "
-        f"replace, ingest_pr_roster); found {checked}. Did they move or get renamed?"
+    # Exactly one per tree — `rung`'s scrape_all_states, the overlay's pool replace, `scripts`'
+    # ingest_pr_roster — so the floor is the census of the trees actually present: 3 in the monorepo,
+    # 1 in the public build. Keeping the floor rather than dropping it in public is the point: a
+    # sweep that matches nothing satisfies every assertion perfectly.
+    expected = _trees.floor(rung=1, rung_intel=1, scripts=1)
+    assert checked >= expected, (
+        f"expected at least {expected} roster-replacing function(s) across "
+        f"{[d.name for d in SEARCH_DIRS]}; found {checked}. Did they move or get renamed?"
     )

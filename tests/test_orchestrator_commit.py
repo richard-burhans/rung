@@ -16,6 +16,8 @@ connection close. This ast-parses each named orchestrator and fails if its subtr
 import ast
 from pathlib import Path
 
+import _trees
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = REPO_ROOT / "rung"
 INTEL = REPO_ROOT / "rung_intel" / "rung_intel"
@@ -29,6 +31,12 @@ _COMMITTING_ORCHESTRATORS = [
     (INTEL / "menus.py", "run_store_menus"),
     (INTEL / "company_stores.py", "run_company_stores"),
 ]
+
+# Scoped to the files that are actually here: the public build ships `rung/` alone, so the two
+# overlay orchestrators are absent there and `_find_function` would raise FileNotFoundError on a
+# path a public contributor cannot create. The floor below keeps the guard from going vacuous.
+_COMMITTING_ORCHESTRATORS = [(path, name) for path, name in _COMMITTING_ORCHESTRATORS
+                             if path.is_file()]
 
 
 def _calls_commit(node: ast.AST) -> bool:
@@ -55,6 +63,11 @@ def test_orchestrators_that_own_a_unit_of_work_commit() -> None:
         for path, name in _COMMITTING_ORCHESTRATORS
         if not _calls_commit(_find_function(path, name))
     ]
+    expected = _trees.floor(rung=4, rung_intel=2)   # 6 in the monorepo, 4 in the public build
+    assert len(_COMMITTING_ORCHESTRATORS) >= expected, (
+        f"only {len(_COMMITTING_ORCHESTRATORS)} of the expected {expected} orchestrators were found "
+        "— they moved or were renamed, and this guard is now checking less than it claims"
+    )
     assert not offenders, (
         "high-level orchestrator no longer commits its own unit of work — the write will roll back "
         f"at connection close (cross-cutting contract 2, the positive half): {offenders}"

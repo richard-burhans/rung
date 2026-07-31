@@ -1,3 +1,4 @@
+import pytest
 from conftest import pg_conn
 
 from rung import reference_db
@@ -103,6 +104,13 @@ def test_no_script_retypes_the_natural_flower_guard() -> None:
     from pathlib import Path
 
     scripts = Path(__file__).resolve().parents[1] / "scripts"
+    if not scripts.is_dir():
+        # The public build ships `rung/` alone, and this guard's whole population is the private
+        # analysis scripts. SKIP rather than sweep an absent tree: one of these two tests read named
+        # files (a loud FileNotFoundError) and the other only globbed — so it passed, over nothing,
+        # reporting a clean bill of health it had not earned. That second shape is the one this
+        # project keeps finding in its own detectors.
+        pytest.skip("the analysis scripts are not part of this tree; nothing to scan")
     # The ONE legitimate holder of the retired spelling: it exists to DIFF the new facet against the old
     # regex (`--verify`), which is how the port was validated at all — it found `rosin` matching inside
     # "3 B-ROS-IN-door" and `powder` inside "Gunpowder". It dies when the verification is retired.
@@ -165,6 +173,13 @@ def test_potency_headline_scripts_apply_the_leafly_guard() -> None:
     from pathlib import Path
 
     scripts = Path(__file__).resolve().parents[1] / "scripts"
+    if not scripts.is_dir():
+        # The public build ships `rung/` alone, and this guard's whole population is the private
+        # analysis scripts. SKIP rather than sweep an absent tree: one of these two tests read named
+        # files (a loud FileNotFoundError) and the other only globbed — so it passed, over nothing,
+        # reporting a clean bill of health it had not earned. That second shape is the one this
+        # project keeps finding in its own detectors.
+        pytest.skip("the analysis scripts are not part of this tree; nothing to scan")
     # Scripts whose headline is a potency statistic over a pool Leafly reaches (i.e. not terpene-gated).
     MUST_GUARD = {
         "potency_ceiling.py",

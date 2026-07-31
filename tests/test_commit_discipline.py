@@ -15,6 +15,8 @@ entirely unguarded: the invariant enforced at one caller and bypassed at the oth
 import ast
 from pathlib import Path
 
+import _trees
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _INTEL_DIR = _REPO_ROOT / "rung_intel" / "rung_intel"
 
@@ -28,6 +30,10 @@ _CALLER_COMMITS_MODULES = (
     _INTEL_DIR / "proxy_store.py",
     _INTEL_DIR / "proxy_tiers.py",
 )
+
+# Only the modules present here — the public build ships `rung/` alone, and reading an absent
+# overlay module raises on a path a public contributor cannot create. See `tests/_trees`.
+_CALLER_COMMITS_MODULES = tuple(p for p in _CALLER_COMMITS_MODULES if p.is_file())
 
 
 def _calls_commit(node: ast.AST) -> bool:
@@ -74,6 +80,11 @@ def test_distributed_policy_helpers_leave_commit_to_caller() -> None:
     'caller commits' — the same two-tier discipline as db.py, just outside it. A stray commit in,
     say, ``proxy_store.report_proxy`` would break the caller's per-claim atomicity and pass green,
     since ``test_db_write_helpers_do_not_commit`` scans only db.py."""
+    expected = _trees.floor(rung=1, rung_intel=2)   # 3 in the monorepo, 1 in the public build
+    assert len(_CALLER_COMMITS_MODULES) >= expected, (
+        f"only {len(_CALLER_COMMITS_MODULES)} of {expected} caller-commits modules found — they "
+        "moved, and this guard is checking less than its docstring claims"
+    )
     offenders = [
         f"{path.name}::{node.name}"
         for path in _CALLER_COMMITS_MODULES
