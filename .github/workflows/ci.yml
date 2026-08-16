@@ -81,14 +81,14 @@ jobs:
       # FURB167, EXE001, … — rules never in this repo's extend-select, some contradicting deliberate
       # decisions), making the gate non-reproducible. Bump deliberately in its own PR, not implicitly.
       - name: Lint (ruff)
-        run: uv tool run ruff@0.15.0 check rung/ rung_intel/ tests/ scripts/ faces/
+        run: uv tool run ruff@0.15.0 check rung/ rung_intel/ tests/ scripts/ faces/ claims/
 
       # `tests/` is deliberately absent from the ty list (ruff lints it, ty does not). This is a
       # KNOWN BACKLOG, not an oversight: adding it surfaces 290 real diagnostics (measured 2026-07-18), almost all of them
       # tests passing `None`/partial fakes where a real type is declared. It is recorded here so the
       # asymmetry reads as a decision with a number attached rather than as drift.
       - name: Type-check (ty)
-        run: uv tool run ty check rung/ rung_intel/ scripts/ faces/
+        run: uv tool run ty check rung/ rung_intel/ scripts/ faces/ claims/
 
       # The coverage floor is named HERE, not in pyproject's addopts, so a bare local `pytest` is not
       # instrumented while iterating. tests/test_gate_targets.py asserts this line and qa_gate.sh's both

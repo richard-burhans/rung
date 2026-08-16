@@ -24,7 +24,6 @@ less than its trees promise still fails.
 No DB, no network. Import-safe.
 """
 
-from __future__ import annotations
 
 from pathlib import Path
 

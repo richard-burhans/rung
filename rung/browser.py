@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+import shutil
 from pathlib import Path
 
 from pydoll.browser.options import ChromiumOptions
@@ -35,6 +36,19 @@ def _resolve_chrome_path() -> Path | None:
 
 # Resolved once at import; None if no bundled Chromium is found (pydoll then probes a system Chrome).
 CHROME_PATH = _resolve_chrome_path()
+
+
+def chromium_available() -> bool:
+    """Whether this machine has ANY Chromium the browser tier could drive.
+
+    A pure predicate, and it stays that way: `browser` is tier 0 and must not import upward, so it
+    reports the fact and `access.require_browser` — tier 2, which may import downward — turns it into
+    the `Unequipped` outcome. Splitting it that way was not a preference; `test_import_layering`
+    refused the version that imported `access` from here, correctly.
+    """
+    return (CHROME_PATH is not None
+            or shutil.which("google-chrome") is not None
+            or shutil.which("chromium") is not None)
 
 
 def make_browser_options(headless: bool = True) -> ChromiumOptions:

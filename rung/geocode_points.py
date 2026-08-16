@@ -32,21 +32,18 @@ such address" — it means "no such city in this rung".
     g.geocode("5017 22 Ave SW", city="Edmonton", province="AB")   # -> (lat, lon) | None
 """
 
-from __future__ import annotations
 
 import asyncio
 import csv
 import io
 import pickle
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Self
 
 from rung import http
 from rung.addresses import normalize_city, parse_address, street_key
-
-if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Iterable
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +172,7 @@ class PointGeocoder:
         return f"{province.upper()}:{normalize_city(city)}" in self._cities
 
     @classmethod
-    def load(cls, cache_dir: Path, cities: Iterable[str]) -> PointGeocoder:
+    def load(cls, cache_dir: Path, cities: Iterable[str]) -> Self:
         wanted = sorted({c.upper() for c in cities})
         unknown = [c for c in wanted if c not in SOURCES]
         if unknown:

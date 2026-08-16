@@ -54,7 +54,6 @@ LANDING-PAGE TRAP:  `is_oa=true` does NOT mean fetchable. Unpaywall's `url_for_p
                     `viewcontent.cgi` link). Always check the `%PDF` header, never the status code.
 """
 
-from __future__ import annotations
 
 import asyncio
 import os

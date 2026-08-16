@@ -115,6 +115,121 @@ def test_no_non_impersonating_http_clients() -> None:
     )
 
 
+# Network clients reachable as a SUBPROCESS. The two guards above are import- and
+# constructor-shaped, so a module that shells out fetches the web while importing nothing and
+# constructing nothing — it passes both while routing around the chokepoint completely.
+NETWORK_BINARIES: frozenset[str] = frozenset({"curl", "wget", "httpie", "http", "aria2c"})
+# subprocess entry points plus os.system; `_callee_name` reduces `subprocess.run` to `run`.
+SUBPROCESS_CALLS: frozenset[str] = frozenset(
+    {"run", "Popen", "call", "check_call", "check_output", "system"}
+)
+# The one module that shells out on purpose, and it is DEBT rather than design.
+#
+# `supplement_fetcher.py` is an operator-run acquisition tool (not a pipeline stage) whose
+# docstring states the choice: half its rungs need a specific browser User-Agent and Referer to
+# get a byte out of a publisher, and it obtained 25 of 29 supplements that way. Round 42 examined
+# it and ruled the defect was the GUARD'S SELF-DESCRIPTION, not this module — and said explicitly:
+# do NOT resolve it by routing the fetcher through `make_session` without measuring first, because
+# the docstring's claim that these rungs need that impersonation is testable and untested.
+#
+# So it is exempted rather than rewritten, and the exemption is the record that the measurement is
+# still owed. Anything ADDED here needs the same argument; a new pipeline fetch does not qualify.
+SHELL_FETCH_ALLOWED: frozenset[str] = frozenset({"supplement_fetcher.py"})
+
+
+def _shelled_binary(node: ast.Call) -> str | None:
+    """The network binary this call shells out to, or ``None``.
+
+    Handles both argv forms — ``run(["curl", url])`` and ``system("curl " + url)`` — and strips a
+    path prefix so ``/usr/bin/curl`` is caught too.
+    """
+    if _callee_name(node) not in SUBPROCESS_CALLS or not node.args:
+        return None
+    first = node.args[0]
+    if isinstance(first, (ast.List, ast.Tuple)) and first.elts:
+        first = first.elts[0]
+    if isinstance(first, ast.JoinedStr) and first.values:  # an f-string command line
+        first = first.values[0]
+    while isinstance(first, ast.BinOp):  # `"curl " + url`, possibly nested
+        first = first.left
+    if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+        return None
+    binary = first.value.split()[0].rsplit("/", 1)[-1] if first.value.strip() else ""
+    return binary if binary in NETWORK_BINARIES else None
+
+
+def test_no_module_shells_out_to_a_network_binary() -> None:
+    """The chokepoint must not be bypassable with a subprocess.
+
+    THE HOLE THIS CLOSES. ``test_session_only_constructed_in_http`` looks for session
+    CONSTRUCTORS and ``test_no_non_impersonating_http_clients`` for banned IMPORTS. A file whose
+    every fetch is ``subprocess.run(["curl", url])`` has neither, so it sails through both while
+    sending curl's own TLS fingerprint and none of the impersonation the whole design rests on —
+    and it inherits no proxy, no host rate limit and no retry policy either.
+
+    ``test_http.py``'s own comment has claimed ``scripts/`` is covered "too" since the guard was
+    written; it was covered only on the two axes above. Filed by adversarial round 42.
+    """
+    offenders: list[str] = []
+    for path in _gated_sources():
+        if path.name in SHELL_FETCH_ALLOWED:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and (binary := _shelled_binary(node)):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno} ({binary})")
+    assert not offenders, (
+        "Network binary invoked as a subprocess, bypassing rung.http.make_session(): "
+        f"{offenders}"
+    )
+
+
+def test_the_shell_fetch_allowlist_names_only_files_that_exist() -> None:
+    """An allowlist entry for a deleted file silently widens the guard for a future namesake."""
+    names = {p.name for p in _gated_sources()}
+    assert names >= SHELL_FETCH_ALLOWED, f"stale entries: {SHELL_FETCH_ALLOWED - names}"
+
+
+def test_the_allowlisted_fetcher_still_actually_shells_out() -> None:
+    """If it were rerouted through `make_session`, the exemption should GO, not linger.
+
+    An allowlist that outlives its reason is how a guard quietly stops guarding — and this
+    entry exists to carry an owed measurement, so it must not become decoration.
+    """
+    path = next(p for p in _gated_sources() if p.name in SHELL_FETCH_ALLOWED)
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    shelled = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _shelled_binary(n)]
+    assert shelled, (
+        f"{path.name} no longer shells out — remove it from SHELL_FETCH_ALLOWED "
+        "and record that the impersonation measurement round 42 asked for was done."
+    )
+
+
+def test_the_subprocess_guard_actually_fires() -> None:
+    """A guard nobody has seen fail is a guard nobody knows works.
+
+    This corpus's recorded dominant defect is a check that could not see its inputs reporting
+    that it found nothing wrong, so the detector is exercised against the argv forms it must
+    catch — and against the ones it must NOT, since `run(["git", ...])` is everywhere.
+    """
+    def binaries(src: str) -> list[str]:
+        return [
+            b
+            for node in ast.walk(ast.parse(src))
+            if isinstance(node, ast.Call) and (b := _shelled_binary(node))
+        ]
+
+    assert binaries('subprocess.run(["curl", "-s", url])') == ["curl"]
+    assert binaries('subprocess.run(["/usr/bin/curl", url])') == ["curl"]
+    assert binaries('subprocess.check_output(("wget", "-q", url))') == ["wget"]
+    assert binaries('os.system("curl " + url)') == ["curl"]
+    assert binaries('subprocess.run(f"curl {url}", shell=True)') == ["curl"]
+    # Not network calls: the guard must not fire on the subprocess use that is everywhere.
+    assert binaries('subprocess.run(["git", "status"])') == []
+    assert binaries('subprocess.run(["uv", "run", "pytest"])') == []
+    assert binaries('run(["pdftotext", path])') == []
+
+
 class _SessionRecorder:
     """Captures the kwargs make_session would hand curl_cffi's AsyncSession."""
 

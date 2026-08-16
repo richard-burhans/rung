@@ -31,8 +31,10 @@ INTEL_PKG = "rung_intel"
 # `addresses`) — so all three are base-shaped leaves and belong in the enforced BASE set (they were
 # in PUBLIC_MODULES but no tier, i.e. their layering was unguarded — the same "a tier the guard does
 # not know about is not a tier" gap the overlay note below calls out).
+# `licensing` and `operators` are the same shape as `brands`: YAML crosswalk readers with zero
+# internal imports.
 BASE = frozenset({"models", "http", "browser", "text", "addresses", "normalize", "static_source",
-                  "brands", "geocode_rnf", "geocode_points"})  # tier 0
+                  "brands", "licensing", "operators", "geocode_rnf", "geocode_points"})  # tier 0
 TIER1 = frozenset({"db", "queue"})            # tier 1 — persistence + work queue
 TIER2 = frozenset({"access"})                 # tier 2 — access-method engine
 FOUNDATION = BASE | TIER1 | TIER2
@@ -51,6 +53,13 @@ PUBLIC_MODULES = frozenset({
     # measured against ground truth by scripts/validate_rnf_geocoder.py, so an unused-looking
     # module here is deliberate, not dead code (docs/geocoding_design.md).
     "geocode_rnf", "geocode_points",
+    # The licence-regime coding: public because it is assembled entirely from public law (statutes
+    # and one regulator's page), carries nothing about our targets or our methods, and is the kind of
+    # jurisdiction reference data the public core already ships in `states.yml`.
+    "licensing",
+    # The cross-state operator key: retail-banner ownership assembled from SEC filings and one trade
+    # report, i.e. public-record corporate structure, exactly like `brand_parent.yml` beside it.
+    "operators",
 })
 
 # ── Overlay tiers (the proprietary modules left PUBLIC_DIR in the carve-out; their internal layering
@@ -266,9 +275,10 @@ def test_foundation_does_not_depend_on_upper_band() -> None:
 PUBLIC_DATA = frozenset({
     "companies.yml", "company_homepages.yml", "states.yml", "state_geo_anchors.yml",
     "category_aliases.yml", "category_name_overrides.yml", "product_type_aliases.yml",
-    "strain_aliases.yml", "obtention_aliases.yml", "brand_parent.yml",
+    "strain_aliases.yml", "obtention_aliases.yml", "brand_parent.yml", "license_regime.yml",
+    "operator_parent.yml",
 })
-# Keep PRIVATE_DATA in lockstep with scripts/build_public_repo.py:PRIVATE_DATA (the publish leak
+# Keep PRIVATE_DATA in lockstep with faces/tier2.py:PRIVATE_DATA (the publish leak
 # guard) and the actual files in rung_intel/.../data/ — the two are independent copies, pinned equal by
 # test_build_public_repo.py::test_private_data_denylist_matches_build_tool (that test lives there, not
 # here, because it imports `scripts` — and the build drops any shipped test that imports scripts/, which

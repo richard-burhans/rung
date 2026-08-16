@@ -31,7 +31,6 @@ rate-limit/proxy tables) — no cannabis reference tables — so this example cr
 infra plus its own `markets` table.
 """
 
-from __future__ import annotations
 
 import asyncio
 import json

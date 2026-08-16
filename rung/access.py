@@ -38,6 +38,7 @@ MethodRunner = Callable[[db.DBConn, str, MethodHint], Awaitable[MethodResult]]
 #   Unavailable  the WORLD says no. This target has no data by this route. Nothing to fix.
 #   Blocked      we were REFUSED. The data exists; this egress cannot have it. Rotate, back off, wait.
 #   Broken       WE are wrong. A dead URL, a changed payload, missing config. Fix the rung.
+#   Unequipped   THIS MACHINE cannot run the method. Nothing is wrong with the rung or the target.
 #   (silence)    the rung returned nothing and did not say why → recorded as 'failed'.
 #
 # Collapsing these is this project's signature bug. Three times, a failure of OURS was persisted and
@@ -49,6 +50,18 @@ MethodRunner = Callable[[db.DBConn, str, MethodHint], Awaitable[MethodResult]]
 # The asymmetry is deliberate: **only an explicit Unavailable produces 'unavailable'.** A rung that is
 # merely silent is 'failed' — unknown — because the cost of mistaking a broken rung for an empty world
 # is that you stop looking.
+#
+# `Unequipped` IS THE FOURTH INSTANCE OF THAT SIGNATURE BUG, found 2026-08-12 by taking an inventory
+# of the executables this workspace assumes (`reports/toolchain_manifest_plan.md`). The browser tier
+# needs Chrome; Chrome was absent from the development container for its entire life; and every target
+# that fell through to a browser rung was recorded `broken` — "fix the rung" — per target, forever.
+# The rung was fine. The target was fine. The CONTAINER could not run the method, and that is a fact
+# about us, persisted as a fact about the world.
+#
+# ⚠ SO IT IS THE ONE OUTCOME THAT WRITES NO ROW. Recording it per target would be the same defect in
+# a politer word: the verdict belongs to the machine, and a machine-shaped verdict stored against a
+# target survives the machine being fixed. The ladder continues, `access_health` stays honest, and
+# `rung/browser.py::require_browser` is how a rung says it.
 
 
 class MethodOutcome(Exception):
@@ -82,6 +95,42 @@ class Broken(MethodOutcome):
     """
 
     status = "broken"
+
+
+class Unequipped(MethodOutcome):
+    """THIS MACHINE cannot run this method — the rung and the target are both fine.
+
+    A missing executable is not a broken rung. Raising `Broken` for it tells a reader to repair code
+    that is correct, and persists a per-target verdict that was really a fact about the container.
+
+    **`run_target` deliberately records NO attempt row for this**, which is the only outcome that
+    withholds. The library half of this workspace states the same rule for its own checks: an absent
+    input is a SKIP that names what it looked for, never a verdict. Install what it names and the
+    ladder simply works — with no stale `broken` rows to re-explore past.
+    """
+
+    status = "unequipped"
+
+
+def require_browser() -> None:
+    """Raise `Unequipped` when this machine has no Chromium — never `Broken`.
+
+    Call it at the TOP of a browser rung, before any work. It names what is missing AND how to get
+    it, because a rung that fails without saying what to install is one somebody debugs instead of
+    fixing in a minute.
+
+    It lives HERE rather than in `rung.browser` because `browser` is tier 0 and `access` is tier 2:
+    the outcome vocabulary may import the predicate, never the other way round.
+    `test_import_layering` refused the first version of this, correctly.
+    """
+    from rung import browser
+
+    if not browser.chromium_available():
+        raise Unequipped(
+            "no Chromium on this machine: neither a Playwright build under ~/.cache/ms-playwright "
+            "nor google-chrome/chromium on PATH. This is an environment gap, not a broken rung — "
+            "see toolchain.toml, whose `chromium` entry carries the install route for this platform."
+        )
 
 
 @dataclass(frozen=True)
@@ -277,11 +326,13 @@ async def run_target(
                 method, conn, target_key, _hint_for(rows.get(method.name))
             )
             if outcome is not None:
-                db.record_access_attempt(
-                    conn, target_type, target_key, method.name, method.cost_rank,
-                    outcome.status, error=str(outcome) or outcome.status,
-                )
-                conn.commit()
+                # See `Unequipped`: a machine-shaped verdict must not be stored against a target.
+                if not isinstance(outcome, Unequipped):
+                    db.record_access_attempt(
+                        conn, target_type, target_key, method.name, method.cost_rank,
+                        outcome.status, error=str(outcome) or outcome.status,
+                    )
+                    conn.commit()
                 continue
             kept = [record for record in records if plausible(record)]
             if len(kept) >= min_records:
@@ -339,6 +390,11 @@ async def run_target(
             # The rung said WHY. Persist that, and keep walking — a target that is `unavailable` by
             # one route may still be reachable by another, and the next canary run can tell the
             # difference between a source that has nothing and a rung that is broken.
+            #
+            # EXCEPT `Unequipped`, which says nothing about this target and must leave no row: see
+            # its docstring. Storing it would outlive the missing executable that caused it.
+            if isinstance(outcome, Unequipped):
+                continue
             db.record_access_attempt(
                 conn, target_type, target_key, method.name, method.cost_rank,
                 outcome.status, error=str(outcome) or outcome.status,

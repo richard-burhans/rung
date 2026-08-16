@@ -51,20 +51,17 @@ skips reprojection because TIGER's NAD83 is within ~2 m of WGS84; that shortcut 
     g.geocode("5017 22 Ave SW", city="Edmonton", province="AB")   # -> (lat, lon) | None
 """
 
-from __future__ import annotations
 
 import asyncio
 import pickle
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Self
 
 from rung import http
 from rung.addresses import normalize_city, parse_address, street_key
-
-if TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Iterable
 
 try:
     import shapefile  # ty: ignore[unresolved-import]  # pyshp
@@ -282,7 +279,7 @@ class RnfGeocoder:
     def load(
         cls, cache_dir: Path, provinces: Iterable[str], *,
         offset_m: float = OFFSET_M, end_offset_m: float = END_OFFSET_M,
-    ) -> RnfGeocoder:
+    ) -> Self:
         """Build (or reuse) the index for `provinces`, downloading the RNF once if needed."""
         wanted = sorted(set(provinces))
         cache = cache_dir / f"rnf_index_{'-'.join(wanted)}.pkl"

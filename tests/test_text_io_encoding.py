@@ -14,7 +14,6 @@ because a rule you must remember is not a rule. Ruff's own check for this (`PLW1
 and could not be enabled without dragging in the rest of the preview rule set.
 """
 
-from __future__ import annotations
 
 import ast
 from pathlib import Path
