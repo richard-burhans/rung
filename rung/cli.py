@@ -7,6 +7,10 @@ import click
 
 from rung import db, registry
 
+# The aggregator platform set has ONE home (reference_db, beside keep-the-best's use of it);
+# --skip-aggregators/--only-aggregators must filter on that set, never an inlined copy.
+from rung.reference_db import AGGREGATOR_PLATFORMS
+
 
 def _stage(name: str) -> Callable[..., Any]:
     """Resolve a proprietary stage through the plugin registry (loading plugins on first use).
@@ -591,8 +595,8 @@ async def _run_store_menus(
     # wholesale snapshot replace (empty results keep the prior snapshot).
     results = await run_store_menus(
         conn, state, max_age_hours=max_age_hours,
-        skip_platforms={"weedmaps", "leafly"} if skip_aggregators else None,
-        only_platforms={"weedmaps", "leafly"} if only_aggregators else None,
+        skip_platforms=set(AGGREGATOR_PLATFORMS) if skip_aggregators else None,
+        only_platforms=set(AGGREGATOR_PLATFORMS) if only_aggregators else None,
         stop_on_cooldown=stop_on_cooldown, only=only, record_history=record_history,
     )
     conn.close()
@@ -645,12 +649,20 @@ async def _run_worker(
                     click.echo(f"[worker] draining company-stores for {abbr}…", err=True)
                     results = await run_company_stores(conn, abbr, record_history=record_history)
                     _stage("company_stores.print")(results, abbr)
+                    if results:
+                        # Dedupe must FOLLOW a scrape (see _dedupe_state: fragmentation + dangling
+                        # canonical_company_id folds accumulate otherwise — the Ontario "One Plant"
+                        # 13-phantom-operators case), and a fleet box running only `worker` never
+                        # reaches scrape-company-stores' auto-fold. Fold only when this drain
+                        # actually worked jobs: an idle poll cycle changed no rows, and the
+                        # per-state dedupe claim keeps concurrent folders off each other.
+                        _dedupe_state(abbr)
                 if run_store_menus is not None:
                     click.echo(f"[worker] draining menus for {abbr}…", err=True)
                     results = await run_store_menus(
                         conn, abbr, max_age_hours=max_age_hours,
-                        skip_platforms={"weedmaps", "leafly"} if skip_aggregators else None,
-                        only_platforms={"weedmaps", "leafly"} if only_aggregators else None,
+                        skip_platforms=set(AGGREGATOR_PLATFORMS) if skip_aggregators else None,
+                        only_platforms=set(AGGREGATOR_PLATFORMS) if only_aggregators else None,
                         record_history=record_history,
                     )
                     _stage("menus.print")(results, abbr)

@@ -281,6 +281,24 @@ def test_worker_defaults_to_menus_only(monkeypatch) -> None:
     assert seen == ["OK"]
 
 
+def test_worker_folds_state_after_a_company_stores_drain(monkeypatch) -> None:
+    """Dedupe must FOLLOW a scrape (the Ontario "One Plant" 13-phantom-operators gap), and a fleet
+    box running only `worker` never reaches scrape-company-stores' auto-fold — so the worker folds
+    each state whose drain actually worked jobs, and does NOT fold an idle (empty) drain."""
+    _bind_test_conn(monkeypatch)
+    folded: list[str] = []
+    monkeypatch.setattr(cli, "_dedupe_state", folded.append)
+
+    async def _fake_company(_conn, abbr, **_kw):
+        return ["a-result"] if abbr == "PA" else []   # PA drained work; NJ's cycle was idle
+
+    stages = {"company_stores.run": _fake_company, "company_stores.print": lambda r, s: None}
+    monkeypatch.setattr(cli, "_stage", lambda name: stages[name])
+    result = CliRunner().invoke(cli.worker_cmd, ["--state", "pa, nj", "--task", "company-stores"])
+    assert result.exit_code == 0, result.output
+    assert folded == ["PA"]
+
+
 def test_run_dedupe_claimed_skips_when_another_worker_holds_the_state_claim() -> None:
     """The post-scrape auto-fold (_dedupe_state) and the manual dedupe-stores command share ONE
     per-state 'dedupe' claim, so a full --state run's auto-fold can't race a concurrent same-state

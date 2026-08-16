@@ -20,6 +20,7 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         GEOCODED_TABLES,
         NATURAL_FLOWER_WHERE,
         NATURAL_FLOWER_WHERE_NORMALIZED,
+        PLAUSIBLE_POTENCY_WHERE,
         TRUSTED_LINEAGE_WHERE,
         TRUSTED_POTENCY_WHERE,
         US_EXCL_TERRITORIES_SUBQUERY,
@@ -31,6 +32,7 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         count_company_stores,
         count_store_products,
         create_reference_tables,
+        create_store_pos_observations,
         create_tables,
         delete_company_stores_for_company,
         delete_dispensaries_for_state,
@@ -47,6 +49,8 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         latest_snapshot_times,
         latest_store_observations,
         natural_flower_where,
+        plausible_potency_expr,
+        plausible_potency_where,
         put_geocode_cache,
         realign_store_products_company,
         record_location_observations,
@@ -341,7 +345,7 @@ def get_heartbeats(conn: DBConn) -> list[tuple]:
         f"SELECT {', '.join(HEARTBEAT_COLUMNS)} FROM infra_heartbeat ORDER BY updated_at DESC"
     ).fetchall()
 
-def get_connection() -> DBConn:
+def get_connection(*, prefer_readonly: bool = False) -> DBConn:
     """Open and return a connection to the dispensaries data source.
 
     Live Postgres by default (``DATABASE_URL``, or the local dev container). When
@@ -349,6 +353,12 @@ def get_connection() -> DBConn:
     clean-dataset export at ``RUNG_STATIC_PATH`` instead — so the analysis scripts run unchanged off a
     portable file, with no database and no credentials (see ``rung.static_source``). This is the seam a
     Galaxy tool flips to reproduce an analysis from the published dataset.
+
+    ``prefer_readonly=True`` consults ``DATABASE_URL_RO`` first (falling back to ``DATABASE_URL`` /
+    the dev default): a read-only analysis script should hold a credential that CANNOT write, when
+    one is configured. This flag is the one home for that preference — before it, each such script
+    hand-rolled the ``DATABASE_URL_RO or DATABASE_URL`` resolution and thereby lost the static-source
+    seam and the dev-container fallback every other caller gets.
     """
     from rung import (
         static_source,  # local import: keep the engine store free of the static dep
@@ -356,6 +366,8 @@ def get_connection() -> DBConn:
     if static_source.is_static():
         return static_source.connect()  # ty: ignore[invalid-return-type]  (duck-typed psycopg surface)
     url = os.environ.get("DATABASE_URL", _DEFAULT_DATABASE_URL)
+    if prefer_readonly:
+        url = os.environ.get("DATABASE_URL_RO") or url
     try:
         return psycopg.connect(url)
     except psycopg.OperationalError as exc:

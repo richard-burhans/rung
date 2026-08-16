@@ -548,3 +548,50 @@ def test_a_fresh_connection_cannot_see_uncommitted_work():
     other = _fresh_into(schema)
     assert other.execute("SELECT count(*) FROM widget").fetchone()[0] == 0  # fresh connection: the truth
     other.close()
+
+
+# ── seed_companies._seed (the batched ON CONFLICT insert) ─────────────────────
+
+def test_seed_inserts_only_missing_pairs_and_reports_skips() -> None:
+    """One batched INSERT … ON CONFLICT DO NOTHING replaced a per-pair COUNT-then-INSERT; the
+    UNIQUE (canonical_name, state) constraint does the existence check. Post-state and the
+    (inserted-in-input-order, skipped) report must match the per-row path exactly."""
+    conn = _conn()
+    pairs = [("Acme", "PA"), ("Zen Leaf", "AZ")]
+    assert seed_companies._seed(conn, pairs) == (pairs, 0)
+    # a second run inserts nothing; a mixed run inserts only the new pair
+    assert seed_companies._seed(conn, pairs) == ([], 2)
+    assert seed_companies._seed(conn, [("Acme", "PA"), ("Curaleaf", "FL")]) == (
+        [("Curaleaf", "FL")], 1,
+    )
+    rows = conn.execute(
+        "SELECT canonical_name, state FROM companies ORDER BY canonical_name"
+    ).fetchall()
+    assert rows == [("Acme", "PA"), ("Curaleaf", "FL"), ("Zen Leaf", "AZ")]
+    assert seed_companies._seed(conn, []) == ([], 0)  # the empty roster stays a no-op
+
+
+# ── get_connection(prefer_readonly=…) ─────────────────────────────────────────
+
+def test_get_connection_prefer_readonly_consults_database_url_ro_first(monkeypatch) -> None:
+    """A read-only analysis script should hold the read-only credential when one is configured,
+    and fall back to the ordinary resolution when none is — the one home for the preference the
+    RO scripts used to hand-roll (losing the dev default and the static seam)."""
+    seen: list[str] = []
+
+    def _fake_connect(url):
+        seen.append(url)
+        raise psycopg.OperationalError("stop at the URL")
+
+    monkeypatch.setattr(db.psycopg, "connect", _fake_connect)
+    monkeypatch.delenv("RUNG_DATA_SOURCE", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://rw")
+    monkeypatch.setenv("DATABASE_URL_RO", "postgresql://ro")
+    with pytest.raises(psycopg.OperationalError):
+        db.get_connection(prefer_readonly=True)   # RO wins when configured
+    with pytest.raises(psycopg.OperationalError):
+        db.get_connection()                       # the default path never reads the RO variable
+    monkeypatch.delenv("DATABASE_URL_RO")
+    with pytest.raises(psycopg.OperationalError):
+        db.get_connection(prefer_readonly=True)   # no RO configured → ordinary resolution
+    assert seen == ["postgresql://ro", "postgresql://rw", "postgresql://rw"]

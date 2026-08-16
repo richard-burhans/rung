@@ -85,24 +85,28 @@ def ensure_company(conn: db.DBConn, canonical_name: str, state: str) -> int:
 def _seed(
     conn: db.DBConn, pairs: list[tuple[str, str]]
 ) -> tuple[list[tuple[str, str]], int]:
-    inserted: list[tuple[str, str]] = []
-    skipped = 0
-    for canonical_name, state in pairs:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM companies WHERE canonical_name = %s AND state = %s",
-            (canonical_name, state),
-        ).fetchone()
-        if row is not None and row[0] == 0:
-            now = datetime.datetime.now(datetime.UTC).isoformat()
-            conn.execute(
-                "INSERT INTO companies (canonical_name, state, created_at) VALUES (%s,%s,%s)",
-                (canonical_name, state, now),
-            )
-            inserted.append((canonical_name, state))
-        else:
-            skipped += 1
+    """Insert the not-yet-present pairs in ONE statement; return (inserted-in-pairs-order, skipped).
+
+    The UNIQUE (canonical_name, state) constraint does the existence check for free — a per-pair
+    COUNT-then-INSERT was ~2x round-trips per operator across the whole multi-state roster to
+    insert mostly-already-present rows. ``RETURNING`` names exactly what landed.
+    """
+    if not pairs:
+        conn.commit()
+        return [], 0
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    rows = conn.execute(
+        "INSERT INTO companies (canonical_name, state, created_at) "
+        "SELECT canonical_name, state, %s FROM unnest(%s::text[], %s::text[]) "
+        "AS pair(canonical_name, state) "
+        "ON CONFLICT (canonical_name, state) DO NOTHING "
+        "RETURNING canonical_name, state",
+        (now, [name for name, _ in pairs], [state for _, state in pairs]),
+    ).fetchall()
+    added = {(row[0], row[1]) for row in rows}
+    inserted = [pair for pair in pairs if pair in added]
     conn.commit()
-    return inserted, skipped
+    return inserted, len(pairs) - len(inserted)
 
 
 def main() -> None:
