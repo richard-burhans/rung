@@ -86,7 +86,8 @@ def looks_like_cannabis(text: str, program_term: str | None = None) -> bool:
     return re.search(rf"\b(?:{pattern})\b", text.lower()) is not None
 
 # Domains a real operator homepage is never on: directories/aggregators, social/review,
-# and search/maps/wiki/jobs noise. Substring match against the (www-stripped) netloc.
+# and search/maps/wiki/jobs noise. Matched by `_domain_excluded` against the (www-stripped)
+# netloc, LABEL-ANCHORED — see that function for the three entry shapes.
 _EXCLUDED_DOMAINS = (
     # aggregators / menu directories
     "weedmaps.com", "leafly.com", "dutchie.com", "iheartjane.com", "jane.app",
@@ -145,6 +146,32 @@ def build_discovery_queries(
     return queries
 
 
+def _domain_excluded(netloc: str) -> bool:
+    """Whether a (www-stripped, lowercased) netloc is on an excluded domain — LABEL-ANCHORED.
+
+    A bare substring test here dropped real operators: ``"x.com" in "medrx.com"`` is True, so any
+    legitimate domain merely ENDING in an excluded name (medrx.com, and Rx-suffixed names are common
+    in this trade) was discarded as social-media noise before ranking ever saw it. Three entry
+    shapes, each matched on label boundaries where a boundary exists:
+
+    - a full domain (``x.com``): the netloc itself or a subdomain of it;
+    - a TLD family (trailing dot, ``google.``): any host whose label sequence contains a label
+      spelled that way followed by more labels (google.com, maps.google.ca);
+    - a dotless fragment (``where-to-buy``): a deliberate substring — it names a path-style
+      directory pattern, not a registrable domain.
+    """
+    for bad in _EXCLUDED_DOMAINS:
+        if bad.endswith("."):  # TLD family: "google." matches google.com and maps.google.ca
+            if netloc.startswith(bad) or f".{bad}" in netloc:
+                return True
+        elif "." not in bad:  # name fragment: substring on purpose
+            if bad in netloc:
+                return True
+        elif netloc == bad or netloc.endswith(f".{bad}"):  # full domain or a subdomain of it
+            return True
+    return False
+
+
 def _candidate_domains(hrefs: list[str]) -> list[str]:
     """A ``filter_fn`` for the search backends: keep plausible operator-homepage URLs,
     dropping aggregators/social/noise and non-http; dedupe preserving order."""
@@ -154,7 +181,7 @@ def _candidate_domains(hrefs: list[str]) -> list[str]:
         if not href or not href.startswith("http"):
             continue
         netloc = urlparse(href).netloc.lower().removeprefix("www.")
-        if not netloc or any(bad in netloc for bad in _EXCLUDED_DOMAINS):
+        if not netloc or _domain_excluded(netloc):
             continue
         page = urlparse(href)._replace(fragment="").geturl()
         if page not in seen:

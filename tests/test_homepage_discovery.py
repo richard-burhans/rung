@@ -36,6 +36,27 @@ def test_the_query_uses_the_jurisdictions_own_word_for_the_trade() -> None:
     assert "medical marijuana" in queries[0]
 
 
+def test_an_operator_domain_merely_ending_in_an_excluded_name_is_kept() -> None:
+    """`"x.com" in "medrx.com"` is True — the old unanchored substring test dropped any operator
+    whose real domain merely ENDS in an excluded name (Rx-suffixed names are common in this trade),
+    reporting them no_homepage_found. The exclusion is label-anchored now."""
+    assert _candidate_domains(["https://medrx.com/"]) == ["https://medrx.com/"]
+    # ends in "leafly.com" without being leafly.com or a subdomain of it
+    assert _candidate_domains(["https://grapeleafly.com/"]) == ["https://grapeleafly.com/"]
+
+
+def test_excluded_domains_and_their_subdomains_are_still_dropped() -> None:
+    for url in (
+        "https://x.com/dispensaryprofile",          # the apex itself
+        "https://m.facebook.com/zenleaf",           # a subdomain
+        "https://www.google.com/maps/place/x",      # the "google." TLD family, apex
+        "https://maps.google.ca/x",                 # the TLD family, subdomain + foreign TLD
+        "https://weedmaps.com/dispensaries/x",      # aggregator
+        "https://brand.where-to-buy.example/x",     # the deliberate dotless name fragment
+    ):
+        assert _candidate_domains([url]) == [], url
+
+
 def test_candidate_domains_drops_aggregators_social_noise_and_dupes() -> None:
     out = hd._candidate_domains([
         "https://www.zenleafdispensaries.com/locations",
