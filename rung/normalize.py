@@ -375,12 +375,68 @@ def terpenes_repaired(terpenes: object) -> bool:
     return repaired != raw or len(kept) != len(repaired)
 
 
+# ── implausibly LOW flower potency ──────────────────────────────────────────────
+#
+# The corpus has a guard for impossible-HIGH potency (`PERCENT_MAX` above reroutes a >100 "percent"
+# to mg; `reference_db.TRUSTED_POTENCY_WHERE` excludes Leafly's manufactured >=40% tail) and had
+# none for impossible-LOW. Verified against the live SweedPOS/Curaleaf feed on 2026-08-01:
+#
+#   product 118359 `Orange Z` (Grassroots, 3.5 g) at `sweedpos:LMR084` alternates between
+#   30.692 and **3.0692** in INTERLEAVED date ranges — 30.692 on 2026-07-12..30, 3.0692 on
+#   07-10, 07-31 and 08-01. The live payload is `{"thc": {"value": [3.0692], "unitAbbr": "%"}}`
+#   with `displayThc` and `tac` both null, so there is no other field to read: the decimal shift
+#   is UPSTREAM, in the operator's own lab-data entry, and our parser records it faithfully.
+#   132 SweedPOS flower listings carry the same signature as of 2026-08-01, counting a listing
+#   (product x store, >=2 observations, thc in (0,45]) whose min and max differ by exactly 10x.
+#   COUNT THE SAME WAY BEFORE COMPARING: a looser rule (any observation pair, not min/max) gives
+#   173 on the same day, and the database is live, so every figure in this comment is an as-of.
+#
+# So this does NOT alter the value — the stored number is what the platform published and what the
+# shopper saw, which is precisely the estimand of the listing-repeatability work (D14). It QUALIFIES
+# it, the same shape as `terpenes_repaired` / `text.product_type_defaulted`: downstream a 3.07% flower
+# is byte-indistinguishable from a real reading, and an analysis of the potency distribution, its
+# tail, or listing-level movement must be able to exclude it. Repairing it silently would be the
+# recorded failure class in reverse — OUR inference stored as the platform's observation.
+#
+# FLOWER ONLY, and deliberately. As of 2026-08-01 the median flower THC runs 25.8% (leafly) to 31.4%
+# (hytiva) across platforms and the 1st percentile on the platforms with no known contamination is
+# 16-19%, so a floor at 5 is far below anything a real flower listing reaches. The mg-dosed categories
+# are NOT candidates: their percent column is meaningless (138,775 edible rows sit below this floor
+# because edibles are dosed in mg), and Pre-Roll mixes infused product. Extend the map only with the
+# same kind of per-category evidence — AND extend `reference_db.plausible_potency_expr` and its test
+# grid in the same commit, because the SQL twin hardcodes 'Flower' and the row-for-row test only
+# covers the categories its grid names.
+_MIN_PLAUSIBLE_THC_PCT = {"Flower": 5.0}
+
+# A genuinely CBD-dominant flower legitimately carries a low THC, so it must not be flagged: of the
+# 12,170 sub-5% flower rows as of 2026-08-01, 1,053 declare CBD >= 1% and are real product. The suspect
+# population is the row declaring essentially NO cannabinoid at all.
+_CBD_DOMINANT_MIN = 1.0
+
+
+def potency_implausible(category_std: object, thc: object, cbd: object) -> bool:
+    """True when a published THC percent is not a plausible total-THC label for its category.
+
+    Qualifies the stored value; never changes it (see the block comment above). False whenever there
+    is nothing to qualify — no category floor, no THC reading, or a CBD-dominant row whose low THC is
+    real. A flagged row is still the number the platform published.
+    """
+    floor = _MIN_PLAUSIBLE_THC_PCT.get(category_std) if isinstance(category_std, str) else None
+    if floor is None:
+        return False
+    if isinstance(thc, bool) or not isinstance(thc, (int, float)) or not 0 < thc < floor:
+        return False
+    # CBD-dominant flower is real product, not a decimal error.
+    return not (isinstance(cbd, (int, float)) and not isinstance(cbd, bool) and cbd >= _CBD_DOMINANT_MIN)
+
+
 # ── stamp onto a record ─────────────────────────────────────────────────────────
 
 def enrich_record(record: StoreProductRecord) -> None:
     """Stamp the normalized fields (``size_g``, ``terpenes_std``, ``terp_total``,
-    ``terpenes_repaired``, and the per-variant ``size_g``/``price_per_g``) onto a record from its own
-    raw fields. Idempotent."""
+    ``terpenes_repaired``, ``potency_implausible``, and the per-variant ``size_g``/``price_per_g``)
+    onto a record from its own raw fields. Idempotent."""
     record.size_g = enrich_variants(record.variants, record.category_std)
     record.terpenes_std, record.terp_total = normalize_terpenes(record.terpenes)
     record.terpenes_repaired = terpenes_repaired(record.terpenes)
+    record.potency_implausible = potency_implausible(record.category_std, record.thc, record.cbd)

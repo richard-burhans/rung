@@ -1,0 +1,157 @@
+# Retail BANNER → corporate parent, plus the storefront names that are not corporate identities at
+# all. The cross-state key `companies` does not have.
+#
+# WHY THIS FILE EXISTS. `companies` is UNIQUE (canonical_name, state) and `company_stores.canonical_name`
+# is a per-state label, so "is this a multi-state operator?" has only ever been answered by asking
+# whether the same STRING shows up in three states. Adversarial Round 24 (2026-07-31) measured both
+# ways that fails:
+#
+#   FALSE MERGE — generic storefront words ("The Dispensary", "Top Shelf") appear in three or more
+#     states as unrelated businesses and were counted as MSOs. Dropping them moved the national MSO
+#     share 9.84% -> 9.25%.
+#   FALSE SPLIT — one parent trades under different banners per state, so its stores counted as
+#     several independents. Folding the attested parents moved CT +24.0 pp and NV +17.4 pp, and it
+#     WIDENS the regime contrast rather than manufacturing it.
+#
+# A third case needs no entry here and is handled by `operators.normalize_banner`: "Good Day Farm"
+# (MO) and "Gooddayfarm" (LA, AR) are one company under two roster spellings, and normalizing folds
+# them without anybody asserting an ownership fact.
+#
+# THIS IS A KEY, NOT A MATCHER. Lookup is EXACT on the normalized banner. `rung/brands.py` searches
+# inside a brand string because product brands appear embedded in longer names; an operator banner is
+# the whole label, and substring matching there is how "The Dispensary" swallows "The Dispensary of
+# Utah". A banner absent from this file is its own operator.
+#
+# PROVENANCE, and read the grades — they are not decoration:
+#   verified — a primary source states the ownership (an SEC filing naming the retail banner).
+#   reported — a reputable secondary source, or an in-repo attestation whose own quote I did not
+#              re-open this pass. Checkable, but one link further from the filing than it looks.
+#   inferred — derived by us. Round 24 named Cresco->Sunnyside specifically as UNATTESTED; it is
+#              still unattested, and it is graded accordingly rather than quietly promoted.
+#
+# `scripts/load_operator_parent.py` loads these as `operated_by` attestations, the same predicate
+# `rung_intel/data/brand_ownership.yml` already uses for Zen Leaf. See docs/provenance_design.md.
+#
+# THIS SET IS SEEDED, NOT EXHAUSTIVE. It covers the multi-state banners that Round 24's own fold
+# touched. `scripts/regime_concentration.py` reports how many stores carry an unresolved banner, and
+# `tests/test_operators.py` ratchets that nobody adds a banner without a source.
+
+parents:
+
+  Verano Holdings:
+    source_type: sec_filing
+    source_ref: Verano FY2024 Form 10-K
+    source_url: https://www.sec.gov/Archives/edgar/data/1848416/000162828025008390/vrnof-20241231.htm
+    quote: >-
+      [Verano] designs, builds and operates branded retail environments including Zen Leaf™ and MÜV™
+      dispensaries.
+    confidence: verified
+    retrieved_at: 2026-07-10
+    banners: [Zen Leaf, MÜV]
+    notes: >-
+      The quote names both banners explicitly, which is why this is the only `verified` row that
+      folds two distinct retail names. Already carried as an `operated_by` attestation in
+      `rung_intel/data/brand_ownership.yml`.
+
+  Curaleaf Holdings:
+    source_type: sec_filing
+    source_ref: Curaleaf FY2025 Annual Information Form (national brand list)
+    source_url: https://www.sec.gov/Archives/edgar/data/1756770/000175677026000019/q425-exx991xaif.htm
+    quote: >-
+      (Not re-opened this pass — the filing is the source `rung/data/brand_parent.yml` cites for the
+      Curaleaf/Grassroots portfolio.)
+    confidence: reported
+    retrieved_at: 2026-08-01
+    banners: [Curaleaf, Grassroots]
+    notes: >-
+      Curaleaf-the-banner is Curaleaf-the-company, so that half is identity rather than a claim.
+      Grassroots is the acquired banner and is the half that actually folds; it rides on
+      `brand_parent.yml`'s alias list, not on a fresh reading, hence `reported`.
+
+  Green Thumb Industries:
+    source_type: sec_filing
+    source_ref: Green Thumb Industries FY2025 Form 10-K (SEC CIK 0001795139)
+    source_url: https://www.sec.gov/Archives/edgar/data/1795139/000119312526071672/gtbif-20251231.htm
+    quote: >-
+      (Not re-opened this pass — this is the filing `rung/data/brand_parent.yml` cites for the GTI
+      portfolio; RISE is GTI's retail banner.)
+    confidence: reported
+    retrieved_at: 2026-08-01
+    banners: [RISE, RISE Dispensaries, Essence Cannabis Dispensary]
+    # A per-banner source override, because the Essence fold rests on a DIFFERENT document from the
+    # rest of this row and attaching it to the 10-K would be a citation that does not say what it is
+    # cited for — the precise defect Round 24 caught twice in D4's reference list.
+    banner_sources:
+      Essence Cannabis Dispensary:
+        source_type: trade_press
+        source_ref: Las Vegas Review-Journal, "Green Thumb signs largest marijuana deal in Nevada to date"
+        source_url: https://www.reviewjournal.com/news/green-thumb-signs-largest-marijuana-deal-in-nevada-to-date-1526479/
+        quote: >-
+          (Not re-opened this pass — cited in `rung_intel/data/brand_ownership.yml` as the source for
+          the NEGATIVE attestation "Essence Cannabis Dispensary not_owned_by Verano Holdings", whose
+          note states it is a Nevada retail chain acquired by Green Thumb Industries.)
+        confidence: reported
+        retrieved_at: 2026-07-10
+    notes: >-
+      The Essence banner is the reason this row matters and the reason to be careful with it: the
+      in-repo attestation exists precisely because "Essence" collides with Verano's "(the) Essence"
+      PRODUCT brand. Fold the Nevada DISPENSARY chain to GTI; never fold the product brand here.
+
+  Jushi Holdings:
+    source_type: sec_filing
+    source_ref: Jushi FY2025 Form 10-K
+    source_url: https://www.sec.gov/Archives/edgar/data/1909747/000162828026022436/jush-20251231.htm
+    quote: >-
+      (Not re-opened this pass — `rung/data/brand_parent.yml` records against this filing that
+      "'beyond hello' is Jushi's retail banner".)
+    confidence: reported
+    retrieved_at: 2026-08-01
+    banners: [Beyond Hello]
+
+  The Cannabist Company:
+    source_type: sec_filing
+    source_ref: The Cannabist Company (fka Columbia Care) FY2024 Form 10-K
+    source_url: https://www.sec.gov/Archives/edgar/data/1776738/000177673825000003/cbstf-20241231.htm
+    quote: >-
+      (Not re-opened this pass — the filing is the source `rung/data/brand_parent.yml` cites for the
+      Cannabist portfolio, which includes the gLeaf banner.)
+    confidence: reported
+    retrieved_at: 2026-08-01
+    banners: [Cannabist, gLeaf, Green Leaf Medical]
+
+  Cresco Labs:
+    source_type: website
+    source_ref: crescolabs.com brands page
+    source_url: https://www.crescolabs.com/brands/
+    quote: >-
+      (No quote. Round 24 examined this fold and reported it as the ONE unattested link in the set:
+      "only Cresco→Sunnyside* is unattested". Nothing has changed that.)
+    confidence: inferred
+    retrieved_at: 2026-08-01
+    banners: [Sunnyside]
+    notes: >-
+      Kept because excluding it would silently split Cresco's retail estate, but graded `inferred` so
+      that any result sensitive to this single row is visible as such. The fix is one reading of a
+      Cresco filing, not a re-grade.
+
+# Storefront names that are NOT corporate identities. A banner listed here resolves to NO key: the
+# operator behind it is unresolvable across states, so it is dropped from the MSO arithmetic and kept
+# in the store denominator. Calling one of these "an independent" would assert something we do not
+# know; calling it an MSO is the false merge that put 0.59 pp on the national figure.
+#
+# DELIBERATELY CONSERVATIVE, and the direction of the caution is the point. Round 24's skeptic ran a
+# candidate list of eleven; its finding was that SEVEN were "genuinely counted as MSOs". Which seven
+# was not recorded, and two of the eleven — `Greenlight` and `Nature's Medicines` — are real
+# multi-state operators (Nature's Medicines is an AYR retail banner), so the candidate list was not a
+# verdict. Listing a real chain here would DEFLATE the MSO share, which is an error in the direction
+# that flatters nothing; omitting a genuinely generic name leaves the old false merge in place, which
+# INFLATES it. Only the second error argues for our own thesis, so this list is confined to names
+# that are category words on their face — a test a reader can apply without our data — and the
+# remaining candidates (`Green Cross`, `Vibe`, `The Green Room`, `Herbal Remedies`) are deliberately
+# left OUT until somebody checks whether each is one chain or several.
+not_corporate_identities:
+  The Dispensary: A category word with an article. Names no particular company.
+  Dispensary: A category word, not a name.
+  Dispensary Near Me: A search phrase, not a company name.
+  Cannabis: A category word, not a name.
+  Top Shelf: A grade of flower, not a company name.

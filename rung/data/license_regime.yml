@@ -1,0 +1,447 @@
+# Retail cannabis LICENSE REGIME, coded from statute — one jurisdiction per entry.
+#
+# WHY THIS FILE EXISTS. D4 §3.4 claims that retail concentration "tracks the licensing regime", and
+# adversarial Round 24 (2026-07-31) found that no such variable existed anywhere in the repo: every
+# "limited-license" string was PROSE inside an analysis script, one of which interpolated the live
+# ranking into a sentence that then *called* the top states limited-license. The claim survived
+# adjudication only because the adjudicating skeptic hand-coded the regime inside the round, which is
+# not a reproducible instrument. The section may not carry a causal verb until the regime is coded
+# from statute and cited (`reports/adversarial_log.md` Round 24; `docs/analysis/license_regime.md`).
+#
+# THE OPERATIONAL DEFINITION, and it is the whole of the coding rule:
+#
+#   limited — the jurisdiction's own law imposes a NUMERICAL CAP on how many retail cannabis
+#             licences may exist (statewide, per region, per county, or per head of population),
+#             so that an applicant meeting every qualification may still be refused for want of an
+#             available licence. A cap the statute DIRECTS an agency to set counts (`regulatory_cap`);
+#             a cap on how many licences ONE PERSON may hold does not (that is a concentration rule,
+#             not an entry rule, and coding it as a cap would invert several states).
+#
+#   open    — no such numerical cap at the jurisdiction level. Two sufficient forms: the statute
+#             assigns the NUMBER to local government and sets none itself (`local_cap_only`), or it
+#             directs the agency to issue to every qualified applicant (`mandatory_issuance`).
+#
+#   unchecked — nobody has read the statute. NOT a third regime and NOT "open": an uncoded
+#             jurisdiction is EXCLUDED from every regime comparison, and `licensing.py` refuses to
+#             return a regime for it. Marking a row unchecked is the rule working; leaving a guess
+#             in the `regime` field is the failure this file exists to prevent.
+#
+# PROVENANCE. Every coded row carries `citation`, `quote` (verbatim, from the source actually
+# fetched), `source_url` and `retrieved_at`. `confidence` is the same grade the `attestations` table
+# uses: verified (a primary source states it) / reported (a regulator's own site, not the statute) /
+# inferred (derived by us). `scripts/load_license_regime.py` loads these into `attestations` so an
+# analysis can JOIN against them; this file is the reviewable half. See docs/provenance_design.md.
+#
+# A QUOTE IS THE UNIT OF EVIDENCE, NOT A CITATION. On 2026-07-14 a citation assembled from a search
+# snippet reached a merged draft. Every quote below was read out of the fetched document; where the
+# fetched document did not show the section number, `citation` says so instead of guessing one.
+#
+# THE CODING IS TIME-VARYING. A regime is true *of a date*. Delaware's schedule opens in 2025 and its
+# discretionary expansion in Aug 2025; Oklahoma's entry moratorium ran to Aug 2026. Re-verify before
+# citing, and never "correct" a coded row against a newer reading without dating both.
+
+jurisdictions:
+
+  # ---------------------------------------------------------------- limited (statutory numeric cap)
+
+  PA:
+    regime: limited
+    basis: statutory_cap
+    citation: 35 P.S. § 10231.616 (Medical Marijuana Act, Act 16 of 2016, § 616)
+    quote: >-
+      The department may not initially issue permits to more than 25 growers/processors. The
+      department may not initially issue permits to more than 50 dispensaries.
+    source_type: statute
+    source_url: https://codes.findlaw.com/pa/title-35-ps-health-and-safety/pa-st-sect-35-10231-616/
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      "Initially" is load-bearing and is why PA's storefront count exceeds 50: the cap binds the first
+      issuance, each dispensary permit carries up to three locations, and the Act provides for further
+      permits after a departmental review. The ENTRY restriction is what this field codes.
+
+  VA:
+    regime: limited
+    basis: statutory_cap
+    citation: Va. Code § 4.1-1602(B)
+    quote: >-
+      The number of permits that the Board may issue or renew in any year is limited to one permit in
+      each health service area established by the Board of Health, which shall govern the operations
+      of the pharmaceutical processor and up to five cannabis dispensing facilities in each health
+      service area established by the Board of Health.
+    source_type: statute
+    source_url: https://law.lis.virginia.gov/vacode/title4.1/chapter16/section4.1-1602/
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Five health service areas × five dispensing facilities = 25 storefronts, which is exactly the
+      Virginia store count our roster carries. The cap is not an abstraction here; it is the observed
+      denominator, and it is why VA's MSO share (96%) rests on 25 stores.
+
+  FL:
+    regime: limited
+    basis: statutory_cap
+    citation: Fla. Stat. § 381.986(8)(a)
+    quote: >-
+      The department shall license as medical marijuana treatment centers 10 applicants that meet the
+      requirements of this section. … Within 6 months after the registration of 100,000 active
+      qualified patients in the medical marijuana use registry, the department shall license four
+      additional medical marijuana treatment centers that meet the requirements of this section.
+    source_type: statute
+    source_url: https://www.flsenate.gov/Laws/Statutes/2024/381.986
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Florida caps LICENSEES, not storefronts — the per-MMTC dispensing-facility cap was repealed in
+      2020 — and each licensee is vertically integrated. That is the statutory reason Florida has zero
+      single-store operators (Round 24) while its MSO share reads only 41%: the non-MSO block is
+      chains of ten or more, not independents.
+
+  LA:
+    regime: limited
+    basis: statutory_cap
+    citation: La. R.S. 40:1046(G)(1)(a)
+    quote: >-
+      The department shall issue an annual retail permit to sell recommended marijuana for therapeutic
+      use and … shall limit the number of retail permits granted in the state to no more than ten.
+    source_type: statute
+    source_url: https://codes.findlaw.com/la/revised-statutes/la-rev-stat-tit-40-sect-1046.html
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Ten permits, allocated across the Department of Health's administrative regions (§ 1046(G)(2)).
+      Louisiana is the most concentrated US retail market we measure (HHI 4142) at 0% MSO share, which
+      Round 24's refuters offered as a counterexample to the regime thesis and the adjudicator read
+      the other way: a ten-permit market is concentrated BY STATUTE, whoever holds the permits.
+
+  WV:
+    regime: limited
+    basis: statutory_cap
+    citation: W. Va. Code § 16A-6-13 (Limitations on permits)
+    quote: >-
+      The bureau may not issue permits to more than 100 dispensaries. … The bureau may not issue more
+      than 10 individual dispensary permits to one person.
+    source_type: statute
+    source_url: http://code.wvlegislature.gov/16A-6-13/
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Both halves are quoted, but only the first codes this field. The 10-per-person limit is a
+      concentration rule; coding a per-holder limit as a cap is the error the definition rules out.
+
+  AZ:
+    regime: limited
+    basis: statutory_cap
+    citation: A.R.S. § 36-2804(C)
+    quote: >-
+      The department may not issue more than one nonprofit medical marijuana dispensary registration
+      certificate for every ten pharmacies that have registered under section 32-1929, have obtained a
+      pharmacy permit from the Arizona state board of pharmacy and operate within the state, except
+      that the department may issue nonprofit medical marijuana dispensary registration certificates
+      in excess of this limit if necessary to ensure that the department issues at least one nonprofit
+      medical marijuana dispensary registration certificate …
+    source_type: statute
+    source_url: https://www.azleg.gov/ars/36/02804.htm
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      A population-proxy cap (one certificate per ten pharmacies) with a county floor. The quote is
+      truncated at the fetched text's own break; the operative clause is complete.
+
+  NV:
+    regime: limited
+    basis: statutory_cap
+    citation: NRS 678B.220 (medical) and NRS 678B.260(1) (adult-use)
+    quote: >-
+      [678B.220] Shall not issue medical cannabis establishment licenses for medical cannabis
+      dispensaries in such a quantity as to cause the existence within the applicable county of more
+      than one medical cannabis dispensary for every 10 pharmacies that have been licensed in the
+      county pursuant to chapter 639 of NRS. … [678B.260(1)] the Board shall issue adult-use cannabis
+      establishment licenses for the operation of adult-use cannabis retail stores in the following
+      quantities for applicants who qualify pursuant to NRS 678B.250.
+    source_type: statute
+    source_url: https://www.leg.state.nv.us/nrs/nrs-678b.html
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Both programmes are quantity-scheduled per county. The adult-use quantities live in a table the
+      HTML fetch flattened, so the lead-in is quoted rather than the numbers.
+
+  MD:
+    regime: limited
+    basis: statutory_cap
+    citation: Md. Code, Alcoholic Beverages and Cannabis § 36-401(d)
+    quote: >-
+      (d) The Administration may not issue more than the following number of licenses per type,
+      including licenses converted under subsection (b)(1)(ii) of this section:
+    source_type: statute
+    source_url: https://mgaleg.maryland.gov/mgawebsite/Laws/StatuteText?article=gab&section=36-401&enactments=false
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Only the lead-in is quoted: the per-type numbers follow in an enumerated list that the fetched
+      HTML flattened into an unordered run, and transcribing a number out of a scrambled list is how a
+      wrong figure gets a citation attached to it. The lead-in alone establishes the cap.
+
+  IL:
+    regime: limited
+    basis: statutory_cap
+    citation: 410 ILCS 705/15-25(a), (c); 410 ILCS 705/15-35.10(a)
+    quote: >-
+      (a) The Department shall issue up to 75 Conditional Adult Use Dispensing Organization Licenses
+      before May 1, 2020. … (c) To ensure the geographic dispersion of Conditional Adult Use Dispensing
+      Organization License holders, the following number of licenses shall be awarded in each BLS
+      Region as determined by each region's percentage of the State's population. … [15-35.10(a)] the
+      Department shall issue up to 55 Conditional Adult Use Dispensing Organization Licenses by lot.
+    source_type: statute
+    source_url: https://www.ilga.gov/legislation/ilcs/fulltext.asp?DocName=041007050K15-25
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Capped AND regionally allocated, which is the strongest form of the regime variable: the number
+      and its geography are both set by statute.
+
+  WA:
+    regime: limited
+    basis: regulatory_cap
+    citation: RCW 69.50.345(2)(a)
+    quote: >-
+      (2)(a) Except as provided in RCW 69.50.335, determining, in consultation with the office of
+      financial management, the maximum number of retail outlets that may be licensed in each county,
+      taking into consideration: (i) Population distribution …
+    source_type: statute
+    source_url: https://app.leg.wa.gov/RCW/default.aspx?cite=69.50.345
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      The number is set by the Liquor and Cannabis Board, but the statute DIRECTS it to set a maximum,
+      which is the `regulatory_cap` form. Washington also bars out-of-state ownership, which is the
+      likelier explanation of its 0.0% MSO share than any concentration mechanism — a confound this
+      field does not capture and an analysis using it must not ignore.
+
+  ND:
+    regime: limited
+    basis: statutory_cap
+    citation: N.D.C.C. § 19-24.1-12(2)
+    quote: >-
+      Except as otherwise provided under this section, the department shall register no more than: a.
+      Two compassion centers with the sole purpose of operating as a manufacturing facility. b. Eight
+      compassion centers with the sole purpose of operating as a dispensary.
+    source_type: statute
+    source_url: https://ndlegis.gov/cencode/t19c24-1.pdf
+    retrieved_at: 2026-08-01
+    confidence: verified
+
+  DE:
+    regime: limited
+    basis: statutory_cap
+    citation: >-
+      Del. Code tit. 4, ch. 13, subch. III (Delaware Marijuana Control Act) — the conditional-licence
+      schedule. The fetched subchapter index does not show the section number beside this text, so
+      none is asserted here.
+    quote: >-
+      (e) Beginning March 1, 2025, the Commissioner shall issue the following number of conditional
+      licenses, provided a sufficient number of qualified applicants exist: (1) Retail store licenses:
+      a. Fifteen open licenses. b. Fifteen social equity licenses.
+    source_type: statute
+    source_url: https://delcode.delaware.gov/title4/c013/sc03/index.html
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      Thirty retail licences, with a discretionary expansion available to the Commissioner after
+      2025-08-01 ("may accept applications for any type of license and issue licenses in excess of the
+      numbers identified in this section"). Delaware is therefore capped-with-a-release-valve, and a
+      re-coding after the valve is used would be a genuine regime change rather than drift.
+
+  # ------------------------------------------------------------------------------------------ open
+
+  CA:
+    regime: open
+    basis: local_cap_only
+    citation: Cal. Bus. & Prof. Code § 26200(a)(1); § 26055(a)
+    quote: >-
+      [26200(a)(1)] this division shall not be interpreted to supersede or limit the authority of a
+      local jurisdiction to adopt and enforce local ordinances to regulate businesses licensed under
+      this division … or to completely prohibit the establishment or operation of one or more types of
+      businesses licensed under this division within the local jurisdiction. … [26055(a)] The
+      department may issue state licenses only to qualified applicants.
+    source_type: statute
+    source_url: https://california.public.law/codes/ca_bus_and_prof_code_section_26200
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      The state sets no number; localities may set any number including zero. California is the
+      largest market in the dataset (1,775 stores, 1,180 operators) and the clearest `open` case, and
+      the local-prohibition clause is why "open" must never be read as "unrestricted".
+
+  CO:
+    regime: open
+    basis: local_cap_only
+    citation: C.R.S. § 44-10-301(2)
+    quote: >-
+      The local jurisdiction shall determine whether the application complies with local restrictions
+      on time, place, manner, and the number of retail marijuana businesses.
+    source_type: statute
+    source_url: https://colorado.public.law/statutes/crs_44-10-301
+    retrieved_at: 2026-08-01
+    confidence: verified
+
+  MI:
+    regime: open
+    basis: local_cap_only
+    citation: MCL 333.27959
+    quote: >-
+      If a municipality limits the number of marihuana establishments that may be licensed in the
+      municipality pursuant to section 6 of this act and that limit prevents the department from
+      issuing a state license to all applicants who meet the requirements of subsection 3 of this
+      section, the municipality shall decide among competing applications by a competitive process
+      intended to select applicants who are best suited to operate in compliance with this act within
+      the municipality.
+    source_type: statute
+    source_url: https://www.legislature.mi.gov/Laws/MCL?objectName=MCL-333-27959
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      The clause presumes the department would otherwise license every qualified applicant, which is
+      the affirmative evidence of no state cap — stronger than the absence of cap language.
+
+  ME:
+    regime: open
+    basis: mandatory_issuance
+    citation: 28-B M.R.S. § 205(3)
+    quote: >-
+      Within 90 days of receipt of an application for a license to operate a cannabis establishment or
+      for renewal of an existing license to operate a cannabis establishment, the office either shall
+      issue to the applicant a conditional license to operate the cannabis establishment if the
+      applicant meets all applicable requirements for licensure under this chapter and the rules
+      adopted pursuant to this chapter or shall deny the application in accordance with section 206.
+    source_type: statute
+    source_url: https://legislature.maine.gov/statutes/28-B/title28-Bsec205.html
+    retrieved_at: 2026-08-01
+    confidence: verified
+
+  MN:
+    regime: open
+    basis: local_cap_only
+    citation: Minn. Stat. § 342.13(h)
+    quote: >-
+      (h) A local government unit that issues a cannabis retailer registration under section 342.22
+      may, by ordinance, limit the number of licensed cannabis retailers, cannabis mezzobusinesses
+      with a retail operations endorsement, and cannabis microbusinesses with a retail operations
+      endorsement to no fewer than one registration for every 12,500 residents.
+    source_type: statute
+    source_url: https://www.revisor.mn.gov/statutes/cite/342.13
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      The state sets a FLOOR under local caps rather than a ceiling on licences — the opposite
+      instrument from a cap, and a useful check on the coding rule: a rule that forces a minimum
+      density is not a numerical cap.
+
+  MT:
+    regime: open
+    basis: local_cap_only
+    citation: MCA 16-12-301(1)(a)
+    quote: >-
+      Except as provided in subsection (1)(b), a marijuana business may not operate in a county in
+      which the majority of voters voted against approval of Initiative Measure No. 190 in the
+      November 3, 2020, general election until: (i) the category or categories of license that the
+      marijuana business seeks has or have been approved by the local jurisdiction where the marijuana
+      business intends to operate …
+    source_type: statute
+    source_url: https://archive.legmt.gov/bills/mca/title_0160/chapter_0120/part_0030/section_0010/0160-0120-0030-0010.html
+    retrieved_at: 2026-08-01
+    confidence: verified
+    notes: >-
+      County opt-in, no state numerical cap; MCA 16-12-201, -202 and -203 were read and carry none.
+
+  SD:
+    regime: open
+    basis: local_cap_only
+    citation: SDCL 34-20G-56
+    quote: >-
+      If the governing body of a county has enacted a numerical limit on the number of medical
+      cannabis establishments in the county and a greater number of applicants seek registration, the
+      department shall solicit and consider input from the county as to its preference for
+      registration.
+    source_type: statute
+    source_url: https://sdlegislature.gov/api/Statutes/34-20G-56.html
+    retrieved_at: 2026-08-01
+    confidence: verified
+
+  NJ:
+    regime: open
+    basis: no_statewide_cap
+    citation: New Jersey Cannabis Regulatory Commission, "Businesses" licensing page
+    quote: There is no established limit on the number of cannabis business licenses available statewide.
+    source_type: regulator
+    source_url: https://www.nj.gov/cannabis/businesses/
+    retrieved_at: 2026-08-01
+    confidence: reported
+    notes: >-
+      Graded `reported`, not `verified`: this is the regulator's own statement, not the statute. The
+      statutory cultivator cap (N.J.S.A. 24:6I-*) expired in February 2023 and never bound retail, but
+      that was NOT read for this row. Upgrade the grade by reading the statute, not by re-reading the
+      agency page.
+
+  OK:
+    regime: open
+    basis: no_statewide_cap
+    citation: 63 O.S. § 427.14(A)(8)
+    quote: >-
+      There shall be no limit to the number of medical marijuana business licenses or categories that
+      an individual or entity can apply for or receive, although each application and each category
+      shall require a separate application and application fee.
+    source_type: statute
+    source_url: https://oksenate.gov/sites/default/files/2019-12/os63.pdf
+    retrieved_at: 2026-08-01
+    confidence: inferred
+    notes: >-
+      Graded `inferred` and the reason matters: the quoted clause forbids a PER-APPLICANT limit, which
+      under this file's own definition does not by itself establish the absence of a statewide cap.
+      Oklahoma is coded open on the combination of that clause with the absence of any cap in the
+      chapter, and the compilation read is the 2019-12 edition — five years stale. Two facts a
+      consumer must carry: OMMA states "A moratorium began Aug. 26, 2022, for new dispensary, grower
+      and processor licenses", put in place by HB 3208 (2022) and extended by HB 2095 (2023) to
+      2026-08-01 (https://oklahoma.gov/omma/businesses/commercial-licenses/dispensary-license.html,
+      retrieved 2026-08-01). So for most of the window our menu data covers, the most `open` market in
+      the dataset (1,979 stores, 1,598 operators, HHI 12) was CLOSED to new entrants. The regime field
+      codes the standing rule; the moratorium is an entry FREEZE on top of it, and an analysis that
+      treats Oklahoma as a live open market during 2022-2026 is wrong for a reason nothing else in
+      this file records.
+
+  # -------------------------------------------------------------------------------------- unchecked
+  #
+  # Twenty jurisdictions in the analysis frame. Nobody has read their statutes, so they carry NO
+  # regime. They are listed rather than omitted so that the gap is a visible row instead of a silent
+  # absence, and so a future pass has a worklist. `licensing.py` returns None for each, every regime
+  # comparison excludes them, and `docs/analysis/license_regime.md` reports the resulting coverage.
+  #
+  # Sources tried and why they failed (so the next pass does not repeat the work): capitol.hawaii.gov
+  # and law.justia.com return Cloudflare/403 to this sandbox; le.utah.gov (xcode), cga.ct.gov,
+  # legislature.vermont.gov, malegislature.gov and sdlegislature.gov render their statute text in
+  # JavaScript, so a plain fetch yields the page shell. NY's Cannabis Law § 72 WAS read and carries no
+  # statewide cap — only a three-licence-per-person interest limit — but the Office of Cannabis
+  # Management's regulations were not read, and under this file's definition a regulatory cap counts,
+  # so NY stays unchecked rather than being coded open on a partial reading.
+
+  AK:   {regime: unchecked, notes: "3 AAC 306 not read."}
+  AL:   {regime: unchecked, notes: "Ala. Code § 20-2A-* not read."}
+  AR:   {regime: unchecked, notes: "Ark. Const. amend. 98 § 8 not read; the fetch returned Act 593 (employee protections) instead."}
+  CT:   {regime: unchecked, notes: "Conn. Gen. Stat. ch. 420f/420h not read; cga.ct.gov is JavaScript-rendered."}
+  DC:   {regime: unchecked, notes: "D.C. Code § 7-1671.06 WAS fetched: it carries a three-licence-per-licensee limit and a permissive 'the ABC Board may, by rulemaking, limit the number' — neither of which is a cap under this file's definition. Whether the Board has exercised that power was not checked."}
+  GA:   {regime: unchecked, notes: "O.C.G.A. § 16-12-206 not read."}
+  HI:   {regime: unchecked, notes: "HRS § 329D-2 not read; capitol.hawaii.gov returns a Cloudflare block."}
+  IA:   {regime: unchecked, notes: "Iowa Code § 124E.9 not read."}
+  KY:   {regime: unchecked, notes: "KRS ch. 218B fetched but the licence-number provision was not located."}
+  MA:   {regime: unchecked, notes: "G.L. c. 94G § 5 not read; malegislature.gov is JavaScript-rendered."}
+  MO:   {regime: unchecked, notes: "Mo. Const. art. XIV § 2 fetched as a page shell; the per-congressional-district minimum was not read."}
+  MS:   {regime: unchecked, notes: "Miss. Code § 41-137-* not read."}
+  NM:   {regime: unchecked, notes: "NMSA § 26-2C-* not read; nmonesource.com returned an index stub."}
+  NY:   {regime: unchecked, notes: "N.Y. Cannabis Law § 72 read — no statewide cap, only a three-licence interest limit — but OCM regulations were not read. Coding open on the statute alone would ignore the regulatory-cap form this file counts."}
+  OH:   {regime: unchecked, notes: "R.C. 3796.03/.04 and 3780.11 fetched; no licence-number provision located. Ohio's medical dispensary cap is set by administrative rule, which was not read."}
+  OR:   {regime: unchecked, notes: "ORS 475C.065/.077/.097 read and carry no retail cap, but Oregon has repeatedly paused licence issuance by session law and that was not checked."}
+  PR:   {regime: unchecked, notes: "Reglamento 9038 not read."}
+  RI:   {regime: unchecked, notes: "R.I. Gen. Laws § 21-28.11-10 fetched as a navigation shell."}
+  UT:   {regime: unchecked, notes: "Utah Code § 4-41a-1005 not read; le.utah.gov xcode is JavaScript-rendered."}
+  VT:   {regime: unchecked, notes: "7 V.S.A. ch. 33 not read; legislature.vermont.gov is JavaScript-rendered."}

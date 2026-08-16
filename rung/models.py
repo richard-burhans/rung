@@ -132,6 +132,13 @@ class StoreProductRecord:
     # per-terpene ceiling dropped. A repaired row's numbers are our corrections, not the platform's
     # published profile — and they feed D1's ICC/variance flagship. See `normalize.terpenes_repaired`.
     terpenes_repaired: bool | None = None
+    # True when `thc` is not a plausible total-THC label for `category_std` (Flower below 5% with no
+    # CBD to explain it). The value is LEFT AS PUBLISHED — this only qualifies it. The upstream feed
+    # really does flip a decimal (a SweedPOS flower alternating 30.692 / 3.0692 across scrapes,
+    # verified live 2026-08-01), so the reading is what the shopper saw; but it is
+    # byte-indistinguishable downstream from a real one, and the potency-distribution and
+    # listing-repeatability work must be able to exclude it. See `normalize.potency_implausible`.
+    potency_implausible: bool | None = None
     # Minor cannabinoids beyond the thc/cbd headline, as a canonical {NAME: percent} map
     # (e.g. {"CBG": 0.37, "CBN": 0.1, "CBC": 0.2}); percent-only, only the entries a platform
     # publishes. Captured where the menu exposes per-cannabinoid values (Jane lab_results,

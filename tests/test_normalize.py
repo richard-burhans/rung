@@ -6,6 +6,7 @@ from rung.normalize import (
     enrich_variants,
     grams_to_label,
     normalize_terpenes,
+    potency_implausible,
     size_to_grams,
     terpenes_repaired,
 )
@@ -215,6 +216,48 @@ def test_enrich_record_stamps_terpenes_repaired():
     enrich_record(record)
     assert record.terpenes_std == {"Caryophyllene": 0.22}
     assert record.terpenes_repaired is True
+
+
+def test_potency_implausible_flags_the_upstream_decimal_shift():
+    # The live fixtures, read off the SweedPOS/Curaleaf PA feed on 2026-08-01 (store LMR084). Each is
+    # the LOW half of a listing that also published the same digits one decimal place up.
+    assert potency_implausible("Flower", 3.0692, 0.0) is True      # `Orange Z`, also seen at 30.692
+    assert potency_implausible("Flower", 0.55, 0.012) is True      # `Cherry AK`
+    assert potency_implausible("Flower", 0.262, 0.078) is True     # `THC Burst`
+    # The normal reading of the very same listings must NOT be flagged.
+    assert potency_implausible("Flower", 30.692, 0.0) is False
+    assert potency_implausible("Flower", 26.18, None) is False     # corpus median flower
+    # A genuinely CBD-dominant flower legitimately carries a low THC — 968 real rows. Not a flag.
+    assert potency_implausible("Flower", 0.4, 14.2) is False
+    assert potency_implausible("Flower", 1.0, 1.0) is False        # exactly at the CBD-dominant floor
+    # Only categories with a measured floor. The mg-dosed ones have no meaningful percent, which is
+    # why 135,848 edible rows sit below the flower floor without being wrong.
+    assert potency_implausible("Edible", 0.5, None) is False
+    assert potency_implausible("Concentrate", 3.0, None) is False
+    assert potency_implausible(None, 1.0, None) is False
+    # Nothing to qualify: no reading, or a sentinel the reroute already nulled.
+    assert potency_implausible("Flower", None, None) is False
+    assert potency_implausible("Flower", 0, None) is False
+    assert potency_implausible("Flower", True, None) is False      # bool is not a potency
+
+
+def test_enrich_record_stamps_potency_implausible_without_touching_the_value():
+    # The flag rides along at the same choke point as terpenes_repaired — and the published number is
+    # left exactly as the platform sent it. Repairing it would store OUR inference as their observation.
+    record = StoreProductRecord(
+        company_id=1, state="PA", store_key="sweedpos:LMR084", platform="sweedpos",
+        external_id="LMR084", source="src", category_std="Flower", thc=3.0692, cbd=0.0,
+    )
+    enrich_record(record)
+    assert record.potency_implausible is True
+    assert record.thc == 3.0692
+
+    clean = StoreProductRecord(
+        company_id=1, state="PA", store_key="sweedpos:LMR084", platform="sweedpos",
+        external_id="LMR084", source="src", category_std="Flower", thc=30.692, cbd=0.0,
+    )
+    enrich_record(clean)
+    assert clean.potency_implausible is False
 
 
 def test_enrich_variants_stamps_size_and_price_per_gram():

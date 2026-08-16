@@ -7,7 +7,6 @@ data file — instead of a dict hard-coded in an analysis script — is what let
 brand-mapping task expand it in one place and have every consumer pick it up.
 """
 
-from __future__ import annotations
 
 import functools
 import re
