@@ -29,8 +29,10 @@ commits on its own dedicated connection.
 """
 
 import asyncio
+import contextlib
 import os
 import socket
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import LiteralString
@@ -299,17 +301,43 @@ async def heartbeat_forever(
     corrupt its transaction. ``interval_s`` defaults to a third of the 30-minute lease so a
     single missed tick still leaves the lease live. Runners launch this as a task and cancel
     it in a ``finally``; on ``CancelledError`` it closes the connection and returns.
+
+    **A transient DB error must not kill the keep-alive.** The runner's ``finally`` suppresses a
+    dead task's exception, so a single failed bump (a Postgres restart, a dropped connection)
+    would otherwise end the heartbeats SILENTLY — leases lapse, the reaper re-queues a live
+    worker's jobs, and a second worker re-scrapes the same targets. Each failure is reported to
+    stderr (the queue has no user-facing output of its own; stderr keeps the diagnostic out of
+    piped stdout), the dedicated connection is reopened, and the next bump waits a full
+    ``interval_s`` — no hot spin, and a permanent failure keeps announcing itself every interval.
     """
     conn = conn_factory()
     try:
         while True:
-            bump_worker_heartbeat(conn, worker, lease_minutes=lease_minutes)
-            conn.commit()
+            try:
+                bump_worker_heartbeat(conn, worker, lease_minutes=lease_minutes)
+                conn.commit()
+            except Exception as exc:  # transient DB failure — log, reconnect, retry next tick
+                print(
+                    f"queue: heartbeat bump failed for worker {worker!r} "
+                    f"({type(exc).__name__}: {exc}) — retrying in {interval_s}s",
+                    file=sys.stderr,
+                )
+                with contextlib.suppress(Exception):
+                    conn.close()
+                try:
+                    conn = conn_factory()
+                except Exception as exc2:
+                    print(
+                        f"queue: heartbeat reconnect failed for worker {worker!r} "
+                        f"({type(exc2).__name__}: {exc2}) — retrying in {interval_s}s",
+                        file=sys.stderr,
+                    )
             await asyncio.sleep(interval_s)
     except asyncio.CancelledError:
         return
     finally:
-        conn.close()
+        with contextlib.suppress(Exception):
+            conn.close()
 
 
 def complete(

@@ -422,6 +422,49 @@ def test_heartbeat_forever_bumps_the_lease_then_stops_cleanly_on_cancel() -> Non
     assert extended == (True,)
 
 
+def test_heartbeat_forever_survives_a_transient_bump_failure(capsys) -> None:
+    """One transient DB error must not kill the keep-alive task. It used to: only CancelledError
+    was caught, the runner's `finally` suppressed the dead task's exception, and the worker ran on
+    with no heartbeats — leases lapsed and the reaper handed its live jobs to a second worker. A
+    failed bump is now reported, the dedicated connection reopened, and bumping resumes."""
+    conn = _conn()
+    queue.enqueue(conn, "t", "k")
+    conn.commit()
+    job = queue.claim_next(conn, "t", "w1", lease_minutes=1)
+    assert job is not None
+
+    made: list[db.DBConn] = []
+
+    def _factory() -> db.DBConn:
+        row = conn.execute("SELECT current_schema()").fetchone()
+        assert row is not None
+        other = psycopg.connect(conftest._TEST_URL)
+        other.execute(f"SET search_path TO {row[0]}")
+        other.commit()
+        if not made:
+            other.close()  # the FIRST dedicated connection is dead on arrival → the bump raises
+        made.append(other)
+        return other
+
+    async def run() -> None:
+        hb = asyncio.create_task(queue.heartbeat_forever(
+            "w1", interval_s=0.05, lease_minutes=30, conn_factory=_factory,
+        ))
+        await asyncio.sleep(0.3)  # failed first bump + reconnect + at least one good bump
+        hb.cancel()
+        assert await hb is None  # still the clean cancel path
+
+    asyncio.run(run())
+    extended = conn.execute(
+        "SELECT lease_until > now() + make_interval(mins => 20) FROM jobs WHERE id = %s",
+        (job.id,),
+    ).fetchone()
+    assert extended == (True,)  # the keep-alive outlived the failure and kept bumping
+    err = capsys.readouterr().err
+    assert "heartbeat bump failed" in err  # the failure was reported, not swallowed
+    assert len(made) == 2  # the dead connection was replaced exactly once
+
+
 def test_reap_jobs_cmd_requeues_lease_expired_across_task_types(monkeypatch) -> None:
     from click.testing import CliRunner
 
