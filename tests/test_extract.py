@@ -72,6 +72,51 @@ def test_arcgis_single_page_stops_immediately():
     records = asyncio.run(_query_arcgis_layer("https://x/FeatureServer/0", session))
     assert len(records) == 10 and session.offsets == [0]   # short page → one request
 
+
+class _FakeClampedArcgisSession:
+    """A server whose layer maxRecordCount (1000) is BELOW our requested page size: every page is
+    short of the request yet flagged exceededTransferLimit — the real-world shape that silently
+    truncated a >1000-row roster when "short page" was read as "last page"."""
+
+    MAX = 1000
+
+    def __init__(self, total):
+        self.total = total
+        self.offsets = []
+
+    async def get(self, url, timeout=None):
+        offset = int(_re.search(r"resultOffset=(\d+)", url).group(1))
+        self.offsets.append(offset)
+        served = min(self.MAX, max(0, self.total - offset))
+        rows = [{"attributes": {"name": f"Store {i}"}} for i in range(offset, offset + served)]
+        return _FakeArcgisResp(
+            {"features": rows, "exceededTransferLimit": offset + served < self.total}
+        )
+
+
+def test_arcgis_pages_past_a_server_clamped_below_the_requested_size():
+    session = _FakeClampedArcgisSession(1500)  # maxRecordCount=1000 < the 2000 we ask for
+    records = asyncio.run(_query_arcgis_layer("https://x/FeatureServer/0", session))
+    assert len(records) == 1500                  # NOT truncated to the first clamped page
+    assert session.offsets == [0, 1000]          # offset advances by what actually ARRIVED
+
+
+class _FakeStuckFlagArcgisSession:
+    """A broken server: zero features but exceededTransferLimit stuck true."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def get(self, url, timeout=None):
+        self.calls += 1
+        return _FakeArcgisResp({"features": [], "exceededTransferLimit": True})
+
+
+def test_arcgis_empty_page_with_the_more_flag_stuck_terminates():
+    session = _FakeStuckFlagArcgisSession()
+    records = asyncio.run(_query_arcgis_layer("https://x/FeatureServer/0", session))
+    assert records == [] and session.calls == 1  # stop, don't loop on offset 0 forever
+
 # An en dash, as the state sites actually use to pack "NAME – ADDRESS" cells.
 DASH = "–"
 

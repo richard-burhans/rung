@@ -666,11 +666,15 @@ _ARCGIS_SERVICE_RE = re.compile(r"/(?:Feature|Map)Server(?:/\d+)?/?$", re.IGNORE
 
 
 # ArcGIS feature services cap a single response (the layer's maxRecordCount, often 1000-2000),
-# so a layer with more rows MUST be paged with resultOffset or it silently truncates. We page
-# until a short page or the server stops flagging exceededTransferLimit; the page cap is a
-# runaway guard for a server that ignores resultOffset (it would otherwise re-serve page 0).
+# so a layer with more rows MUST be paged with resultOffset or it silently truncates. The
+# server's exceededTransferLimit flag is the ONLY reliable end-of-data signal: a layer whose
+# maxRecordCount is BELOW our requested page size returns a short-but-not-final page with the
+# flag set, so "short page" alone would silently truncate it (a 1000-row clamp served exactly
+# that way). We page while the flag is set, advancing resultOffset by what actually arrived;
+# the page cap is a runaway guard for a server that ignores resultOffset (it would otherwise
+# re-serve page 0 forever).
 _ARCGIS_PAGE_SIZE = 2000
-_ARCGIS_PAGE_CAP = 25  # ≤50k features — far above any state's dispensary roster
+_ARCGIS_PAGE_CAP = 25  # ≥25k features even under a 1000-row clamp — far above any state's roster
 
 
 def _arcgis_float(attrs: dict, *names: str) -> float | None:
@@ -732,21 +736,25 @@ async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]
     if not re.search(r"/\d+$", base):
         base = f"{base}/0"
     records: list[DispensaryRecord] = []
+    offset = 0
     for page in range(_ARCGIS_PAGE_CAP):
         try:
             q = (
                 f"{base}/query?where={quote(where)}&outFields=*&f=json"
                 f"&resultRecordCount={_ARCGIS_PAGE_SIZE}"
-                f"&resultOffset={page * _ARCGIS_PAGE_SIZE}&returnGeometry=false"
+                f"&resultOffset={offset}&returnGeometry=false"
             )
             payload = (await session.get(q, timeout=30)).json()
         except Exception:
             break
         features = payload.get("features") or []
         records.extend(rec for feat in features if (rec := _arcgis_record(feat)) is not None)
-        # A short page is the end; otherwise keep going only while the server flags more.
-        if len(features) < _ARCGIS_PAGE_SIZE or not payload.get("exceededTransferLimit"):
+        # The server's flag — not our requested page size — says whether more rows remain: a
+        # server clamped below _ARCGIS_PAGE_SIZE serves short-but-not-final pages. An empty page
+        # with the flag still set is a broken server; stop rather than loop on offset 0 forever.
+        if not features or not payload.get("exceededTransferLimit"):
             break
+        offset += len(features)
         if page == _ARCGIS_PAGE_CAP - 1:
             print(f"  arcgis: hit page cap ({_ARCGIS_PAGE_CAP}) — layer may be truncated")
     return records
