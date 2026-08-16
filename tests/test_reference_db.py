@@ -1,7 +1,7 @@
 import pytest
 from conftest import pg_conn
 
-from rung import reference_db
+from rung import normalize, reference_db
 
 
 def test_natural_flower_guard_columns_exist_on_every_table_it_is_aliased_onto() -> None:
@@ -199,3 +199,43 @@ def test_potency_headline_scripts_apply_the_leafly_guard() -> None:
         "upstream, supplies 60% of the impossible tail, and is DIFFERENTIAL BY STATE — unguarded, these "
         "report a platform's mix as a jurisdiction's culture:\n  " + "\n  ".join(missing)
     )
+
+
+def test_plausible_potency_sql_and_python_agree_row_for_row() -> None:
+    """The two spellings of the implausible-potency rule must not drift.
+
+    `product_observations` carries `thc`/`cbd` but no `category_std` and no `potency_implausible`
+    column, so the append-only history cannot use the flag at all — it has to recompute the rule in
+    SQL (`plausible_potency_expr`). That is exactly the shape that went wrong for the natural-flower
+    guard: a second copy of a predicate, drifting from the canonical one. String-matching the two
+    would not catch a logic change, so this asserts they agree ROW FOR ROW over the boundary grid.
+    """
+    grid = [
+        ("Flower", 3.0692, 0.0), ("Flower", 0.55, 0.012), ("Flower", 0.262, 0.078),
+        ("Flower", 30.692, 0.0), ("Flower", 26.18, None), ("Flower", 0.4, 14.2),
+        ("Flower", 1.0, 1.0), ("Flower", 4.999, 0.999), ("Flower", 5.0, 0.0),
+        ("Flower", None, None), ("Flower", 0.0, None), ("Flower", 2.0, None),
+        ("Edible", 0.5, None), ("Concentrate", 3.0, None), (None, 1.0, None),
+    ]
+    conn = pg_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "CREATE TEMP TABLE potency_grid "
+            "(category_std TEXT, thc DOUBLE PRECISION, cbd DOUBLE PRECISION)"
+        )
+        cur.executemany("INSERT INTO potency_grid VALUES (%s,%s,%s)", grid)
+        # The expr is the KEEP predicate over the same column names the real queries use.
+        cur.execute(
+            "SELECT category_std, thc, cbd, "
+            + reference_db.plausible_potency_expr("category_std", "thc", "cbd")
+            + " AS kept FROM potency_grid"
+        )
+        rows = cur.fetchall()
+
+    assert len(rows) == len(grid)
+    for category_std, thc, cbd, kept in rows:
+        flagged = normalize.potency_implausible(category_std, thc, cbd)
+        assert kept is not None, f"SQL predicate returned NULL for {(category_std, thc, cbd)}"
+        assert kept != flagged, (
+            f"SQL keeps={kept} but Python flags={flagged} for {(category_std, thc, cbd)}"
+        )

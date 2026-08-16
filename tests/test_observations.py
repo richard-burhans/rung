@@ -129,3 +129,43 @@ def test_record_observations_daily_heartbeat_when_unchanged() -> None:
     # identical values but a NEW day → one presence heartbeat row
     assert db.record_observations(conn, "dutchie:s1", [_flower()], now=_DAY2) == 1
     assert _obs_count(conn) == 2
+
+
+def test_record_observations_same_day_dedupe_is_utc_on_a_non_utc_server() -> None:
+    """The dedupe used to compare `scraped_at::date` — cast in the SESSION TimeZone — against
+    Python's UTC `observed_at.date()`, so on a non-UTC server the two disagreed for part of every
+    day and each unchanged product gained a duplicate same-day heartbeat row. Both sides of the
+    comparison are pinned to UTC now."""
+    conn = _conn()
+    conn.execute("SET TimeZone = 'America/New_York'")  # a non-UTC server session
+    # 01:00 UTC is 21:00 the PREVIOUS day in New York — inside the disagreement window.
+    early = datetime.datetime(2026, 6, 25, 1, 0, tzinfo=datetime.UTC)
+    assert db.record_observations(conn, "dutchie:s1", [_flower()], now=early) == 1
+    conn.commit()
+    assert db.record_observations(conn, "dutchie:s1", [_flower()], now=early) == 0  # no duplicate
+    assert _obs_count(conn) == 1
+
+
+def test_record_observations_batched_write_keeps_the_per_row_post_state() -> None:
+    """The identity upsert is ONE unnest() statement and the appends ONE batch now; this pins the
+    post-state the per-row path produced: distinct identities per fingerprint, `first_seen` kept
+    and `last_seen` bumped on re-sight, and per-product change detection intact within a batch."""
+    conn = _conn()
+    batch = [
+        _flower(),
+        _flower(name="OG Kush", thc=30.0),
+        _flower(name="Camino", brand="Kiva", size_g=None, thc_mg=10.0,
+                category_std="Edible", product_type_std="Gummies"),
+    ]
+    assert db.record_observations(conn, "dutchie:s1", batch, now=_DAY1) == 3
+    conn.commit()  # a later transaction, so the re-sight's now() differs
+    before = conn.execute("SELECT first_seen, last_seen FROM products ORDER BY id").fetchall()
+    assert len(before) == 3
+    # Re-sight with ONE change: still 3 identities; the changed row appends, the unchanged skip.
+    batch[1] = _flower(name="OG Kush", thc=31.0)
+    assert db.record_observations(conn, "dutchie:s1", batch, now=_DAY1) == 1
+    assert conn.execute("SELECT count(*) FROM products").fetchone()[0] == 3
+    after = conn.execute("SELECT first_seen, last_seen FROM products ORDER BY id").fetchall()
+    assert [row[0] for row in after] == [row[0] for row in before]  # first_seen kept
+    assert all(b[1] > a[1] for a, b in zip(before, after, strict=True))  # last_seen bumped on re-sight
+    assert _obs_count(conn) == 4
