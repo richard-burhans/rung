@@ -21,11 +21,11 @@ Leak-safe by construction: it takes a file path, never a credential — a publis
 ``RUNG_DATA_SOURCE=static`` carries no ``DATABASE_URL``.
 """
 
-from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 # DuckDB expression the products_normalized view derives (mirrors reference_db, DuckDB-dialect).
 _CURRENCY = "CASE WHEN prog.country = 'CA' THEN 'CAD' ELSE 'USD' END"
@@ -44,30 +44,65 @@ SELECT sp.id, sp.company_id, sp.state, sp.store_key, sp.platform, sp.source,
             THEN round((sp.price / sp.size_g)::double, 2) END AS price_per_g,
        sp.thc, sp.cbd, sp.thc_mg, sp.cbd_mg, sp.terp_total, sp.terpenes_std, sp.scraped_at,
        sp.product_type_std AS product_type, sp.cannabinoids_std, {_CURRENCY} AS currency,
-       sp.obtention_std
+       sp.obtention_std, sp.potency_implausible
 FROM store_products sp
 LEFT JOIN state_programs prog ON prog.abbr = sp.state
 """
 
 
 class _Cursor:
-    """A psycopg-cursor-shaped view over a DuckDB result: iterable, fetchone/fetchall, description, close."""
+    """A psycopg-cursor-shaped view over a DuckDB result: iterable, fetchone/fetchall, description, close.
+
+    Fetching CONSUMES rows, exactly as psycopg's cursor does: ``fetchone`` advances and returns None
+    when exhausted (so the standard ``while (row := cur.fetchone()) is not None`` drain terminates),
+    ``fetchall`` returns only what has not been fetched yet, and iteration shares the same position.
+    """
 
     def __init__(self, rows: list[tuple], description: list[Any]) -> None:
         self._rows = rows
+        self._pos = 0
         self.description = description
 
     def __iter__(self):
-        return iter(self._rows)
+        while (row := self.fetchone()) is not None:
+            yield row
 
     def fetchone(self):
-        return self._rows[0] if self._rows else None
+        if self._pos >= len(self._rows):
+            return None
+        row = self._rows[self._pos]
+        self._pos += 1
+        return row
 
     def fetchall(self) -> list[tuple]:
-        return self._rows
+        remaining = self._rows[self._pos:]
+        self._pos = len(self._rows)
+        return remaining
 
     def close(self) -> None:
         self._rows = []
+        self._pos = 0
+
+
+# Columns the live `store_products` schema carries that a previously-frozen Parquet vintage may not.
+# Add a column here when you add it to the DDL, or a static-mode script dies in the DuckDB binder
+# against every dataset built before it. `tests/test_static_source.py` pins the behaviour against a
+# deliberately pre-column fixture.
+#
+# All three below are genuinely absent from the `clean_d1/v3` vintage of **2026-07-17** (29 columns) —
+# verified, not assumed: before this map existed, `SELECT terpenes_repaired FROM store_products` against
+# that parquet raised `BinderException`. They ARE present in the 2026-08-03 vintage (32 columns), where
+# this back-fill is simply a no-op, so the map stays correct for both. Name the vintage, not just the
+# posture: a cut is identified by (posture, date) and the older is not reproducible.
+# A frozen vintage is deliberately never rebuilt in place, because rebuilding moves numbers a published
+# paper already quotes, so the reader has to absorb the gap. NULL is also the honest value: the vintage
+# predates the check, so the row was never assessed, which is why
+# `reference_db.plausible_potency_where` tests `IS NOT TRUE` rather than `= FALSE`.
+_COLUMNS_ADDED_AFTER_FREEZE: dict[str, str] = {
+    "category_overridden": "BOOLEAN",
+    "terpenes_repaired": "BOOLEAN",
+    "potency_implausible": "BOOLEAN",
+}
 
 
 class StaticConnection:
@@ -96,7 +131,24 @@ class StaticConnection:
                    WHEN x >= hi THEN n + 1
                    ELSE floor(n * (x - lo) / (hi - lo)) + 1 END
         """)
-        self._con.execute(f"CREATE VIEW store_products AS SELECT * FROM read_parquet('{sp}')")
+        # A FROZEN VINTAGE PREDATES ANY COLUMN ADDED AFTER IT, and it is frozen on purpose — the D1
+        # dataset is the published replication path, so rebuilding it to pick up a new column would
+        # change the numbers a paper already quotes. Back-fill anything the live schema has and this
+        # parquet does not as a typed NULL, so an older vintage still OPENS instead of dying in the
+        # binder. (v3 has 29 columns and no `potency_implausible`; without this, adding that column to
+        # the view below broke every static-mode script against it.) A NULL flag is also the honest
+        # value: the vintage was written before the check existed, so the row was never assessed —
+        # which is why `plausible_potency_where` tests `IS NOT TRUE` rather than `= FALSE`.
+        self._con.execute(f"CREATE VIEW _sp_raw AS SELECT * FROM read_parquet('{sp}')")
+        present = {row[0] for row in self._con.execute("DESCRIBE _sp_raw").fetchall()}
+        backfilled = ", ".join(
+            f"NULL::{sql_type} AS {column}"
+            for column, sql_type in _COLUMNS_ADDED_AFTER_FREEZE.items()
+            if column not in present
+        )
+        self._con.execute(
+            f"CREATE VIEW store_products AS SELECT *{', ' + backfilled if backfilled else ''} FROM _sp_raw"
+        )
         if prog.exists():
             self._con.execute(f"CREATE VIEW state_programs AS SELECT * FROM read_parquet('{prog}')")
         # the products_normalized view the scripts (and _scope currency) may read
@@ -126,7 +178,7 @@ class StaticConnection:
     def close(self) -> None:
         self._con.close()
 
-    def __enter__(self) -> StaticConnection:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -137,9 +189,37 @@ def is_static() -> bool:
     return os.environ.get("RUNG_DATA_SOURCE", "").lower() == "static"
 
 
+#: Announce the swap ONCE per process, not once per connection — a script that opens ten connections
+#: should say this once, and a banner nobody can read past is a banner people learn to ignore.
+_ANNOUNCED = False
+
+
 def connect() -> StaticConnection:
-    """Open the static source at ``RUNG_STATIC_PATH`` (a build_clean_d1 export directory)."""
+    """Open the static source at ``RUNG_STATIC_PATH`` (a build_clean_d1 export directory).
+
+    **AND SAY SO ON STDERR.** This function silently substitutes a frozen file for the live database,
+    which is exactly what it is for — and exactly why it must be audible. `RUNG_DATA_SOURCE=static` is
+    an ambient variable: this sandbox exported it globally from `/etc/sandbox-persistent.sh`, sourced
+    before every command AND by `/etc/profile.d` for login shells, so **every** analysis in it read the
+    2026-08-03 deposit while believing it was on live data. Adversarial round 39 found it — an
+    adjudicator noticed that any agent who did not `unset` it "queried the DEPOSIT while believing it
+    was live" — and the round's own live figures were sound only because they happened to go through
+    `psycopg` directly rather than this seam.
+
+    Removing the variable from that one file fixes that one sandbox. Announcing the swap fixes the
+    class: a future environment can ship it again and nobody is misled. This project's own maxim, moved
+    one step sideways — *a gate nobody can observe firing is indistinguishable from one that is not
+    there*, and so is a data source nobody can observe being swapped.
+
+    stderr, not stdout: several callers pipe their stdout into a summary or a TSV, and a diagnostic
+    that corrupts the artifact it is warning you about would be its own defect.
+    """
+    global _ANNOUNCED
     path = os.environ.get("RUNG_STATIC_PATH")
     if not path:
         raise RuntimeError("RUNG_DATA_SOURCE=static requires RUNG_STATIC_PATH=<clean-dataset export dir>")
+    if not _ANNOUNCED:
+        _ANNOUNCED = True
+        print(f"rung: RUNG_DATA_SOURCE=static — reading the FROZEN deposit at {path}, "
+              "NOT the live database. Unset RUNG_DATA_SOURCE for live data.", file=sys.stderr)
     return StaticConnection(Path(path))

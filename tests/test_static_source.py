@@ -9,7 +9,6 @@ extract, `count(*) FILTER`, `width_bucket` (the McCrary de-heap), `%s` positiona
 A tiny fixture Parquet stands in for the clean export; no database, no analysis scripts.
 """
 
-from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -125,3 +124,104 @@ def test_cursor_is_iterable(static_dir):
     with static_source.StaticConnection(static_dir) as con:
         ids = sorted(r[0] for r in con.execute("SELECT id FROM store_products"))
         assert ids == [1, 2, 3, 4]
+
+
+def test_a_frozen_vintage_without_a_later_column_still_opens(static_dir):
+    """A Parquet frozen before a column existed must still bind — the freeze is deliberate.
+
+    `intel/data/clean_d1/v3` is the **2026-07-17** vintage: 29 columns, written before
+    `potency_implausible` existed. It is immutable on purpose, because rebuilding it to pick up a new
+    column would move numbers a paper already quotes — so a later cut is a NEW vintage beside it
+    (`intel/data/clean_d1/2026-08-03/`, 32 columns), not a refresh of it. `StaticConnection` back-fills
+    any column the live schema has and a vintage does not (`_COLUMNS_ADDED_AFTER_FREEZE`) as a typed
+    NULL, which is a no-op for the newer cut and load-bearing for the older one. Without
+    that, adding the column to `_PRODUCTS_NORMALIZED_VIEW_SQL` killed every static-mode script here
+    with a DuckDB binder error. `static_dir` is exactly such a pre-column vintage — `_SP_COLS` does
+    not list the flag — so this test is the regression.
+    """
+    assert "potency_implausible" not in _SP_COLS, (
+        "the fixture must stay a PRE-column vintage; that is the case this test exists to pin"
+    )
+    with static_source.StaticConnection(static_dir) as con:
+        rows = con.execute(
+            "SELECT id, potency_implausible FROM products_normalized ORDER BY id"
+        ).fetchall()
+    assert rows, "the view returned nothing — the back-fill did not bind"
+    # NULL, not FALSE: this vintage was written before the check existed, so no row was ever assessed.
+    # `plausible_potency_where` tests `IS NOT TRUE` precisely so a NULL here keeps the row.
+    assert all(flag is None for _, flag in rows)
+
+
+def test_a_rebuilt_vintage_passes_the_real_flag_through(tmp_path):
+    """The back-fill must not shadow a real value once a dataset is rebuilt with the column."""
+    rows = [_row(id=1, thc=3.0692, cbd=0.0), _row(id=2, thc=30.692, cbd=0.0)]
+    frame = pd.DataFrame(rows, columns=[*_SP_COLS, "potency_implausible"])
+    frame["potency_implausible"] = [True, False]
+    frame.to_parquet(tmp_path / "store_products.parquet")
+    pd.DataFrame([{"abbr": "PA", "country": "US"}]).to_parquet(tmp_path / "state_programs.parquet")
+
+    with static_source.StaticConnection(tmp_path) as con:
+        got = dict(
+            con.execute("SELECT id, potency_implausible FROM products_normalized").fetchall()
+        )
+    assert got == {1: True, 2: False}
+
+
+def test_the_static_swap_announces_itself_once(monkeypatch, capsys, static_dir) -> None:
+    """A data source that substitutes a frozen file for the live database must be AUDIBLE.
+
+    `RUNG_DATA_SOURCE=static` is an ambient variable, and this sandbox exported it globally from
+    `/etc/sandbox-persistent.sh` — sourced before every command and by `/etc/profile.d` for login
+    shells — so every analysis in it read the frozen deposit while believing it was live. Adversarial
+    round 39 found it: an adjudicator noticed that any agent who did not `unset` it "queried the DEPOSIT
+    while believing it was live".
+
+    Removing the variable from one file fixes one sandbox. Announcing the swap fixes the class — a
+    future environment can ship it again and nobody is misled. It is this project's own maxim moved
+    sideways: a gate nobody can observe firing is indistinguishable from one that is not there, and so
+    is a data source nobody can observe being swapped.
+    """
+    monkeypatch.setattr(static_source, "_ANNOUNCED", False)
+    monkeypatch.setenv("RUNG_DATA_SOURCE", "static")
+    monkeypatch.setenv("RUNG_STATIC_PATH", str(static_dir))
+
+    static_source.connect().close()
+    first = capsys.readouterr().err
+    assert "FROZEN deposit" in first and str(static_dir) in first, first
+    assert "NOT the live database" in first, first
+
+    # ONCE per process, not once per connection: a script opening ten connections should say it once,
+    # and a banner nobody can read past is one people learn to ignore.
+    static_source.connect().close()
+    assert capsys.readouterr().err == ""
+
+
+def test_the_live_path_announces_nothing(monkeypatch, capsys) -> None:
+    """The converse, and it is the half that keeps the warning meaningful: a diagnostic printed on the
+    normal path is noise, and noise is what makes a real warning invisible."""
+    monkeypatch.setattr(static_source, "_ANNOUNCED", False)
+    monkeypatch.delenv("RUNG_DATA_SOURCE", raising=False)
+    assert static_source.is_static() is False
+    assert capsys.readouterr().err == ""
+
+
+def test_cursor_fetchone_consumes_like_psycopg() -> None:
+    """`fetchone` must ADVANCE. It used to return `rows[0]` forever, so the standard psycopg drain
+    `while (row := cur.fetchone()) is not None` looped on the first row and a bounded loop saw it
+    duplicated — silently divergent results between static mode and live Postgres."""
+    cur = static_source._Cursor([(1,), (2,)], [])
+    drained = []
+    while (row := cur.fetchone()) is not None:
+        drained.append(row)
+    assert drained == [(1,), (2,)]
+    assert cur.fetchone() is None  # stays exhausted
+
+
+def test_cursor_fetchall_and_iteration_share_the_position() -> None:
+    cur = static_source._Cursor([(1,), (2,), (3,)], [])
+    assert cur.fetchone() == (1,)
+    assert cur.fetchall() == [(2,), (3,)]  # only the unfetched remainder, as psycopg returns
+    assert cur.fetchall() == []
+    it = static_source._Cursor([(1,), (2,)], [])
+    assert next(iter(it)) == (1,)
+    assert it.fetchone() == (2,)  # iteration consumed the first row
