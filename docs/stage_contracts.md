@@ -142,8 +142,11 @@ and not their contents.
     result keeps the prior snapshot. Each row carries both the platform-shaped raw fields
     (`category`/`terpenes`/`variants`) and the normalized standard fields stamped at write time
     (`category_std`, `product_type_std`, `strain_type_std`, and via `normalize.enrich_record`
-    `size_g`, `terpenes_std`, `terp_total`, plus per-variant `size_g`/`price_per_g` inside the
-    `variants` JSONB); the `products_normalized`
+    `size_g`, `terpenes_std`, `terp_total`, `terpenes_repaired`, `potency_implausible`, plus
+    per-variant `size_g`/`price_per_g` inside the
+    `variants` JSONB — the last two are QUALIFIERS on a stored value, never edits to it: they mark a
+    terpene profile our normalizer altered, and a published THC that is not a plausible label for its
+    category); the `products_normalized`
     VIEW projects just the standard fields (+ a derived top-level `price_per_g`). An idempotent
     normalization backfill recomputes these over existing rows.
   - `access_methods` per attempt (target_type `store_menu`, target_key `{state}:{store_key}`),
@@ -156,6 +159,12 @@ and not their contents.
   - **Scoped re-scrape:** `--only "<term>[,<term>]"` (`run_store_menus(only=…)`) narrows to stores
     whose operator/storefront name, external_id, or company id matches; like Stage 2 it
     `claim_target`s only those targets, leaving a concurrent full run untouched.
+  - **Platform-filtered runs claim only what they serve:** `--skip-aggregators` /
+    `--only-aggregators` (`skip_platforms`/`only_platforms`) also switch to `claim_target` — over
+    the run's whole claim map, so freshness-skipped stores' leftover jobs still resolve. A
+    state-prefix drain would claim the excluded platforms' pending jobs (a concurrent
+    aggregator-only worker's, or a crashed run's leftovers) and hard-fail each as "no store row
+    for target". The claim KEY is unchanged; only the claim scope narrows.
 - **Rungs live (2026-06-15, all verified live; PA = 175/175 handled stores, ~125k product
   rows):** `jane_algolia` (public Algolia index), `dutchie_products` (consumer
   persisted product query, med-then-rec; can re-resolve a rotated store id from the stable

@@ -1,21 +1,27 @@
 # Publishable split — public core + private `intel` overlay
 
+> **Note (2026-07-31).** Where this record says "the script's exclude-lists", the publishing policy has
+> since been separated from the tool that applies it: what may ship is now declared as data, and the
+> primary gate is an **allowlist** rather than the denylist described below — a tree that is not named
+> does not ship, instead of shipping by default. The decisions recorded here still stand; only the
+> arrangement of the tooling changed.
+
 **Status:** Phases 1–4a + 5 done on branch `refactor/publish-split-seam`. The two-package split is
 functionally complete and test-enforced: seam + CLI routing (1–2), honest-by-default HTTP (3a), the
 private overlay carved into `rung_intel` (3b), the dataset partitioned with a leak
 guard (4a), and the ARCHITECTURE/README/CLAUDE docs swept to the two-package structure (5).
-**Publishing — tooled (done).** `scripts/build_public_repo.py` assembles the public framework repo
+**Publishing — tooled (done).** The monorepo's build tool assembles the public framework repo
 (the `rung` package + `examples/` + the framework tests + core docs, with a public-only
 `pyproject` — no uv workspace / overlay dep) and **leak-guards the output**: no file imports the
 overlay, no overlay directory, no proprietary data, no overlay reference in the pyproject, and a
 generic secret-content/secret-filename scan over the assembled tree. It auto-excludes anything
-importing the overlay (the private tests) or `scripts/`, and treats the analysis scripts / research
+importing the overlay (the private tests) or and treats the analysis scripts / research
 reports / recipe docs (`scraping_techniques`, `access_methods_design`) / the bring-up + data-source
 docs (`multi_state_expansion`, `data_sources`) / the dataset as private intel (tunable via the
 script's exclude-lists). `--check` is test-gated (`tests/test_build_public_repo.py`). Tokens are untracked + gitignored; both packages
 bundle their `data/*.yml` in a wheel (hatchling default — no extra config). **To publish:**
-`python3 scripts/build_public_repo.py --out ../dispensary-scraper-public`, review the output, then
-`git init` + push to a public repo. **Goal:** make it cheap and
+run the monorepo's build tool with an output directory, review
+what it assembled, then push that tree to the public repo. **Goal:** make it cheap and
 safe to keep the proprietary *intel* + *access catalogs* + *dataset* private while publishing the
 rest of the framework as open source, with the public half **runnable on its own** against
 stub/example plugins.
@@ -102,30 +108,33 @@ move is localized.
 
 > **Per-store `platform:external_id` in the published search/maps shards is classified PUBLIC-by-design.**
 > The product-search export ships `store_key = platform:external_id` (`export_products.store_index`)
-> to the public maps/search repos. An escalated leak audit (2026-06-29; `docs/publish_topology_audit.md`)
+> to the public maps and search repos. An escalated leak audit (2026-06-29;)
 > adjudicated this: each platform's `external_id` is *already* public (it sits in the store's own
 > consumer menu URL / public store API), and the only incremental bit — the operator→platform mapping
 > — is exactly what the **public** `recon`/`homepage_discovery` modules infer from a homepage, so it
 > leaks nothing an adversary couldn't derive publicly. It is NOT the private *catalog* (the
-> `dutchie_chains.yml` / `*_slugs.yml` / `jane_store_ids.yml` mappings stay in the overlay). Recorded
+> / `*_slugs.yml` / mappings stay in the overlay). Recorded
 > here so it isn't re-flagged each audit; if ever reclassified, swap `store_key` for an opaque
 > per-store id in the shards (the UI only needs a stable key, not a meaningful one).
 
 ### Private non-code assets
 
 - **Private** `rung/data/*.yml` — the curated platform catalogs + tokens that encode the
-  scraping playbook: `dutchie_chains.yml`, `dutchie_plus_tokens.yml`, `grower_brands.yml`,
-  `jane_store_ids.yml`, `leafly_slugs.yml`, `weedmaps_slugs.yml` (moved to the overlay; see
+  scraping playbook:  (moved to the overlay; see
   `PRIVATE_DATA`). **Public** (intentionally): the operational seeds the public CLI + homepage
   discovery need — `companies.yml`, `company_homepages.yml`, `states.yml`, `state_geo_anchors.yml`,
-  the taxonomy/brand alias maps, and `brand_parent.yml` (the brand→parent-MSO crosswalk — public-record
-  ownership, powers the analysis's parent-collapse and the clean-dataset `brand_parent` table). These are operator rosters + own-site homepages (public-record,
+  the taxonomy/brand alias maps, `brand_parent.yml` (the brand→parent-MSO crosswalk — public-record
+  ownership, powers the analysis's parent-collapse and the clean-dataset `brand_parent` table), and
+  `license_regime.yml` (the per-jurisdiction retail licence-regime coding — assembled entirely from
+  statutes and one regulator's page, so it discloses public law and nothing about our targets or our
+  methods; see `rung/licensing.py` and), and `operator_parent.yml`
+  (retail-banner → corporate-parent, the cross-state operator key — SEC filings and public corporate
+  structure, same class as `brand_parent.yml`; see `rung/operators.py`). These are operator rosters + own-site homepages (public-record,
   not evasion); the public build strips the inline platform/override annotations from
   `company_homepages.yml`.
-- `scripts/` — the analysis/conference/backfill scripts (intel); a small infra subset
+- — the analysis/conference/backfill scripts (intel); a small infra subset
   (`dev_pg.sh`, `qa_gate.sh`, `migrate_*`, geocode) may stay public — TBD in Phase 4.
-- `reports/`, `docs/analysis/`, `docs/scraping_techniques.md`, `docs/access_methods_design.md`,
-  the literature bibliography — intel/know-how.
+-   the literature bibliography — intel/know-how.
 - `dispensaries.db`, any DB snapshot — the dataset.
 
 ## The seam (`registry.py`)
@@ -183,7 +192,7 @@ gate and a `/pre-pr-audit`.
   imports it only via the entry-point group; public tests run with the plugin **absent** (stubs)
   and **present** (real). The 3b execution map below records the as-run move.
 - **Phase 4 — assets + publish tooling — DONE (4a):** the proprietary `data/*.yml` moved into the
-  overlay (shared/public seeds stay in the core) with a leak guard, and `scripts/build_public_repo.py`
+  overlay (shared/public seeds stay in the core) with a leak guard, and the build tool
   produces the public repo (leak-guarded; `--check` is CI-gated by `tests/test_build_public_repo.py`).
 - **Phase 5 — docs — DONE:** `ARCHITECTURE.md` (the `registry` tier + public/overlay band),
   `README.md`, and `CLAUDE.md` swept to the two-package structure.

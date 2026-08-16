@@ -6,6 +6,8 @@ Status: **Phase 0 (company-site capture) + Phase 0.5 (roster capture) — 2026-0
 Phase 1 (lifecycle derivation, `store-lifecycle`) + Phase 2 (materialized
 `store_lifecycle_events`, `--write`) — 2026-07-09. Relocation collapsing deferred: no real case
 exists to tune against yet.**
+**Open gap: capture ATTEMPTS are not recorded, so an `unconfirmed`
+closure cannot be separated from a failed scrape — see the open-gap section below.**
 
 ## Why
 
@@ -228,6 +230,53 @@ on the same source, with the same canonical operator, in the same town (`compare
 
 **Revisit when history matures:** once several states have produced opening/closure pairs, calibrate
 against the real cases and decide whether to collapse.
+
+## OPEN GAP — we record what was SEEN, never what was ATTEMPTED
+
+**Status: open, 2026-08-03. This is the ceiling on closure confidence, and more sweep cycles do not
+lift it.**
+
+`store_observations` is a record of stores *observed*. There is no per-cycle record of what was
+*tried*. `record_store_observations` runs after a company's scrape returns, in the same transaction as
+the keep-the-best replace and the job completion — so a company whose scrape **failed** writes nothing
+at all, and every one of its stores is indistinguishable from a store that genuinely left the
+operator's list. Absence is the same byte either way.
+
+Note what this does *not* affect, because the write path is careful: a scrape that succeeds but yields
+fewer stores still **heartbeats from the stored rows**, so a keep-the-best rejection does not
+manufacture an absence. The ambiguity is specifically **outright capture failure versus real
+departure**.
+
+**The two existing guards do not close it, and cannot.**
+
+- `usable_cycles` works at the **source** level: it discards a cycle whose coverage a later cycle
+  beats. That catches a sweep that fell over wholesale. It cannot see one company failing inside an
+  otherwise-healthy cycle.
+- `_confidence` works at the **operator** level: `corroborated` means the operator's other stores were
+  scraped while this one went missing. When a single-company scrape fails, the whole operator vanishes,
+  which is exactly the `unconfirmed` grade — and `unconfirmed` is therefore *ambiguous by
+  construction*, not merely weaker evidence. On 2026-08-03 that was **151 of 253** derived closures.
+
+**The evidence exists and is deliberately destroyed.** `jobs` carries the per-attempt outcome
+(`status`, `finished_at`, `error`) — but `prune-jobs` runs `DELETE FROM jobs WHERE status IN ('done',
+'failed')`, and `store_history_sweep.sh` calls it **at the start of every sweep**, because done/failed
+tuples slow the `SKIP LOCKED` scans. So the queue is fast and the history is unreconstructable. That is
+a real trade, not an oversight, but nothing currently records the outcome anywhere durable first.
+
+**What would close it** (unbuilt, in rough order of cost):
+
+1. Write an **attempt row per (cycle, company, source)** — succeeded / failed / not-scheduled — beside
+   the observations. Then absence resolves: absent + attempt-succeeded is a departure; absent +
+   attempt-failed is our instrument. This is the smallest change that actually answers the question.
+2. Failing that, have `prune-jobs` **archive** capture outcomes into a thin retained table before
+   deleting, so the substrate is derivable retrospectively.
+3. Grade `unconfirmed` closures by the operator's *current* `access_methods` state as a weak proxy.
+   Cheap, and genuinely weak: `access_methods` holds current state only, so it cannot say whether the
+   operator's scrape failed **in the cycle the store went missing**.
+
+**Do not mistake more cycles for a fix.** Extra cycles raise confidence that an absence is persistent;
+they do not disambiguate *why* it is absent. A store whose company fails to scrape every week is absent
+every week, and looks more closed with each cycle.
 
 ## Reuse (don't rebuild)
 
