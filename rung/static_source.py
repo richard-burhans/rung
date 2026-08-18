@@ -114,7 +114,10 @@ class StaticConnection:
     """
 
     def __init__(self, path: Path) -> None:
-        import duckdb  # local import: only needed in static mode
+        # duckdb is OPTIONAL — needed only by this static-parquet mode, and not required to
+        # install or run the package — so the import is unresolvable in a plain environment and
+        # the type checker has to be told so rather than failing on it.
+        import duckdb  # ty: ignore[unresolved-import]  # local import: only needed in static mode
 
         sp = path / "store_products.parquet"
         prog = path / "state_programs.parquet"
