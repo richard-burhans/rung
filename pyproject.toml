@@ -26,6 +26,10 @@ dependencies = [
     "openpyxl>=3.1",
 ]
 
+[project.optional-dependencies]
+# The static-parquet data source (`rung.static_source`) — the no-database path.
+static = ["duckdb>=1.1"]
+
 [project.scripts]
 recon          = "rung.cli:recon_cmd"
 fetch-fx       = "rung.cli:fetch_fx_cmd"
