@@ -110,6 +110,25 @@ the enforced `BASE` set; it is tabled here only for locality with the other sing
   `menu_extractors._record`. A guard whose logic lives in a regex it cannot compose is a guard that gets
   retyped; that is not a hypothesis (three scripts did, and all three drifted).
 
+**A THIRD module sits behind the same seam and owns no schema at all:** `static_source.py`. With
+`RUNG_DATA_SOURCE=static` and `RUNG_STATIC_PATH` pointing at a directory of `store_products.parquet`
++ `state_programs.parquet`, `db.get_connection()` returns a **DuckDB-backed, psycopg-SHAPED**
+connection instead of opening Postgres — so the analysis scripts run unchanged with no database and
+no credentials. That is the reproduction path: a workflow runner, or a reader who wants to re-derive
+a published result without being given access to anything. Duck-typed rather than subclassed
+(`.execute()` → an iterable cursor, plus `fetchone`/`fetchall`/`close` and the context-manager
+protocol); writes are REFUSED, because a frozen snapshot is not somewhere to persist. `db.py` imports
+it **locally, inside `get_connection`**, so the engine store carries no duckdb dependency for the
+Postgres path — and duckdb is an optional extra (`pip install rung[static]`) rather than a
+requirement.
+
+⚠ **It carries a SECOND SPELLING of `products_normalized`, and that is the thing to know about it.**
+`_PRODUCTS_NORMALIZED_VIEW_SQL` rebuilds the same view in DuckDB dialect — same output columns, same
+order, only `::double` vs `::numeric` and a local currency `CASE`. A column added, dropped, reordered
+or repointed in one and not the other diverges the static path from live Postgres **silently**, and
+the import-layering guard cannot see it because it inspects imports, not SQL.
+`tests/test_db.py::test_products_normalized_views_stay_in_sync` pins the two equal instead.
+
 What `reference_db.py` creates: `dispensaries`,
 `geocode_cache` (**derived locations, and the reason it is a table.** A roster replace is DELETE +
 re-INSERT, and the source republishes only what the source publishes — so for a roster with a street but
@@ -533,6 +552,7 @@ overlay (its proprietary stages then resolve to registry stubs).
 | Persisted record types | `models.py` | canonical definitions |
 | Engine DB (generic) | `db.py` | connection + the 5 infra tables (`jobs`/`access_methods`/`token_buckets`/`proxies`/`proxy_tiers`) + `create_engine_tables` + the access-registry CRUD; imports **no** `models`/`text` (genericization B1/B3) |
 | Reference DB schema & CRUD | `reference_db.py` | the cannabis tables + `products_normalized` view + migrations + all domain CRUD + `create_reference_tables`/`create_tables` + the shared analysis predicates: `NATURAL_FLOWER_WHERE` and its view-column twin `NATURAL_FLOWER_WHERE_NORMALIZED` (kept in sync by `test_db.py`), plus `US_JURISDICTIONS_SUBQUERY` (states + DC + PR) / `US_EXCL_TERRITORIES_SUBQUERY` (holds out `US_TERRITORIES`, for analyses that report PR as its own column) / `CA_PROVINCES_SUBQUERY` (the trap: `state = 'CA'` is California — Canada is `country = 'CA'`). The two US constants exist because "US" named two different populations in two live scripts; `test_db.py` pins their difference to `US_TERRITORIES`; imports `db` + `models` + `text`. `db.<reference fn>` still resolves via `db.__getattr__` (back-compat shim) |
+| Static data source (no database) | `static_source.py` | The alternative backend behind `db.get_connection()`: with `RUNG_DATA_SOURCE=static` + `RUNG_STATIC_PATH` it serves a DuckDB view over a frozen Parquet export, psycopg-SHAPED and duck-typed, so the analysis runs unchanged with no database and no credentials — the reproduction path for a workflow runner or an outside reader. Writes refused. `db.py` imports it locally inside `get_connection`, so the Postgres path carries no duckdb dependency; duckdb is the optional `static` extra. ⚠ Holds `_PRODUCTS_NORMALIZED_VIEW_SQL`, a second spelling of `reference_db`'s `products_normalized` in DuckDB dialect — `tests/test_db.py::test_products_normalized_views_stay_in_sync` pins the two equal, because a column changed in one and not the other diverges the static path silently and the import-layering guard inspects imports, not SQL |
 | Work queue | `queue.py` | SKIP LOCKED claims + lease/heartbeat/reaper; `docs/stage_contracts.md` §5 §4-5 |
 | Cross-worker rate limit | `rate_limit.py` (`token_buckets`) | per-host token bucket, non-blocking + caller-commits; §3-4 |
 | Cross-worker rate gate | `rate_gate.py` | the waiting orchestrator over it — own connection, jittered wait, deadline, fail-open-and-latch. Separate module so `rate_limit.py` stays commit-free |
