@@ -40,10 +40,15 @@ override it with the `DATABASE_URL_TEST` environment variable.
 Every PR runs lint → type-check → tests. Run them locally before pushing:
 
 ```bash
-uv tool run ruff check rung/ tests/    # lint
-uv tool run ty check rung/             # type-check
-uv run pytest                          # tests
+uv tool run ruff@0.15.0 check rung/ tests/    # lint
+uv tool run ty@0.0.72 check rung/             # type-check
+uv run pytest                                 # tests
 ```
+
+Both versions are PINNED on purpose, and the pin is the point rather than a detail: an unpinned
+`uv tool run` takes the newest release, so a newer linter can reject a tree that was clean yesterday
+with no change to the code — and you would be reading a failure this project cannot reproduce. CI
+runs these same pinned versions.
 
 Coverage is ratcheted with `--cov-fail-under`. Where that flag is applied differs by checkout — it
 rides on `pytest`'s own `addopts` in some, and on the QA gate script in others, so that a bare

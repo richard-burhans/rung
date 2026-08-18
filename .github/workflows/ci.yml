@@ -50,10 +50,13 @@ jobs:
 
       - name: Sync dependencies
         # Populate .venv so `ty` can resolve the project's third-party imports
-        # (curl_cffi, yaml, …) — it discovers .venv in the project root. The `analysis`
-        # extra (matplotlib/numpy/pandas/scikit-learn) lets ty type-check the opt-in
-        # scientific-stack scripts too, catching arg-type/overload bugs the core env hid.
-        run: uv sync --extra analysis
+        # (curl_cffi, yaml, …) — it discovers .venv in the project root. The extras let ty
+        # type-check the opt-in scientific-stack and document scripts too, catching
+        # arg-type/overload bugs the core env hid.
+        #
+        # `--all-extras` rather than a named list: an extra is type-checked the day the
+        # project declares it, instead of the day somebody remembers to edit this file too.
+        run: uv sync --all-extras
 
       - name: Create the pytest database
         # The service provisions `rung`; tests run inside `rung_test`
@@ -74,7 +77,7 @@ jobs:
       # tests passing `None`/partial fakes where a real type is declared. It is recorded here so the
       # asymmetry reads as a decision with a number attached rather than as drift.
       - name: Type-check (ty)
-        run: uv tool run ty check rung/
+        run: uv tool run ty@0.0.72 check rung/
 
       # Coverage is reported without a fail-under floor: the upstream project's floor is measured
       # over trees that are not part of this repository, so a public floor would be a NEW number to
