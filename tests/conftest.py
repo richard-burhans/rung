@@ -59,6 +59,24 @@ _PREFIX = f"{_RUN_PREFIX}{_WORKER}_"
 _STALE_AFTER = dt.timedelta(minutes=10)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _no_inherited_git_repo_env() -> None:
+    """Strip git's repo-location env vars, so fixture repos can never be THIS repository.
+
+    ⚠ PORTED FROM THE LIBRARY, WHERE THE GUARD WAS PAID FOR (2026-08-16, its fb78ea3). When a
+    `pre-push` hook fires from a git WORKTREE, git runs it with an ABSOLUTE `GIT_DIR`
+    (`.git/worktrees/<name>`) and `subprocess` inherits it — so every fixture here that builds a
+    throwaway repo (`git init` in a tmp_path: the synthetic libraries in `test_handoff`, the
+    squash-merge repos, the marker worktree in `test_open_pr`) would silently operate on the REAL
+    repository. In the library one such gate run committed fixtures onto `main`, flipped
+    `core.bare`, and overwrote the shared identity. Session-scoped and unconditional: a test that
+    needs a repo builds one; none legitimately wants the caller's.
+    """
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                "GIT_COMMON_DIR"):
+        os.environ.pop(var, None)
+
+
 def pg_conn() -> db.DBConn:
     """A connection whose search_path is a fresh test_<run>_<uuid> schema."""
     try:
