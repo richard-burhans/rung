@@ -14,6 +14,8 @@ pin the honest-by-default / opt-in-impersonation contract.
 import ast
 from pathlib import Path
 
+import pytest
+
 # The package source tree: <repo>/rung/rung/. The test lives at
 # <repo>/rung/tests/, so parents[1] is the repo root.
 REPO_ROOT: Path = Path(__file__).resolve().parents[1]
@@ -184,8 +186,32 @@ def test_no_module_shells_out_to_a_network_binary() -> None:
     )
 
 
+#: "The allowlisted file is absent because its whole TREE is absent" is not staleness, and the two
+#: tests below must not read it as such. `SHELL_FETCH_ALLOWED` names a `scripts/` module, and
+#: `scripts/` does not ship: `faces/targets/rung.py` excludes it, so in the public build
+#: `_gated_sources()` returns the two packages and nothing else.
+#:
+#: THIS FILE IS SHIPPED ON PURPOSE and the reason is recorded next to `PRIVATE_SCRIPTS_PATH`, which
+#: exempts `test_http` from the private-scripts drop as a framework guard that is "vacuously empty in
+#: public". That was true of the SCAN — `rglob` on a missing directory yields nothing and raises
+#: nothing — and false of this CONSTANT, which is a hardcoded literal that survives the carve intact.
+#: So the guard shipped naming a file that cannot exist beside it, and the public repo's suite failed
+#: at `stale entries: {'supplement_fetcher.py'}` and a bare `StopIteration` — a contributor's first
+#: `pytest` run reporting a defect in the private monorepo they cannot see, let alone act on.
+#: Measured 2026-08-18 on a clean public checkout: 2 failed, 533 passed.
+#:
+#: SKIPPED, NOT SILENTLY PASSED. A bare `return` here would turn "this build cannot ask the question"
+#: into a green tick, which is the one outcome a guard must never produce; the skip says which tree
+#: was missing, so a public run reports honestly that the exemption went unchecked rather than
+#: claiming it held. In the private tree — the only one where the allowlist HAS a subject — nothing
+#: changes and both tests run exactly as before.
+_NO_ALLOWLIST_TREE = "scripts/ is not in this build, so the shell-fetch allowlist has no subject here"
+
+
 def test_the_shell_fetch_allowlist_names_only_files_that_exist() -> None:
     """An allowlist entry for a deleted file silently widens the guard for a future namesake."""
+    if not SCRIPTS_DIR.is_dir():
+        pytest.skip(_NO_ALLOWLIST_TREE)
     names = {p.name for p in _gated_sources()}
     assert names >= SHELL_FETCH_ALLOWED, f"stale entries: {SHELL_FETCH_ALLOWED - names}"
 
@@ -196,6 +222,8 @@ def test_the_allowlisted_fetcher_still_actually_shells_out() -> None:
     An allowlist that outlives its reason is how a guard quietly stops guarding — and this
     entry exists to carry an owed measurement, so it must not become decoration.
     """
+    if not SCRIPTS_DIR.is_dir():
+        pytest.skip(_NO_ALLOWLIST_TREE)
     path = next(p for p in _gated_sources() if p.name in SHELL_FETCH_ALLOWED)
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     shelled = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _shelled_binary(n)]
