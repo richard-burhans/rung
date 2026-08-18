@@ -122,7 +122,11 @@ class StaticConnection:
         sp = path / "store_products.parquet"
         prog = path / "state_programs.parquet"
         if not sp.exists():
-            raise FileNotFoundError(f"static source missing {sp} — build it with scripts/build_clean_d1.py --parquet")
+            # States the REQUIREMENT rather than naming the exporter: the tool that writes these
+            # files is not published, so a public reader told to run it is told to run nothing.
+            raise FileNotFoundError(
+                f"static source missing {sp} — RUNG_STATIC_PATH must be a directory holding "
+                "store_products.parquet and state_programs.parquet")
         self._con = duckdb.connect(":memory:")
         # Postgres `width_bucket(x, low, high, count)` (the McCrary de-heaping histogram) has no DuckDB
         # builtin — supply it as a macro with Postgres's exact semantics (0 below low, count+1 at/above

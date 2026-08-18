@@ -204,7 +204,7 @@ CREATE TABLE IF NOT EXISTS store_products (
     -- 'Natural' value: 96.35% of Flower rows declare nothing, and stamping those would manufacture
     -- 903,819 observations nobody made — the `product_type_defaulted` comment above is the same
     -- lesson, learned the hard way. So NULL means "unstated", and NATURAL_FLOWER_WHERE asks for
-    -- exactly that. See `text.normalize_obtention` + reports/obtention_facet_design.md.
+    -- exactly that. See `text.normalize_obtention`.
     obtention_std       TEXT,
     strain_type         TEXT,
     strain_type_std     TEXT,

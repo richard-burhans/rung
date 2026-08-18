@@ -23,11 +23,27 @@ import contextlib
 import datetime as dt
 import os
 import uuid
+from pathlib import Path
 
 import psycopg
 import pytest
 
 from rung import db
+
+#: What to DO about an unreachable test Postgres — DERIVED, because this string ships.
+#:
+#: It used to name a helper script only the upstream monorepo has, so the first error a contributor
+#: met after following CONTRIBUTING.md sent them to a file their checkout does not contain. Asking
+#: the filesystem keeps the better instruction where the helper exists and gives every other
+#: checkout the route it actually has.
+#:
+#: ⚠ The path is COMPUTED rather than written out, and that is not style: a literal would sit in
+#: published code even where its branch can never run, which no reader — and no scanner — can tell
+#: apart from the bug this replaced. This comment names no path for the same reason.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEV_PG = _REPO_ROOT / "scripts" / "dev_pg.sh"
+_PG_HINT = (f"run {_DEV_PG.relative_to(_REPO_ROOT)} first" if _DEV_PG.is_file()
+            else "start a local Postgres first — CONTRIBUTING.md has a one-line docker command")
 
 _TEST_URL = os.environ.get(
     "DATABASE_URL_TEST",
@@ -82,9 +98,7 @@ def pg_conn() -> db.DBConn:
     try:
         conn = psycopg.connect(_TEST_URL)
     except psycopg.OperationalError:
-        pytest.fail(
-            "test Postgres unreachable — run scripts/dev_pg.sh first", pytrace=False
-        )
+        pytest.fail(f"test Postgres unreachable — {_PG_HINT}", pytrace=False)
     schema = f"{_PREFIX}{uuid.uuid4().hex}"
     conn.execute(f"CREATE SCHEMA {schema}")
     # pg_namespace carries no creation time, and the sweep needs one to tell live debris from dead.
@@ -175,7 +189,7 @@ def _sweep_stale_schemas():
         # worker trips `dsession.worker_workerfinished`'s `assert not crashitem` and the whole run dies
         # with an INTERNALERROR traceback and "no tests ran" — measured, not assumed. A failing autouse
         # fixture is noisier (one error per test) but it names the actual problem.
-        pytest.fail("test Postgres unreachable — run scripts/dev_pg.sh first", pytrace=False)
+        pytest.fail(f"test Postgres unreachable — {_PG_HINT}", pytrace=False)
     conn.execute("SET lock_timeout = '10s'")
     conn.commit()
     stale = conn.execute(
