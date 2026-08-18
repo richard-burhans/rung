@@ -1,15 +1,9 @@
 name: CI
 
-# Lint -> type-check -> tests + coverage floor. Uses a Postgres service
-# container (the tests need a real Postgres; conftest.py hands out a
-# throwaway schema per test in the rung_test database).
+# Lint -> type-check -> tests + coverage. Uses a Postgres service container (the tests need a
+# real Postgres; conftest.py hands out a throwaway schema per test in the rung_test database).
 #
-# NOT an automatic check as of 2026-07-21. GitHub-hosted Actions minutes are NOT free on a PRIVATE
-# repo, and a ~5-minute gate per PR exhausts the quota fast. The AUTHORITATIVE gate is now the LOCAL
-# pre-push hook (`scripts/hooks`, enabled with `git config core.hooksPath scripts/hooks`) running
-# `scripts/qa_gate.sh` — see CLAUDE.md "Enforcement". This workflow is kept intact so it can be run
-# manually ("Run workflow" in the Actions tab) or repointed at a self-hosted runner (free) later; it
-# no longer triggers on push or pull_request.
+# Runs on manual dispatch ("Run workflow" in the Actions tab).
 
 on:
   workflow_dispatch:
@@ -68,30 +62,22 @@ jobs:
           PGPASSWORD: rung
         run: psql -h localhost -U rung -d rung -c 'CREATE DATABASE rung_test;'
 
-      # These two MUST match scripts/qa_gate.sh's target lists, and `tests/test_gate_targets.py`
-      # now asserts it instead of asking a reader to diff two files. `research/` (the librarian
-      # toolchain) was deliberately gated in the local gate but never added here — so the
-      # authoritative check, the one that actually blocks a PR, was not looking at it. The 2026-07-18
-      # round-2 audit then found `rung_intel/` missing from the ruff list in exactly the same way,
-      # two lines under the comment warning about it: the whole private overlay was lint-gated only
-      # by the local gate, which `--no-verify` bypasses. A comment saying "these MUST match" is not
-      # a mechanism; the test is.
-      # Ruff is PINNED (mirror of scripts/qa_gate.sh): an unpinned `uv tool run ruff` grabs the
+      # Ruff is PINNED: an unpinned `uv tool run ruff` grabs the
       # newest release, and newer ruffs broaden what they check (0.16 unilaterally applied BLE001,
       # FURB167, EXE001, … — rules never in this repo's extend-select, some contradicting deliberate
       # decisions), making the gate non-reproducible. Bump deliberately in its own PR, not implicitly.
       - name: Lint (ruff)
-        run: uv tool run ruff@0.15.0 check rung/ rung_intel/ tests/ scripts/ faces/ claims/
+        run: uv tool run ruff@0.15.0 check rung/ tests/
 
       # `tests/` is deliberately absent from the ty list (ruff lints it, ty does not). This is a
       # KNOWN BACKLOG, not an oversight: adding it surfaces 290 real diagnostics (measured 2026-07-18), almost all of them
       # tests passing `None`/partial fakes where a real type is declared. It is recorded here so the
       # asymmetry reads as a decision with a number attached rather than as drift.
       - name: Type-check (ty)
-        run: uv tool run ty check rung/ rung_intel/ scripts/ faces/ claims/
+        run: uv tool run ty check rung/
 
-      # The coverage floor is named HERE, not in pyproject's addopts, so a bare local `pytest` is not
-      # instrumented while iterating. tests/test_gate_targets.py asserts this line and qa_gate.sh's both
-      # still carry --cov-fail-under, so the floor cannot quietly go missing from one of them.
+      # Coverage is reported without a fail-under floor: the upstream project's floor is measured
+      # over trees that are not part of this repository, so a public floor would be a NEW number to
+      # choose deliberately, not one to inherit mechanically from a different tree.
       - name: Tests + coverage (pytest)
-        run: uv run pytest -q -n 8 --dist loadgroup --cov=rung --cov=rung_intel --cov-fail-under=68
+        run: uv run pytest -q -n 8 --dist loadgroup --cov=rung
