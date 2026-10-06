@@ -90,6 +90,11 @@ def _forward_fill(
     return rows
 
 
+#: How far before the latest stored rate an incremental refresh restarts — long enough to replace the
+#: days forward-filled while the bank had not yet published (a long weekend plus a holiday).
+_REFRESH_OVERLAP_DAYS = 7
+
+
 async def refresh_fx_rates(
     conn: DBConn,
     since: datetime.date | None = None,
@@ -97,16 +102,27 @@ async def refresh_fx_rates(
 ) -> dict:
     """Fetch, forward-fill, and upsert the FX series so every priced observation has a same-day rate.
 
-    ``since`` overrides the backfill start (default: the earliest priced observation date). ``today``
-    overrides the end date (tests pass a fixed date). No-ops with a note when the data is US-only.
-    Commits. Returns a summary dict for the CLI.
+    ``since`` overrides the start. By default the refresh is INCREMENTAL: with rates already stored it
+    restarts ``_REFRESH_OVERLAP_DAYS`` before the latest stored date (so the trailing days carried
+    forward before the bank published them are replaced by the real rates), and only with no rates
+    stored does it start at the earliest priced observation. That lookup scans the whole history
+    table — about 200 million rows by 2026-10 — and a daily run without ``since`` used to pay it every
+    day. A history row added BEFORE the stored range is not reached incrementally; pass ``since``.
+    ``today`` overrides the end date (tests pass a fixed date). No-ops with a note when the data is
+    US-only. Commits. Returns a summary dict for the CLI.
     """
     reference_db.ensure_fx_rates(conn)
     if "CAD" not in reference_db.currencies_needing_conversion(conn):
         return {"pairs": [], "note": "no CAD-priced data present — nothing to fetch"}
 
     end_date = today or datetime.datetime.now(datetime.UTC).date()
-    start_date = since or reference_db.fx_backfill_start(conn) or end_date
+    _lo, stored_max, _days, _carried = reference_db.fx_rate_coverage(conn, "CAD", "USD")
+    if since is not None:
+        start_date = since
+    elif stored_max is not None:
+        start_date = min(stored_max - datetime.timedelta(days=_REFRESH_OVERLAP_DAYS), end_date)
+    else:
+        start_date = reference_db.fx_backfill_start(conn) or end_date
     # Fetch a week before the window so a leading run of carried days has a rate to carry forward.
     observations = await _fetch_boc_usdcad(start_date - datetime.timedelta(days=7))
     rows = _forward_fill(observations, start_date, end_date)

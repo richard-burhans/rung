@@ -157,3 +157,33 @@ def test_backfill_start_is_the_earliest_priced_observation() -> None:
 def test_backfill_start_is_none_on_empty_data() -> None:
     conn = _conn()
     assert reference_db.fx_backfill_start(conn) is None
+
+
+def test_a_refresh_with_rates_stored_is_incremental(monkeypatch) -> None:
+    """With rates stored the refresh restarts a week before the latest one and never asks for the
+    earliest observation — that lookup scans the whole history table (about 200 million rows in
+    2026-10), and the daily cron used to pay it every day (the 2026-10-06 whole-tree review)."""
+    import asyncio
+
+    conn = _conn()
+    _seed_programs(conn)
+    db.replace_store_products(conn, "dutchie:1", [StoreProductRecord(
+        company_id=1, state="ON", store_key="dutchie:1", platform="dutchie",
+        external_id="1", source="dutchie_products", name="CA flower", price=10.0)])
+    reference_db.upsert_fx_rates(
+        conn, [(datetime.date(2026, 9, 30), "CAD", "USD", 0.72, "bank_of_canada", False)])
+    conn.commit()
+    asked: list[datetime.date] = []
+
+    async def fake_fetch(start: datetime.date) -> list[tuple[datetime.date, float]]:
+        asked.append(start)
+        return [(start, 1.38)]
+
+    def no_scan(_conn: db.DBConn) -> None:
+        raise AssertionError("an incremental refresh must not scan for the earliest observation")
+
+    monkeypatch.setattr(fx, "_fetch_boc_usdcad", fake_fetch)
+    monkeypatch.setattr(reference_db, "fx_backfill_start", no_scan)
+    summary = asyncio.run(fx.refresh_fx_rates(conn, today=datetime.date(2026, 10, 6)))
+    assert summary["start"] == datetime.date(2026, 9, 23)        # a week before 09-30
+    assert asked == [datetime.date(2026, 9, 16)]                 # plus the existing carry lead-in
