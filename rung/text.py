@@ -666,32 +666,39 @@ _CITY_CONNECTORS = frozenset({"of", "the", "at", "on", "in", "and", "by", "a", "
 # A trailing parenthetical: "ONE PLANT BARRIE (CUNDLES)" -> "ONE PLANT BARRIE".
 _TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)\s*$")
 
-# NOTE: no legal-entity rule here. A trailing "LLC"/"Inc." is a per-store legal entity and DOES
-# fragment an operator ("CURALEAF GROTON LLC") — but `companies.yml` aliases are the designed
-# mechanism for it, and they key on the FULL name including the suffix ("Diamond Star Group inc." ->
-# Dankley). Stripping it here makes those alias keys miss, which seeds the entity as its OWN company:
-# the exact fragmentation we are trying to remove. Fold legal entities in companies.yml, or teach the
-# alias map to match on a stripped key first — do not strip it out from under the map.
+# NOTE: no legal-entity rule in THIS function. A trailing "LLC"/"Inc." is stripped earlier in
+# `extract_brand`, by `strip_legal_entity`, which refuses a strip that would leave nothing usable or a
+# bare generic. `companies.yml` aliases still key on the FULL roster name including the suffix
+# ("Diamond Star Group inc." -> Dankley), because seeding resolves an alias before it extracts a
+# brand; a legal entity that should fold into an operator is folded there, not here.
 
 # A trailing street address or store number: "ONE PLANT 3003 DANFORTH", "HIGH CANNABIS 12467".
-# Requires THREE+ digits so a number that is part of the brand survives — "Cloud 9", "Green 2 Go",
-# and (crucially) "Score 420 Alamogordo", whose 420 is mid-name and never trailing anyway.
-_TRAILING_ADDRESS_RE = re.compile(r"\s+\d{3,}[A-Za-z0-9 .,'\-]*$")
+# Requires THREE+ digits so a short number that is part of the brand survives — "Cloud 9",
+# "Green 2 Go". The tail after the number is stripped too (it is the street name), so the number
+# must NOT be one the trade uses as a name: 420 and 710. Until 2026-10-06 this comment said
+# "Score 420 Alamogordo" was safe because its 420 is mid-name; the rule strips from the number to
+# the END, so it folded "Score 420 Alamogordo" to "Score", "HANGAR 420" to "HANGAR" and
+# "Highway 420 Dispensary" to "Highway" — measured on the live roster and store names that day,
+# 21 brand groups merged unrelated licensees that way.
+_TRAILING_ADDRESS_RE = re.compile(r"\s+(?!(?:420|710)(?!\d))\d{3,}[A-Za-z0-9 .,'\-]*$")
 
 
 def _strip_store_suffix(brand: str) -> str:
     """Drop one store-level tail (a parenthetical or a trailing street address) from a brand.
 
     Applied longest-first and guarded: a rule only fires if what remains is still a plausible brand
-    (≥3 chars, contains a letter, and does not end on a dangling connector). Never empties the name —
-    leaving an operator fragmented is the safe failure; merging two real operators is not.
+    (≥3 chars, contains a letter, does not end on a dangling connector, and is not a bare generic —
+    "Cannabis 247" must not become "Cannabis", the bucket every unrelated "Cannabis <n>" then joins;
+    `strip_legal_entity` refuses the same collapse). Never empties the name — leaving an operator
+    fragmented is the safe failure; merging two real operators is not.
     """
     for rule in (_TRAILING_PAREN_RE, _TRAILING_ADDRESS_RE):
         folded = rule.sub("", brand).strip().rstrip(",")
         if folded == brand:
             continue
         last = folded.lower().rsplit(" ", 1)[-1] if folded else ""
-        if len(folded) >= 3 and any(ch.isalpha() for ch in folded) and last not in _CITY_CONNECTORS:
+        if (len(folded) >= 3 and any(ch.isalpha() for ch in folded)
+                and last not in _CITY_CONNECTORS and not _is_bare_generic(folded)):
             brand = folded
     return brand
 

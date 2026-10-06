@@ -23,6 +23,7 @@ Leak-safe by construction: it takes a file path, never a credential — a publis
 
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Self
@@ -137,6 +138,9 @@ _COLUMNS_ADDED_AFTER_FREEZE: dict[str, str] = {
 }
 
 
+_PLACEHOLDER_RE = re.compile(r"%%|%s")
+
+
 class StaticConnection:
     """A read-only, psycopg-shaped connection backed by DuckDB over the clean-dataset Parquet.
 
@@ -153,12 +157,17 @@ class StaticConnection:
 
         sp = path / "store_products.parquet"
         prog = path / "state_programs.parquet"
-        if not sp.exists():
-            # States the REQUIREMENT rather than naming the exporter: the tool that writes these
-            # files is not published, so a public reader told to run it is told to run nothing.
-            raise FileNotFoundError(
-                f"static source missing {sp} — RUNG_STATIC_PATH must be a directory holding "
-                "store_products.parquet and state_programs.parquet")
+        # BOTH files are required. `state_programs` used to be treated as optional, but the
+        # products_normalized view below joins it unconditionally (it supplies each row's country,
+        # hence its currency), so a deposit without it died in DuckDB's binder with a Catalog Error
+        # naming neither file. An empty stand-in would open — and label every Canadian row USD.
+        for required in (sp, prog):
+            if not required.exists():
+                # States the REQUIREMENT rather than naming the exporter: the tool that writes these
+                # files is not published, so a public reader told to run it is told to run nothing.
+                raise FileNotFoundError(
+                    f"static source missing {required} — RUNG_STATIC_PATH must be a directory "
+                    "holding store_products.parquet and state_programs.parquet")
         self._con = duckdb.connect(":memory:")
         # Postgres `width_bucket(x, low, high, count)` (the McCrary de-heaping histogram) has no DuckDB
         # builtin — supply it as a macro with Postgres's exact semantics (0 below low, count+1 at/above
@@ -188,17 +197,19 @@ class StaticConnection:
         self._con.execute(
             f"CREATE VIEW store_products AS SELECT *{', ' + backfilled if backfilled else ''} FROM _sp_raw"
         )
-        if prog.exists():
-            self._con.execute(f"CREATE VIEW state_programs AS SELECT * FROM read_parquet('{prog}')")
+        self._con.execute(f"CREATE VIEW state_programs AS SELECT * FROM read_parquet('{prog}')")
         # the products_normalized view the scripts (and _scope currency) may read
         self._con.execute(_PRODUCTS_NORMALIZED_VIEW_SQL)
 
     def execute(self, query: str, params: Any = None) -> _Cursor:
         if params is not None:
             # psycopg uses `%s` positional placeholders; DuckDB uses `?`. The scripts pass positional
-            # params only (a tuple), so a plain swap is exact. Literal `%` in a LIKE pattern lives in the
-            # PARAM value, not the query text, so it is untouched.
-            rel = self._con.execute(query.replace("%s", "?"), list(params))
+            # params only (a tuple). A literal `%` in the query text is written `%%` for psycopg —
+            # which un-escapes it whenever params are passed — so it is un-escaped here too; until
+            # 2026-10-06 it reached DuckDB as `%%` (a modulo `x %% 10` was a parser error). One pass,
+            # so `%%s` stays a literal `%s` rather than becoming a placeholder.
+            translated = _PLACEHOLDER_RE.sub(lambda m: "%" if m.group() == "%%" else "?", query)
+            rel = self._con.execute(translated, list(params))
         else:
             rel = self._con.execute(query)
         try:

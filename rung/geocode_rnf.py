@@ -122,7 +122,12 @@ def _polyline_point(pts: tuple[tuple[float, float], ...], frac: float) -> tuple[
 
 
 def _side_range(seg: Segment, number: int) -> tuple[int, int, int] | None:
-    """(lo, hi, side) for the side this house number is on; None if neither side spans it.
+    """(start, end, side) for the side this house number is on; None if neither side spans it.
+
+    ``start`` is the number at the segment's FIRST vertex and ``end`` at its last (the RNF's
+    "from"/"to" values), so a range may DESCEND. Keep that order: `_interpolate` measures the
+    fraction from ``start``, and sorting the pair into (min, max) — as this did until 2026-10-06 —
+    placed every house on a descending segment mirrored about its midpoint, up to a block away.
 
     `side` is -1 for left, +1 for right, relative to the segment's direction of digitization —
     needed to offset off the centerline (see `_interpolate`).
@@ -130,21 +135,21 @@ def _side_range(seg: Segment, number: int) -> tuple[int, int, int] | None:
     Parity decides between sides: the RNF ranges an even side and an odd side per segment
     (L: 52002..52132, R: 52001..52131). Containment alone is ambiguous where the ranges overlap.
     """
-    sides: list[tuple[int, int, int] | None] = []
+    sides: list[tuple[int, int, int]] = []
     if seg.lo_l is not None and seg.hi_l is not None:
-        sides.append((min(seg.lo_l, seg.hi_l), max(seg.lo_l, seg.hi_l), -1))
+        sides.append((seg.lo_l, seg.hi_l, -1))
     if seg.lo_r is not None and seg.hi_r is not None:
-        sides.append((min(seg.lo_r, seg.hi_r), max(seg.lo_r, seg.hi_r), +1))
+        sides.append((seg.lo_r, seg.hi_r, +1))
 
-    spanning = [s for s in sides if s and s[0] <= number <= s[1]]
+    spanning = [s for s in sides if min(s[0], s[1]) <= number <= max(s[0], s[1])]
     if not spanning:
         return None
     if len(spanning) == 1:
         return spanning[0]
     # Both sides span it — take the one whose parity matches.
-    for lo, hi, side in spanning:
-        if lo % 2 == number % 2:
-            return lo, hi, side
+    for start, end, side in spanning:
+        if min(start, end) % 2 == number % 2:
+            return start, end, side
     return spanning[0]
 
 
@@ -213,11 +218,12 @@ def _interpolate(
     rng = _side_range(seg, number)
     if rng is None:
         return None
-    lo, hi, side = rng
+    start, end, side = rng
     # A single-address block ("100..100") interpolates to the middle rather than an endpoint: with no
     # range there is no information about where along the block it sits, and the midpoint bounds the
-    # error at half a block instead of a whole one.
-    frac = 0.5 if hi == lo else (number - lo) / (hi - lo)
+    # error at half a block instead of a whole one. Measured from `start` (the first vertex's
+    # number), which is correct whichever way the range runs.
+    frac = 0.5 if end == start else (number - start) / (end - start)
     if end_offset_m:
         # Squeeze [0,1] into [d, 1-d] so the first/last house is not placed on the intersection.
         length = _segment_length(seg.pts)
@@ -365,7 +371,7 @@ class RnfGeocoder:
             rng = _side_range(seg, number)
             if rng is None:
                 continue
-            width = rng[1] - rng[0]
+            width = abs(rng[1] - rng[0])
             if best is None or width < best[0]:
                 best = (width, seg)
         if best is None:

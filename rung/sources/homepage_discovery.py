@@ -232,10 +232,10 @@ def _host_is_the_brand(brand_key: str, host: str) -> bool:
 def rank_candidates(canonical_name: str, urls: list[str]) -> list[tuple[str, int]]:
     """Rank candidate URLs best-first as ``(url, overlap_score)``.
 
-    Score: an exact brand⊆host (or host⊆brand) match dominates (100+); otherwise the count
-    of brand tokens appearing in the host label. Ties prefer a bare path, https, then .com.
-    Zero-overlap candidates rank last but are kept (the caller decides whether to accept one,
-    flagging it low-confidence).
+    Score: the brand appearing in the host (`_host_is_the_brand` — the host never merely inside
+    the brand) dominates (100+); otherwise the count of substantial brand tokens appearing in the
+    host label. Ties prefer a bare path, https, then .com. Low-scoring candidates are kept in the
+    ranking; the caller accepts none below ``_MIN_ACCEPT_SCORE``.
     """
     brand_key = normalize_brand(canonical_name)
     tokens = _brand_tokens(canonical_name)
@@ -282,8 +282,9 @@ async def discover_homepage(
     live candidate, or a record with an ``error`` describing why none was used.
 
     ``probe`` is recon._probe_one (injected to avoid a circular import); the first ranked
-    candidate it confirms live (error None, http_status < 400) wins. A zero-overlap winner
-    is downgraded to ``confidence="low"`` for the human-review summary.
+    candidate scoring at least ``_MIN_ACCEPT_SCORE`` that it confirms live (error None,
+    http_status < 400) wins. When none qualifies the record carries
+    ``error="discovery_unverified"`` and no URL — there is no low-confidence acceptance.
     """
     urls: list[str] = []
     for query in build_discovery_queries(canonical_name, state, program_term):

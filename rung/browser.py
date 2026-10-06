@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -15,9 +16,12 @@ def _resolve_chrome_path() -> Path | None:
     Order: an explicit ``RUNG_CHROME_PATH`` override (legacy ``DISPENSARY_CHROME_PATH`` still
     honored) → Playwright's bundled Chromium
     under ``$PLAYWRIGHT_BROWSERS_PATH`` or ``~/.cache/ms-playwright``
-    (``chromium-*/chrome-linux64/chrome``, any build) → None. When None, `make_browser_options`
-    leaves `binary_location` unset and pydoll falls back to its own `/usr/bin/google-chrome`
-    probe. Installed via `uv run playwright install chromium`.
+    (``chromium-*/chrome-linux64/chrome``, the NEWEST build by number) → a system Chrome or
+    Chromium on PATH → None. Installed via `uv run playwright install chromium`.
+
+    The PATH step is what makes `chromium_available` honest: it used to report a bare `chromium`
+    on PATH as available while `make_browser_options` set no binary and pydoll probed only for
+    `google-chrome`, so the launch failed and the rung read as broken rather than unequipped.
     """
     override = os.environ.get("RUNG_CHROME_PATH") or os.environ.get("DISPENSARY_CHROME_PATH")
     if override and Path(override).is_file():
@@ -28,10 +32,25 @@ def _resolve_chrome_path() -> Path | None:
         roots.append(Path(playwright_root))
     roots.append(Path.home() / ".cache" / "ms-playwright")
     for root in roots:
-        candidates = sorted(root.glob("chromium-*/chrome-linux64/chrome"))
+        # By build NUMBER: as strings, "chromium-999" sorts after "chromium-1099".
+        candidates = sorted(root.glob("chromium-*/chrome-linux64/chrome"), key=_playwright_build)
         if candidates:
             return candidates[-1]
+    for name in _SYSTEM_CHROMES:
+        found = shutil.which(name)
+        if found:
+            return Path(found)
     return None
+
+
+#: System binaries tried, in order, when no override and no Playwright build is found.
+_SYSTEM_CHROMES = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+
+
+def _playwright_build(path: Path) -> int:
+    """The build number of a Playwright ``chromium-<n>`` directory (-1 if it has none)."""
+    match = re.search(r"chromium-(\d+)", str(path))
+    return int(match.group(1)) if match else -1
 
 
 # Resolved once at import; None if no bundled Chromium is found (pydoll then probes a system Chrome).
@@ -46,16 +65,14 @@ def chromium_available() -> bool:
     the `Unequipped` outcome. Splitting it that way was not a preference; `test_import_layering`
     refused the version that imported `access` from here, correctly.
     """
-    return (CHROME_PATH is not None
-            or shutil.which("google-chrome") is not None
-            or shutil.which("chromium") is not None)
+    return CHROME_PATH is not None
 
 
 def make_browser_options(headless: bool = True) -> ChromiumOptions:
     """Return ChromiumOptions configured for this environment.
 
-    Sets an explicit `binary_location` only when a Chromium binary was resolved; otherwise
-    pydoll probes for a system Chrome.
+    Sets `binary_location` to the resolved binary — the same one `chromium_available` reports —
+    and leaves it unset only when none was found.
     """
     opts = ChromiumOptions()
     if CHROME_PATH is not None:

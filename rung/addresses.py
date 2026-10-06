@@ -234,8 +234,23 @@ _UNIT_PREFIX = re.compile(
     # `#?` before the unit token: "Unit #101 3342 Parsons Road NW" puts a hash INSIDE the unit, and
     # `[\w-]+` cannot match it, so the whole prefix failed and the address went unparsed.
     # Trailing `[-,]?`: "UNIT 3170R - 5850 88 AVE NE" separates unit from number with a dash.
-    r"^\s*(?:(?:BAY|SUITE|STE|UNIT|APT|APARTMENT|BLDG|BUILDING|FL|FLOOR|RM|ROOM|#)\s*\.?\s*"
-    r"#?[\w-]+\s*[-,]?\s*)+",
+    #
+    # The keyword ends on a word boundary and the longer spelling is tried first: with `FL` ahead of
+    # `FLOOR` and no boundary, "Floor 2, 123 Main St" matched `FL`, ate "OOR" as the unit and read
+    # house 2. And a hyphen continues the unit token only when what follows is NOT a whole number:
+    # in "Suite 100-5221 46 St" the unit is 100 and 5221 is the house (the unit-left convention
+    # `_UNIT_DASH` documents), but `[\w-]+` swallowed "100-5221" and read house 46.
+    r"^\s*(?:(?:(?:BAY|SUITE|STE|UNIT|APARTMENT|APT|BUILDING|BLDG|FLOOR|FL|ROOM|RM)\b|#)\s*[.\-]?\s*"
+    r"#?\w+(?:-(?![0-9]+\s)\w+)*\s*[-,]?\s*)+",
+    re.IGNORECASE,
+)
+# A unit AFTER the street ("3220 5 Ave NE #110", "123 Main St, Unit 4"): not part of the street's
+# identity, and left in, it became part of the street key, which then matched no reference row.
+# A keyword unit must carry a digit, and neither `BAY` nor `FL` is a keyword here: a street can end
+# in one ("200 Bay St"), and Florida's state roads are written "FL A1A".
+_UNIT_SUFFIX = re.compile(
+    r"\s+(?:#\s*\w+|(?:SUITE|STE|UNIT|APARTMENT|APT|BUILDING|BLDG|FLOOR|ROOM|RM)\b"
+    r"\s*#?\s*\w*\d\w*)\s*$",
     re.IGNORECASE,
 )
 # "4A-1861 …" / "1005-401 …": a leading unit joined to the house number by a hyphen. The unit is on
@@ -279,6 +294,8 @@ def parse_address(address: str | None) -> tuple[int, str] | None:
     text = _UNIT_DASH.sub("", text)
     text = re.sub(r"[.,]", " ", text)
     text = " ".join(text.split())
+    while (stripped := _UNIT_SUFFIX.sub("", text)) != text:
+        text = stripped
     m = _HOUSE_NUM.match(text)
     if not m:
         return None

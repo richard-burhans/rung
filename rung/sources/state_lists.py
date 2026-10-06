@@ -139,16 +139,22 @@ async def _fetch(session, url: str) -> str | None:
     return resp.text
 
 
+class LandingUnreachable(Exception):
+    """The landing page itself could not be fetched, so the crawl learned nothing about the list."""
+
+
 async def find_list_url(landing_url: str) -> ListCandidate | None:
     """Crawl from a landing page to find the best dispensary-list resource.
 
     One hop from the landing page; if the best link is only middling, descend one
-    more hop into it and re-harvest, keeping the global best.
+    more hop into it and re-harvest, keeping the global best. Returns None when the page was read
+    and holds no list link; raises :class:`LandingUnreachable` when the page could not be read —
+    two different answers, because only the first says anything about the stored list URL.
     """
     async with make_session() as session:
         html = await _fetch(session, landing_url)
         if html is None:
-            return None
+            raise LandingUnreachable(landing_url)
         candidates = _harvest(html, landing_url)
         best = candidates[0] if candidates else None
 
@@ -227,13 +233,21 @@ async def run_find_lists(
         landing = landings.get(state.abbr)
         if not landing:
             return state, None, "no-landing"
-        cand = await find_list_url(landing)
+        try:
+            cand = await find_list_url(landing)
+        except LandingUnreachable:
+            return state, None, "unreachable"
         return state, cand, "found" if cand else "none"
 
     crawled = await asyncio.gather(*(_one(s) for s in to_crawl))
     for state, cand, status in crawled:
         if cand is not None:
             set_state_list(conn, state.abbr, cand.url, cand.list_type, "found")
+        elif status == "unreachable":
+            # The landing page did not answer, which says nothing about the list. Writing `none`
+            # here (as `--force` did until 2026-10-06) nulled a good list URL on one transient 503,
+            # and extraction — which filters on the URL — silently stopped refreshing the state.
+            print(f"  {state.abbr}: landing page unreachable — the stored list URL is kept")
         else:
             set_state_list(conn, state.abbr, None, None, "none")
         results.append((state, cand, status))

@@ -24,6 +24,7 @@ import itertools
 import json
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Literal, get_args
 from urllib.parse import parse_qs, quote, urljoin, urlparse
@@ -75,15 +76,41 @@ _JUNK_IFRAME_RE = re.compile(
 # that module also serves the company-store extractor, so neither reaches into the other.
 
 
+# A header word that makes the column a fact ABOUT the field, not the field: "Facility Type",
+# "Business License Number", "Store Status". Matched as whole words in what the synonym leaves over.
+_HEADER_QUALIFIERS = frozenset({
+    "type", "status", "class", "category", "date", "number", "no", "num", "#", "id", "count",
+    "hours", "expiration", "expires", "issued", "capacity",
+})
+
+
 def _match_field(header: str) -> str | None:
-    """Map a header cell to a DispensaryRecord field, or None."""
-    h = " ".join(header.lower().split())
-    if not h:
+    """Map a header cell to a DispensaryRecord field, or None.
+
+    A synonym must match WHOLE WORDS — the header itself, its leading or trailing words, or one of
+    its words — and the words it leaves over must not qualify it (`_HEADER_QUALIFIERS`). Until
+    2026-10-06 a bare substring at either end matched, so "Capacity" was a city column and
+    "Facility Type" a name column; since the first matching column wins, "Facility Type" then
+    shadowed the real "Facility Name" and every row was named "Retail".
+    """
+    words = " ".join(header.lower().split()).split()
+    if not words:
         return None
     for field, synonyms in _FIELD_SYNONYMS.items():
         for syn in synonyms:
-            if syn == h or syn in h.split() or h.startswith(syn) or h.endswith(syn):
-                return field
+            syn_words = syn.split()
+            size = len(syn_words)
+            if words[:size] == syn_words:
+                rest = words[size:]
+            elif words[-size:] == syn_words:
+                rest = words[:-size]
+            elif size == 1 and syn in words:
+                rest = [word for word in words if word != syn]
+            else:
+                continue
+            if any(word.strip(".:") in _HEADER_QUALIFIERS for word in rest):
+                continue
+            return field
     return None
 
 
@@ -148,18 +175,22 @@ def _looks_like_name(value: str) -> bool:
     return any(c.isalpha() for c in v)
 
 
-def _infer_name_column(body_rows: list[list[str]]) -> int | None:
+def _infer_name_column(body_rows: list[list[str]], exclude: Collection[int] = ()) -> int | None:
     """Pick the column most likely to hold the dispensary name.
 
     Used when no header cell matched a name synonym (e.g. the header row is a
     section title like "Southern Nevada Retail Stores"). Choose the column whose
     cells are mostly free text and longest on average — names, often with an
-    appended street address, dominate such tables.
+    appended street address, dominate such tables. ``exclude`` is the columns the header already
+    mapped: a street-address column is long free text too, and taking it overwrote its mapping, so
+    every name became the street and the address was lost.
     """
     width = max((len(r) for r in body_rows), default=0)
     best_idx: int | None = None
     best_len = 0.0
     for idx in range(width):
+        if idx in exclude:
+            continue
         cells = [r[idx] for r in body_rows if idx < len(r)]
         named = [c for c in cells if _looks_like_name(c)]
         if not cells or len(named) < max(3, len(cells) * 0.6):
@@ -291,7 +322,7 @@ def _extract_table(table) -> tuple[list[DispensaryRecord], bool]:
     body = rows[1:]
     body_cells = [_row_cells(r) for r in body]
     if not header_named:
-        name_idx = _infer_name_column(body_cells)
+        name_idx = _infer_name_column(body_cells, exclude=col_map.keys())
         if name_idx is None:
             return [], False
         col_map[name_idx] = "name"
@@ -473,9 +504,12 @@ _AZ_COLS = (
     ("status", 42), ("cert", 116), ("estname", 258), ("dba", 420),
     ("street", 515), ("city", 619), ("zip", 694),
 )
+# Header/footer lines. Whole words, and `page` only as "Page <n>" with a 1-3 digit page number: a
+# bare `page` dropped every establishment in Page, AZ, and its ZIP (86040) is five digits. The certificate test runs FIRST in the parser, so a record line is never
+# skipped for a word it happens to carry.
 _AZ_SKIP_RE = re.compile(
     r"certificate number|establishment name|zip code|street address"
-    r"|total licensees|updated|adult use marijuana|licensed marijuana|page",
+    r"|total licensees|\bupdated\b|adult use marijuana|licensed marijuana|\bpage\s+\d{1,3}(?!\d)",
     re.IGNORECASE,
 )
 
@@ -510,9 +544,10 @@ def _extract_az_dhs(content: bytes) -> list[DispensaryRecord]:
                     cells.setdefault(_az_column(word["x0"]), []).append(word["text"])
                 joined = {col: " ".join(parts) for col, parts in cells.items()}
                 line_text = " ".join(joined.values())
-                if _AZ_SKIP_RE.search(line_text):
+                is_record = bool(_AZ_CERT_RE.match(joined.get("cert", "").replace(" ", "")))
+                if not is_record and _AZ_SKIP_RE.search(line_text):
                     continue
-                if _AZ_CERT_RE.match(joined.get("cert", "").replace(" ", "")):
+                if is_record:
                     current = {col: joined.get(col, "") for col in fields}
                     rows.append(current)
                 elif current is not None:  # wrapped continuation of the current record
@@ -697,9 +732,40 @@ def _extract_il_idfpr(content: bytes) -> list[DispensaryRecord]:
 _DBA_HEADERS = frozenset({"dba", "d/b/a", "doing business as", "trade name", "trade_name"})
 
 
+_XLSX_MAGIC = b"PK\x03\x04"
+_XLS_MAGIC = b"\xd0\xcf\x11\xe0"
+
+
+def _sheet_cell(value: object) -> str:
+    """A spreadsheet cell as roster text: blank for empty, a whole float without its ``.0``."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _spreadsheet_rows(content: bytes) -> list[list[str]] | None:
+    """The first sheet of an .xlsx or .xls workbook as rows of text, or None if ``content`` is not
+    one. A spreadsheet link is classified ``csv``; decoded as text, the binary workbook raised a
+    swallowed csv error and the state silently got no roster."""
+    if content.startswith(_XLSX_MAGIC):
+        book = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        sheet = book.worksheets[0]
+        return [[_sheet_cell(v) for v in row] for row in sheet.iter_rows(values_only=True)]
+    if content.startswith(_XLS_MAGIC):
+        sheet = xlrd.open_workbook(file_contents=content).sheet_by_index(0)
+        return [[_sheet_cell(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
+                for r in range(sheet.nrows)]
+    return None
+
+
 def _extract_csv(text: str) -> list[DispensaryRecord]:
-    reader = csv.reader(io.StringIO(text))
-    rows = list(reader)
+    return _extract_rows(list(csv.reader(io.StringIO(text))))
+
+
+def _extract_rows(rows: list[list[str]]) -> list[DispensaryRecord]:
+    """Header-mapped rows (a CSV, or a spreadsheet's first sheet) → records."""
     if len(rows) < 2:
         return []
     # The storefront brand (a DBA / trade-name column) is preferred over the legal/business name
@@ -900,6 +966,18 @@ def _kml_point(placemark) -> tuple[float | None, float | None]:
 
 # ── ArcGIS ───────────────────────────────────────────────────────────────────
 
+class ExtractionFailed(Exception):
+    """A roster handler CRASHED on what the source returned (a malformed payload, an unexpected shape).
+
+    It is this state's failure and nobody else's, so `extract_records` turns any exception from an
+    async handler into this one, and `run_extract_states` records the attempt `failed` WITH the
+    reason and keeps the prior rows — the way it treats `PartialRoster`. It used to escape `gather`
+    and kill every state's extraction; returning ``[]`` instead (the first fix) would have recorded
+    the crash as an `empty` capture, i.e. "the source yielded nothing" — a failure of ours written
+    down as a fact about the source (the 2026-10-06 whole-tree review).
+    """
+
+
 class PartialRoster(Exception):
     """A roster handler stopped AFTER it had gathered some rows: what it holds is a fragment.
 
@@ -1037,6 +1115,13 @@ async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]
                     f"arcgis layer {base}: page at offset {offset} failed after {len(records)} "
                     f"row(s) ({type(exc).__name__})") from exc
             break
+        if not isinstance(payload, dict):
+            # A 200 carrying JSON `null` or a list is not a page; treat it as the page failing.
+            if records:
+                raise PartialRoster(
+                    f"arcgis layer {base}: page at offset {offset} was not a JSON object after "
+                    f"{len(records)} row(s)")
+            break
         features = payload.get("features") or []
         if not features and payload.get("exceededTransferLimit") and records:
             raise PartialRoster(
@@ -1050,7 +1135,11 @@ async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]
             break
         offset += len(features)
         if page == _ARCGIS_PAGE_CAP - 1:
-            print(f"  arcgis: hit page cap ({_ARCGIS_PAGE_CAP}) — layer may be truncated")
+            # The server still says more rows remain and we will not ask for them: what we hold is
+            # a fragment, and returning it would replace the full stored roster with it.
+            raise PartialRoster(
+                f"arcgis layer {base}: hit the {_ARCGIS_PAGE_CAP}-page cap with the server still "
+                f"flagging more rows, after {len(records)} row(s)")
     return records
 
 
@@ -1372,6 +1461,30 @@ async def _extract_sk_slga(url: str, session) -> list[DispensaryRecord]:
 
 # ── British Columbia LCRB establishments map (list_type='bc_lcrb') ────────────
 
+def _checked_point(latitude: object, longitude: object) -> tuple[float | None, float | None]:
+    """A source's raw coordinate pair as floats, or ``(None, None)`` when it is not a usable point:
+    non-numeric, out of range, or the 0,0 placeholder. A numeric STRING is accepted and converted —
+    stored raw, it is a text value bound for a float column."""
+    def _num(value: object) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int | float):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return None
+        return None
+
+    lat, lon = _num(latitude), _num(longitude)
+    if lat is None or lon is None:
+        return None, None
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180) or (lat == 0 and lon == 0):
+        return None, None
+    return lat, lon
+
+
 def _bc_lcrb_record(obj: dict) -> DispensaryRecord | None:
     """One LCRB establishment object → a record.
 
@@ -1383,6 +1496,7 @@ def _bc_lcrb_record(obj: dict) -> DispensaryRecord | None:
     name = _clean(obj.get("name"))
     if not name:
         return None
+    latitude, longitude = _checked_point(obj.get("latitude"), obj.get("longitude"))
     return DispensaryRecord(
         source="bc_lcrb", name=name,
         address=_clean(obj.get("addressStreet")),
@@ -1390,7 +1504,7 @@ def _bc_lcrb_record(obj: dict) -> DispensaryRecord | None:
         state="BC",
         zip_code=_clean(obj.get("addressPostal")),
         phone=_clean(obj.get("phone")),
-        latitude=obj.get("latitude"), longitude=obj.get("longitude"),
+        latitude=latitude, longitude=longitude,
     )
 
 
@@ -1628,6 +1742,7 @@ def _ca_dcc_record(lic: dict) -> DispensaryRecord | None:
     name = _clean(lic.get("businessDbaName") or lic.get("businessLegalName"))
     if not name:
         return None
+    latitude, longitude = _checked_point(lic.get("premiseLatitude"), lic.get("premiseLongitude"))
     return DispensaryRecord(
         source="ca_dcc", name=name,
         address=_clean(lic.get("premiseStreetAddress")),
@@ -1635,8 +1750,8 @@ def _ca_dcc_record(lic: dict) -> DispensaryRecord | None:
         state=_clean(lic.get("premiseState")),
         zip_code=_clean(lic.get("premiseZipCode")),
         phone=_clean(lic.get("businessPhone")),
-        latitude=lic.get("premiseLatitude"),
-        longitude=lic.get("premiseLongitude"),
+        latitude=latitude,
+        longitude=longitude,
     )
 
 
@@ -1647,6 +1762,10 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
     box but caps a response at 1000 rows and ignores ?page. So we recursively split
     any box whose totalCount exceeds one page into quadrants until every box fits,
     then dedupe distinct premises.
+
+    The FIRST box failing is the request's own failure and yields []. A SUB-box failing is a
+    hole in the sweep — the other quadrants still return rows — so it raises
+    :class:`PartialRoster` rather than letting the fragment replace the stored roster.
     """
     records: list[DispensaryRecord] = []
     seen: set[tuple[str | None, str | None]] = set()
@@ -1659,7 +1778,15 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
         )
         try:
             payload = (await session.get(q, timeout=60)).json()
-        except Exception:
+        except Exception as exc:
+            if depth:
+                raise PartialRoster(
+                    f"ca_dcc: a sub-box at depth {depth} failed ({type(exc).__name__}) — the sweep "
+                    "would keep a fragment") from exc
+            return
+        if not isinstance(payload, dict):
+            if depth:
+                raise PartialRoster(f"ca_dcc: a sub-box at depth {depth} answered a non-object body")
             return
         data = payload.get("data") or []
         total = (payload.get("metadata") or {}).get("totalCount", len(data))
@@ -1699,27 +1826,42 @@ ListType = Literal[
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
 
 
+_ASYNC_HANDLERS = {
+    "arcgis": _extract_arcgis,
+    "ca_dcc": _extract_ca_dcc,
+    "on_agco": _extract_on_agco,
+    "bc_lcrb": _extract_bc_lcrb,
+    "va_cca": _extract_va_cca,
+    "atlist": _extract_atlist,
+    "sk_slga": _extract_sk_slga,
+}
+
+
 async def extract_records(list_url: str, list_type: ListType | str) -> list[DispensaryRecord]:
-    """Extract dispensary records from a list resource. Returns [] on failure.
+    """Extract dispensary records from a list resource.
+
+    Returns [] when the resource yields nothing. A fragment raises `PartialRoster`, and an async
+    handler that crashes raises `ExtractionFailed` — both reach `run_extract_states`, which records
+    the attempt `failed` with the reason instead of `empty`.
 
     `list_type` should be one of `HANDLED_LIST_TYPES`; an unrecognised value falls through
     to the html table/address-block parser (the same path as `"html"`).
     """
     async with make_session() as session:
-        if list_type == "arcgis":
-            return await _extract_arcgis(list_url, session)
-        if list_type == "ca_dcc":
-            return await _extract_ca_dcc(list_url, session)
-        if list_type == "on_agco":
-            return await _extract_on_agco(list_url, session)
-        if list_type == "bc_lcrb":
-            return await _extract_bc_lcrb(list_url, session)
-        if list_type == "va_cca":
-            return await _extract_va_cca(list_url, session)
-        if list_type == "atlist":
-            return await _extract_atlist(list_url, session)
-        if list_type == "sk_slga":
-            return await _extract_sk_slga(list_url, session)
+        handler = _ASYNC_HANDLERS.get(str(list_type))
+        if handler is not None:
+            # The async handlers fetch and parse in one step, so a malformed payload (an ArcGIS
+            # layer answering JSON `null`) raised from inside them, escaped, and `gather` re-raised
+            # it — every state's extraction died unpersisted. A fragment is still the caller's to
+            # hear (`PartialRoster`); anything else is this one state's failure (`ExtractionFailed`).
+            try:
+                return await handler(list_url, session)
+            except PartialRoster:
+                raise
+            except Exception as exc:
+                raise ExtractionFailed(
+                    f"{list_type} extraction failed for {list_url}: {type(exc).__name__}: {exc}"
+                ) from exc
         if list_type in ("lookup",):
             return []  # dynamic search front ends — caller uses AI fallback
         try:
@@ -1748,6 +1890,9 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
             if list_type == "on_agco_csv":
                 return _extract_on_agco_csv(resp.text)
             if list_type == "csv":
+                sheet_rows = _spreadsheet_rows(resp.content)
+                if sheet_rows is not None:
+                    return _extract_rows(sheet_rows)
                 return _extract_csv(resp.text)
             if list_type == "kml":
                 return _extract_kml(resp.content)
@@ -1848,6 +1993,36 @@ class ExtractResult:
     method: str  # 'static' | 'render' | 'ai' | 'none'
 
 
+def _fill_from_geocode_cache(conn: db.DBConn, records: list[DispensaryRecord]) -> int:
+    """Fill each record's missing lat/lon, ZIP and city from the geocode cache, in memory, by
+    `apply_geocode_cache`'s rules: lat+lon only together and only when the record has none; ZIP and
+    city each only when empty; a value the source published is never replaced. Returns the number
+    of records changed."""
+    from rung.db import get_geocode_cache
+    from rung.text import geocode_query
+
+    keyed = [
+        (record, query) for record in records
+        if (record.latitude is None or not record.zip_code or not record.city) and record.address
+        and (query := geocode_query(record.address, record.city, record.state, record.zip_code))
+    ]
+    cached = get_geocode_cache(conn, sorted({query for _, query in keyed}))
+    changed = 0
+    for record, query in keyed:
+        if query not in cached:
+            continue
+        lat, lon, zip_code, city = cached[query]
+        before = (record.latitude, record.zip_code, record.city)
+        if record.latitude is None and lat is not None and lon is not None:
+            record.latitude, record.longitude = lat, lon
+        if not record.zip_code and zip_code:
+            record.zip_code = zip_code
+        if not record.city and city:
+            record.city = city
+        changed += before != (record.latitude, record.zip_code, record.city)
+    return changed
+
+
 def record_roster_observations(
     conn: db.DBConn, state: str, records: list[DispensaryRecord],
     *, now: datetime.datetime | None = None,
@@ -1931,6 +2106,11 @@ async def run_extract_states(
             # REASON travels with it, because "empty" is exactly what this state is not.
             print(f"  {rec.abbr}: roster extraction was PARTIAL and is discarded — {exc}")
             return rec, [], str(exc)
+        except ExtractionFailed as exc:
+            # The same treatment for a crash: the prior rows stand and the attempt is `failed` with
+            # the reason — never `empty`, which would say the source had nothing to give.
+            print(f"  {rec.abbr}: roster extraction FAILED — {exc}")
+            return rec, [], str(exc)
         return rec, records, None
 
     raw = await asyncio.gather(*(_extract(r) for r in targets))
@@ -1988,9 +2168,6 @@ async def run_extract_states(
             for record in records:
                 record.state = rec.abbr  # scope rows to the state for idempotent replace
                 insert_dispensary(conn, record)
-            if record_history:
-                # Store-lifecycle history from the fresh roster, same commit as the replace.
-                record_roster_observations(conn, rec.abbr, records)
             # Put back what the DELETE above just destroyed. The source republishes only what the
             # source publishes, so for a roster carrying a street but no ZIP (NV, IL, UT, MD…) the
             # geocoded lat/lon/ZIP/city are gone — and `compare`'s keys BOTH carry the ZIP, so the
@@ -1998,6 +2175,13 @@ async def run_extract_states(
             # anticipated failure (an empty scrape wiping good rows) and never saw this one. Costs no
             # geocoder calls; same commit as the replace, so the rows are never briefly un-enriched.
             apply_geocode_cache(conn, "dispensaries", rec.abbr)
+            if record_history:
+                # Store-lifecycle history from the fresh roster, same commit as the replace — and
+                # AFTER the cache, with the same values filled onto the records: a roster with no
+                # ZIP keys no location until the cache restores one, so history taken from the raw
+                # records skipped exactly the rows the cache was about to make identifiable.
+                _fill_from_geocode_cache(conn, records)
+                record_roster_observations(conn, rec.abbr, records)
         if record_history:
             # What was ATTEMPTED this cycle, beside what was seen: an empty extraction writes no
             # observations (the guard above keeps the prior rows), and without this row the

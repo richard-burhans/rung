@@ -39,11 +39,29 @@ def _collect_brand_state_pairs(
         canonical = canonicalize(extract_brand(name, city), alias_map)
         state_val = state if state else "Unknown"
         groups[(normalize_brand(canonical), state_val)][canonical] += 1
+    # A group the companies table ALREADY holds keeps the spelling it was seeded under. The dominant
+    # spelling can change between runs ("ZenLeaf" most frequent on one roster, "Zen Leaf" after a
+    # refresh), and the insert conflicts on the exact name, so a changed winner used to insert a
+    # SECOND company for the same operator. Measured 2026-10-06: 858 (folded brand, state) keys were
+    # already held by two or more rows.
+    existing = _existing_spellings(conn)
     pairs = {
-        (dominant_spelling(spellings), state_val)
-        for (_, state_val), spellings in groups.items()
+        (existing.get((brand_key, state_val)) or dominant_spelling(spellings), state_val)
+        for (brand_key, state_val), spellings in groups.items()
     }
     return sorted(pairs)
+
+
+def _existing_spellings(conn: db.DBConn) -> dict[tuple[str, str], str]:
+    """``{(normalize_brand(name), state): name}`` for the companies already seeded — the earliest row
+    when several fold together. Empty when the table does not exist yet."""
+    row = conn.execute("SELECT to_regclass('companies')").fetchone()
+    if row is None or row[0] is None:
+        return {}
+    spellings: dict[tuple[str, str], str] = {}
+    for name, state in conn.execute("SELECT canonical_name, state FROM companies ORDER BY id"):
+        spellings.setdefault((normalize_brand(name), state), name)
+    return spellings
 
 
 def create_companies_table(conn: db.DBConn) -> None:

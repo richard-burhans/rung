@@ -114,6 +114,26 @@ def test_partial_roster_keeps_rows_skips_ai_and_records_failed(monkeypatch):
     assert attempt == [("failed", "page 3 of 7 failed")]
 
 
+def test_a_crashed_extraction_keeps_rows_and_records_failed_not_empty(monkeypatch):
+    """A handler crash is this state's FAILURE: the prior rows stand and the attempt is `failed`
+    with the reason. Recorded `empty` it would say the source had nothing to give (the 2026-10-06
+    whole-tree review)."""
+    conn = _conn()
+    _add_state(conn, "ZZ")
+    db.insert_dispensary(conn, DispensaryRecord(source="html", name="A", state="ZZ"))
+    conn.commit()
+
+    async def crash(url, list_type):
+        raise extract.ExtractionFailed("arcgis extraction failed: AttributeError")
+
+    monkeypatch.setattr(extract, "extract_records", crash)
+    _run(conn, only={"ZZ"}, record_history=True)
+    assert _count(conn, "ZZ") == 1
+    attempt = conn.execute(
+        "SELECT outcome, error FROM store_capture_attempts WHERE state = 'ZZ'").fetchall()
+    assert attempt == [("failed", "arcgis extraction failed: AttributeError")]
+
+
 def test_a_genuinely_empty_roster_still_reaches_the_ai_tier(monkeypatch):
     """ANTI-VACUITY: the gate is specific to a refused fragment. An empty extraction is what the
     AI tier is FOR, and its attempt is recorded under the AI's own result."""

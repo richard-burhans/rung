@@ -397,14 +397,22 @@ async def _search_state(
     return coverage
 
 
-async def _check_url(url: str) -> tuple[bool, int | None]:
-    """HEAD-request a URL; returns (is_ok, status_code).
+#: Statuses with which a server refuses the HEAD METHOD rather than the page; a GET decides those.
+_HEAD_REFUSED = frozenset({403, 405, 501})
 
-    Uses curl_cffi — lightweight, no browser needed for a simple liveness check.
+
+async def _check_url(url: str) -> tuple[bool, int | None]:
+    """HEAD-request a URL, falling back to GET when the server refuses HEAD; (is_ok, status_code).
+
+    Uses curl_cffi — lightweight, no browser needed for a simple liveness check. Many government
+    servers answer HEAD with 403/405 while serving the page to a GET; HEAD alone read those as dead
+    and sent the state to a search that, when the engines were blocked, erased its URL.
     """
     try:
         async with make_session() as session:
             resp = await session.head(url, timeout=15, allow_redirects=True)
+            if resp.status_code in _HEAD_REFUSED:
+                resp = await session.get(url, timeout=15, allow_redirects=True)
         ok = resp.status_code < 400
         return ok, resp.status_code
     except Exception:
@@ -554,17 +562,24 @@ async def run_state_coverage(
 
     async with Chrome(options=make_browser_options()) as browser:
         google_backend.tab = await browser.start()
-        for i, (state, _stored) in enumerate(to_search, 1):
+        for i, (state, stored) in enumerate(to_search, 1):
             cov = await _search_state(backends, state)
+            found = bool(cov.best_url)
+            if not found and stored is not None and stored.best_url:
+                # A search that found nothing (the engines blocked, or no result) is not evidence
+                # the stored URL is gone. Keep it; the `failed` status records the check failed.
+                cov.best_url = stored.best_url
+                cov.source_type = stored.source_type
+                cov.gov_urls = cov.gov_urls or stored.all_gov_urls
             results.append(cov)
 
-            last_checked = datetime.datetime.now(datetime.UTC).isoformat() if cov.best_url else None
-            check_status = "ok" if cov.best_url else "failed"
+            last_checked = datetime.datetime.now(datetime.UTC).isoformat() if found else None
+            check_status = "ok" if found else "failed"
             rec = _coverage_to_record(cov, now, check_status, last_checked)
             upsert_state_program(conn, rec)
             conn.commit()
 
-            label = "✓" if cov.best_url else "?"
+            label = "✓" if found else "?"
             print(f"  [{i:>2}/{len(to_search)}] {state.name:<22} {label}", flush=True)
 
     return results
