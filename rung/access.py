@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import psycopg
 
-from rung import db
+from rung import db, http
 
 # A method runner is given the connection, the target key, and a hint carrying the
 # resource_url/params that worked last time (both None on first run). It returns the
@@ -61,7 +61,8 @@ MethodRunner = Callable[[db.DBConn, str, MethodHint], Awaitable[MethodResult]]
 # ⚠ SO IT IS THE ONE OUTCOME THAT WRITES NO ROW. Recording it per target would be the same defect in
 # a politer word: the verdict belongs to the machine, and a machine-shaped verdict stored against a
 # target survives the machine being fixed. The ladder continues, `access_health` stays honest, and
-# `rung/browser.py::require_browser` is how a rung says it.
+# `rung/access.py::require_browser` is how a rung says it — it lives HERE, at tier 2, which is the
+# whole point: `browser.py` reports the fact and may not import upward to act on it.
 
 
 class MethodOutcome(Exception):
@@ -217,8 +218,12 @@ class ReExploreGovernor:
         if walked >= self.host_hard:
             return 0.0
         if walked >= self.host_soft:
-            # Throttling begins once host_soft full walks are spent (the +1 makes
-            # the host_soft-th walk already throttled, not the host_soft+1-th).
+            # Throttling begins once host_soft full walks are SPENT — so with host_soft=3 the
+            # first three walks run at 1.0 and the FOURTH is the first throttled (0.857 at
+            # host_hard=9). ⚠ The parenthetical here used to say the opposite ("the +1 makes the
+            # host_soft-th walk already throttled, not the host_soft+1-th"), contradicting both the
+            # sentence before it and the code. The `+1` is there so the first throttled walk is
+            # damped rather than passing through at exactly 1.0, not to shift which walk it is.
             return 1.0 - (walked - self.host_soft + 1) / (self.host_hard - self.host_soft + 1)
         return 1.0
 
@@ -243,6 +248,14 @@ def _hint_for(row: tuple | None) -> MethodHint:
     return resource_url, params
 
 
+#: `http.FetchRefused.kind` -> the outcome it means. `http` spells the kinds as strings because it may
+#: not import this module; this map is the only translation, and `tests/test_access_outcomes.py` pins
+#: that every kind `http` can produce has an entry.
+_OUTCOME_FOR_KIND: dict[str, type[MethodOutcome]] = {
+    "blocked": Blocked, "unavailable": Unavailable, "broken": Broken,
+}
+
+
 async def _attempt(
     method: AccessMethod, conn: db.DBConn, target_key: str, hint: MethodHint
 ) -> tuple[list, str | None, dict | None, MethodOutcome | None]:
@@ -253,12 +266,19 @@ async def _attempt(
     This used to let an unexpected exception propagate, on the reasoning that a rung which crashes has
     not told us why it failed and swallowing it would recreate the very silence this vocabulary exists
     to break. The reasoning was right and the code did the opposite, because `run_target` has exactly two
-    callers and BOTH wrap it in a bare `except Exception: return None, []` — so the propagated crash was
+    callers in the PIPELINE (`company_stores`, `menus`) and both wrap it in a bare
+    `except Exception: return None, []` — so the propagated crash was
     caught one frame up, dropped on the floor, and the target ended the run with **no `access_methods`
     row at all**: not broken, not failed, nothing. It read as *this target has no method* — the precise
     mistake the comment at the top of this file says has bitten the project three times. And the ladder
     below the crashing rung never ran: one shape-changed payload in a CHEAP rung silently disabled every
     EXPENSIVE rung that would have worked.
+
+    ⚠ "exactly two callers" IS THE PIPELINE COUNT, NOT THE TREE'S. There are four: the two named
+    above, plus `examples/custom_domain.scrape_city` and `examples/paper_fetcher.fetch_one`, and
+    neither example wraps — a crash there propagates and aborts the caller's drain. The premise this
+    argument rests on holds for the pipeline callers, which is what it is for; the unqualified
+    "exactly two" was simply false, and `tests/test_access_outcomes.py` repeats it.
 
     So we name it. An exception a rung did not raise deliberately means WE are wrong — a dead URL, a
     changed payload shape, a missing credential — which is `Broken`'s definition. It is recorded as
@@ -270,6 +290,11 @@ async def _attempt(
         records, resource_url, params = await method.run(conn, target_key, hint)
     except MethodOutcome as outcome:
         return [], None, None, outcome
+    except http.FetchRefused as refused:
+        # A fetcher that may not import this vocabulary said what happened through the tier-0 helper;
+        # its `kind` is this module's word, spelled there so the two cannot disagree. Translate, and
+        # record it like any deliberate signal — the ladder continues.
+        return [], None, None, _OUTCOME_FOR_KIND[refused.kind](str(refused))
     except asyncio.CancelledError:
         raise
     except Exception as exc:

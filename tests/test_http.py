@@ -76,7 +76,12 @@ def _imported_modules(node: ast.stmt) -> list[str]:
     # Only absolute `from x import ...` (level 0) names a foreign package; relative imports
     # (level > 0) are in-package and never a third-party HTTP client.
     if isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
-        return [node.module]
+        # ⚠ THE SUBMODULE SPELLING COUNTS TOO. Returning only `node.module` meant
+        # `from urllib import request` bound `"urllib"` — in neither `BANNED_IMPORTS` nor the
+        # root set — while `import urllib.request` and `from urllib.request import urlopen` were
+        # both caught. A live, non-impersonating, un-proxied `request.urlopen` in a scraper module
+        # passed all eight tests of this file. The three spellings must be one rule.
+        return [node.module] + [f"{node.module}.{alias.name}" for alias in node.names]
     return []
 
 
@@ -287,3 +292,184 @@ def test_set_impersonation_opts_into_a_profile(monkeypatch) -> None:
     session = http.make_session()
     assert session.kwargs["impersonate"] == "chrome124"
     assert "headers" not in session.kwargs  # impersonation supplies the fingerprint, not an honest UA
+
+
+#: Scripts that fetch PUBLIC data (census, geocoders, a price index, the public build) and are right
+#: to send the honest client. Every other script that opens a session through `make_session` must
+#: load the overlay first — its plugin registrar is what turns TLS impersonation on, and without it
+#: Dutchie and Jane answer a Cloudflare "Attention Required" page from EVERY vantage, which on
+#: 2026-09-25 read as a platform-wide wall until the user agent was checked.
+HONEST_BY_DESIGN_SCRIPTS = frozenset({
+    "backfill_geocode.py", "build_public_repo.py", "build_us_counties_geojson.py", "fetch_acs_ice.py",
+    "fetch_acs_income.py", "fetch_priceofweed.py", "geocode_tracts.py", "school_geocode_error.py",
+    # Its one request is to OUR OWN published status page (`_check_published_dashboard`).
+    "coverage_healthcheck.py",
+    # RULED 2026-10-06: the POS census stays on the honest client, as an instrument. Its NJ and PA
+    # samples of 2026-08-01 were taken that way, and the cost was then measured by re-probing the
+    # 31 non-Dutchie stores it recorded `blocked` with the impersonating client: 21 still refused
+    # (RISE's sites answer 403 to any client from this address; 22 of the 33 blocked rows are RISE),
+    # 9 answered with no platform signature, ONE became an observation — 1 of 517 sampled stores.
+    # The blocks are host-level, not client-level, so switching clients would change what the
+    # instrument sends mid-series for nothing it measures. `docs/analysis/pos_census.md` limitation
+    # 2 carries the numbers.
+    "pos_census.py",
+})
+
+#: Scripts that open a session WITHOUT loading the overlay and that nobody has ruled on. Found
+#: 2026-10-04, when this guard learned to follow a session opened one call away (see
+#: `_session_opening_calls`). An entry is named rather than fixed when the fix would change a
+#: measurement — `pos_census.py` sat here from 2026-10-04 until its ruling on 2026-10-06 (above:
+#: honest by design, the cost measured at one observation in 517). Empty means every script that
+#: opens a session either loads the overlay or has a stated reason not to.
+#:
+#: Two-sided: a new unruled script fails, and so does an entry here that has since been fixed.
+SESSION_SCRIPTS_AWAITING_A_RULING: frozenset[str] = frozenset()
+
+_SESSION_FACTORIES = frozenset({"make_session", "make_sync_session"})
+
+
+def _session_opening_calls() -> frozenset[str]:
+    """Every call that hands a script an open session: the two factories, plus each PUBLIC overlay
+    function whose body calls one (`cf_clearance.session_for`, `pos_census.run_census`, the stage
+    runners). Derived by AST, so a new wrapper is covered the day it is written.
+
+    The guard used to key on the literal `make_session` in the script's own source, so a script
+    that reached a session one call away — `cf_clearance.session_for(...)` — was skipped
+    (audit P-41i). Private helpers are left out: `_one` and `_run` are common local names in
+    scripts and would match by coincidence. In the public build there is no overlay and this is
+    just the two factories.
+    """
+    names = set(_SESSION_FACTORIES)
+    overlay = REPO_ROOT / "rung_intel" / "rung_intel"
+    if overlay.is_dir():
+        for path in sorted(overlay.glob("*.py")):
+            for function in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if function.name.startswith("_"):
+                    continue
+                for node in ast.walk(function):
+                    callee = node.func if isinstance(node, ast.Call) else None
+                    called = (callee.id if isinstance(callee, ast.Name)
+                              else callee.attr if isinstance(callee, ast.Attribute) else None)
+                    if called in _SESSION_FACTORIES:
+                        names.add(function.name)
+    return frozenset(names)
+
+
+def _opens_a_session(source: str, calls: frozenset[str]) -> bool:
+    import re
+
+    return any(re.search(rf"\b{re.escape(name)}\(", source) for name in calls)
+
+
+def test_a_script_that_opens_a_session_loads_the_overlay_or_is_honest_by_design() -> None:
+    if not SCRIPTS_DIR.is_dir():
+        pytest.skip(_NO_ALLOWLIST_TREE)
+    calls = _session_opening_calls()
+    unguarded = set()
+    for path in sorted(SCRIPTS_DIR.glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if not _opens_a_session(source, calls) or path.name in HONEST_BY_DESIGN_SCRIPTS:
+            continue
+        if "registry.load_plugins(" not in source and "set_impersonation(" not in source:
+            unguarded.add(path.name)
+    new = sorted(unguarded - SESSION_SCRIPTS_AWAITING_A_RULING)
+    assert not new, (
+        f"scripts opening a session without registry.load_plugins(): {new} — add the call at the "
+        "top of main(), or name the script in HONEST_BY_DESIGN_SCRIPTS if it fetches public data")
+    fixed = sorted(SESSION_SCRIPTS_AWAITING_A_RULING - unguarded)
+    assert not fixed, f"{fixed} no longer need a ruling — drop them from SESSION_SCRIPTS_AWAITING_A_RULING"
+    stale = sorted(name for name in HONEST_BY_DESIGN_SCRIPTS if not (SCRIPTS_DIR / name).exists())
+    assert not stale, f"HONEST_BY_DESIGN_SCRIPTS names scripts that no longer exist: {stale}"
+
+
+def test_the_session_guard_follows_a_session_opened_one_call_away() -> None:
+    """ANTI-VACUITY for the derivation, on synthetic source: the literal-only key passed this."""
+    calls = frozenset({"make_session", "session_for"})
+    assert _opens_a_session("session = cf_clearance.session_for(url)", calls)
+    assert _opens_a_session("async with make_session() as s:", calls)
+    assert not _opens_a_session("# see make_session in the docs\nrows = load()", calls)
+    if (REPO_ROOT / "rung_intel" / "rung_intel").is_dir():
+        derived = _session_opening_calls()
+        assert {"session_for", "cleared_session", "run_store_menus"} <= derived, sorted(derived)
+        assert not any(name.startswith("_") for name in derived)
+
+
+# ── the shared fetch (P-37): one request, one refusal rule, one parse ──────────────────────────────
+# Seven pure helpers carried a private copy of these twelve lines until 2026-10-06; two had drifted.
+# `tests/test_fetcher_shape.py` keeps the next copy out. These pin the shared one's verdicts.
+
+
+class _FetchResponse:
+    def __init__(self, status: int, text: str, headers: dict | None = None) -> None:
+        self.status_code, self.text, self.headers = status, text, headers or {}
+
+
+class _FetchSession:
+    def __init__(self, response: object = None, *, raises: BaseException | None = None) -> None:
+        self.response, self.raises, self.calls = response, raises, []
+
+    async def get(self, url: str, **kwargs: object) -> object:
+        self.calls.append((url, kwargs))
+        if self.raises is not None:
+            raise self.raises
+        return self.response
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_get_json_returns_the_parsed_payload_and_forwards_the_request_arguments() -> None:
+    from rung import http
+
+    session = _FetchSession(_FetchResponse(200, '{"a": [1, 2]}'))
+    payload = _run(http.get_json(
+        session, "https://x.test/api", params={"p": 1}, headers={"Accept": "application/json"},
+        timeout=7, expect="object"))
+    assert payload == {"a": [1, 2]}
+    url, kwargs = session.calls[0]
+    assert url == "https://x.test/api"
+    assert kwargs == {"params": {"p": 1}, "headers": {"Accept": "application/json"}, "timeout": 7,
+                      "allow_redirects": True}
+    assert _run(http.get_json(_FetchSession(_FetchResponse(200, "[1]")), "u", timeout=1)) == [1]
+
+
+@pytest.mark.parametrize(
+    ("session", "kind", "why"),
+    [
+        (_FetchSession(_FetchResponse(403, "nope")), "blocked", "refused by the host"),
+        (_FetchSession(_FetchResponse(404, "{}")), "unavailable", "no record at this address"),
+        (_FetchSession(_FetchResponse(200, "<!doctype html><html>Just a moment")), "blocked", "interstitial"),
+        (_FetchSession(_FetchResponse(200, "not json at all")), "broken", "non-JSON body"),
+        (_FetchSession(_FetchResponse(200, "[1, 2")), "broken", "JSONDecodeError"),
+        (_FetchSession(raises=OSError("connection reset")), "broken", "OSError"),
+        (_FetchSession(raises=ValueError("bad url")), "broken", "ValueError"),
+        (_FetchSession(_FetchResponse(200, "[1]")), "broken", "non-object JSON"),
+    ],
+)
+def test_get_json_refuses_with_the_shared_vocabulary(session, kind: str, why: str) -> None:
+    """403 → blocked, 404 → unavailable, HTML-200 → blocked, non-JSON → broken, transport → broken,
+    and `expect="object"` refuses a list — the verdicts the seven private copies each re-derived."""
+    from rung import http
+
+    with pytest.raises(http.FetchRefused) as refused:
+        _run(http.get_json(session, "https://x.test/api", timeout=1, expect="object"))
+    assert refused.value.kind == kind
+    assert why in str(refused.value)
+
+
+def test_get_text_judges_the_status_only_and_returns_the_page() -> None:
+    from rung import http
+
+    page = "<!doctype html><html><body>a server-rendered menu</body></html>"
+    assert _run(http.get_text(_FetchSession(_FetchResponse(200, page)), "u", timeout=1)) == page
+    with pytest.raises(http.FetchRefused) as refused:
+        _run(http.get_text(_FetchSession(_FetchResponse(429, page)), "u", timeout=1))
+    assert refused.value.kind == "blocked"
+    with pytest.raises(http.FetchRefused) as refused:
+        _run(http.get_text(_FetchSession(raises=OSError("reset")), "u", timeout=1))
+    assert refused.value.kind == "broken"

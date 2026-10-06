@@ -68,6 +68,28 @@ def test_each_signal_persists_its_own_status(signal, expected) -> None:
     assert _status_of(conn, "m") == expected
 
 
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [("blocked", "blocked"), ("unavailable", "unavailable"), ("broken", "broken")],
+)
+def test_a_fetchers_refusal_persists_as_the_outcome_its_kind_names(kind, expected) -> None:
+    """A pure helper may not import this vocabulary; it raises `http.FetchRefused` with a kind, and
+    the engine translates it here — so a 403 inside a fetcher records `blocked`, not `failed`."""
+    import asyncio
+
+    from rung import http
+
+    conn = _conn()
+    refused = http.FetchRefused(kind, f"HTTP something from https://x.test ({kind})", status=403)
+    ladder = [_method("m", 0, _raises(refused)), _method("n", 1, _yields([_Record()]))]
+    winner, records = asyncio.run(access.run_target(conn, "t", "k", ladder))
+
+    assert _status_of(conn, "m") == expected
+    assert winner == "n" and len(records) == 1      # the ladder kept walking
+    rows = {r[0]: r for r in db.get_access_methods(conn, "t", "k")}
+    assert "https://x.test" in rows["m"][6]            # the message reached the error column
+
+
 def test_silence_records_failed_and_never_unavailable() -> None:
     # The whole asymmetry. A rung that returns nothing without explaining itself is UNKNOWN, not a
     # statement about the world. Calling it 'unavailable' is how you stop looking at a broken rung.

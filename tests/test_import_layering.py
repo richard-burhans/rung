@@ -33,7 +33,7 @@ INTEL_PKG = "rung_intel"
 # not know about is not a tier" gap the overlay note below calls out).
 # `licensing` and `operators` are the same shape as `brands`: YAML crosswalk readers with zero
 # internal imports.
-BASE = frozenset({"models", "http", "browser", "text", "addresses", "normalize", "static_source",
+BASE = frozenset({"models", "http", "html", "browser", "text", "addresses", "normalize", "static_source",
                   "brands", "licensing", "operators", "geocode_rnf", "geocode_points"})  # tier 0
 TIER1 = frozenset({"db", "queue"})            # tier 1 — persistence + work queue
 TIER2 = frozenset({"access"})                 # tier 2 — access-method engine
@@ -43,7 +43,7 @@ CLI = "cli"
 # The complete public-core module set — the carve-out is "done" when the public package holds
 # exactly these and nothing proprietary leaks back in.
 PUBLIC_MODULES = frozenset({
-    "models", "http", "browser", "fx", "text", "brands", "normalize", "addresses", "static_source",
+    "models", "http", "html", "browser", "fx", "text", "brands", "normalize", "addresses", "static_source",
     "db", "reference_db", "queue", "access", "rate_limit", "rate_gate", "registry", "cli",
     "seed_companies",
     "state_search", "state_lists", "extract", "ai_fallback", "homepage_discovery", "dedupe",
@@ -74,20 +74,62 @@ PUBLIC_MODULES = frozenset({
 # NOTHING internal. Each briefly carried a dead `from rung.http import make_session` re-export (noqa
 # F401, no consumer — every caller imports make_session from rung.http directly); removing it made them
 # true zero-import pure helpers, so they join this set instead of forming an unguarded "http-only" tier.
+#
+# ⚠ ONE EXCEPTION, ADDED 2026-09-24, AND IT IS THE PUBLIC TIER-0 `http` ONLY. A pure helper may import
+# `rung.http` for `raise_for_refusal` / `refused_by` / `FetchRefused` — the shared classification of a
+# failed request that every one of these modules used to hand-write as `if status != 200: return
+# None`, which is how a 403 and an empty menu came to be the same row. `http` itself imports nothing
+# internal (it is a BASE leaf), so the graph stays trivially acyclic, and the outcome vocabulary stays
+# where it was: `rung.access` translates `FetchRefused.kind`, the helpers never see `Blocked`. This is
+# NOT the dead re-export the paragraph above retired — that import had no consumer; this one is the
+# consumer. Anything wider (db, the overlay, `access` itself) is still refused below.
+#
+# A SECOND, ADDED 2026-10-06 (audit P-37): `rung.html`, the tier-0 leaf for the page-structure and
+# value primitives the helpers used to copy (two identical `_float`s folded into `html.as_float`
+# first; the scanners and the embedded-state extractor follow a publish decision). It is admitted on
+# the same argument as `http` — a BASE leaf that imports nothing internal, so the graph stays
+# trivially acyclic — and for the same reason: a primitive each helper hand-writes is one that drifts
+# (dispense's brace scanner is not string-aware; sweedpos's is). Still nothing wider than these two.
+_PURE_ALLOWED_CORE = frozenset({"http", "html"})
 PURE_HELPERS = frozenset({"cresco", "curaleaf", "dutchie", "dutchie_plus", "fluent", "hytiva",
                           "jane", "sweedpos", "trulieve",
                           "canna_cabana", "delta9", "storerocket", "shopify", "woocommerce",
-                          "hybris_occ", "sqdc", "cannabis_nb", "shopapps_locator"})
+                          "hybris_occ", "sqdc", "cannabis_nb", "shopapps_locator", "tymber", "waio",
+                          "breadstack", "hifyre", "flowhub", "treez", "tendy", "dispense"})
 # The two aggregator sweeps stay lean: they import only the overlay's `aggregator_http` (the private
 # anti-throttle machinery) and at most the public base-layer `http`
 # (the honest `make_session`) — never the heavier catalogs/extractors. Acyclic, just not zero-import.
 AGGREGATOR_HTTP_ONLY = frozenset({"weedmaps", "leafly"})
-_AGG_ALLOWED_CORE = frozenset({"http"})            # the honest session factory (if used)
+# `html` joined on 2026-10-06 (audit P-37): leafly reads a page's embedded state through the
+# shared `html.script_json` instead of its own attribute-order-fragile regex. Same argument as for
+# the pure helpers: a zero-import BASE leaf, so the sweep stays exactly as lean as before.
+_AGG_ALLOWED_CORE = frozenset({"http", "html"})    # the honest session factory + the page parsers
 _AGG_ALLOWED_OVERLAY = frozenset({"aggregator_http"})  # the private anti-throttle module
+# The Stage-3 routing table is its own module (`routing`) so Stage 2 can ask "does any menu rung
+# serve this handle?" without importing Stage 3 (audit P-30). Two bounds keep that true. The first
+# is DERIVED, not a list of Stage-2 modules: NO overlay module may import `menus` except the ones
+# named here, so the next module that reaches for Stage 3 is caught without this file being told
+# about it. `intel_plugin` is the plugin entry point — it registers every stage and must import
+# all of them.
+MENUS_IMPORTERS_ALLOWED = frozenset({"intel_plugin"})
+# The second keeps `routing` from growing back into `menus`: the three operator registries it
+# loads, and the two core persistence modules its predicate reads through.
+_ROUTING_ALLOWED_OVERLAY = frozenset({"shopify", "tymber", "waio"})
+_ROUTING_ALLOWED_CORE = frozenset({"db", "reference_db"})
 
 
-def _py_files(root: Path) -> list[Path]:
-    return [p for p in root.rglob("*.py") if p.name != "__init__.py" and "__pycache__" not in p.parts]
+def _py_files(root: Path, *, skip_init: bool = True) -> list[Path]:
+    """Every module under ``root``.
+
+    ⚠ `skip_init=False` EXISTS BECAUSE THE LEAK GUARD MUST SEE `__init__.py`. Excluding it hid the
+    one file that executes on `import rung` from the public/private contract: a scratch tree whose
+    `rung/__init__.py` read `from rung_intel import tymber` passed all 15 tests, leak guard
+    included. `tests/test_http.py`'s own scanner never excluded it, so the two disagreed about what
+    "every public module" means. Package `__init__.py` files are still skipped for the tier and
+    cycle checks, where a re-export is not a dependency edge.
+    """
+    return [p for p in root.rglob("*.py")
+            if (not skip_init or p.name != "__init__.py") and "__pycache__" not in p.parts]
 
 
 def _public_stems() -> set[str]:
@@ -148,8 +190,22 @@ def _overlay_imports() -> dict[str, dict[str, set[str]]]:
         core: set[str] = set()
         overlay: set[str] = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and not node.level:
+            if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
+                # ⚠ A RELATIVE IMPORT IS AN EDGE. This branch read `and not node.level`, so
+                # `from . import aggregator_http` was dropped on the floor while the identical
+                # absolute form was caught — and BOTH guards below rest on this reader, so a
+                # `PURE_HELPERS` member could take an internal import, and a genuine two-module
+                # cycle could exist, with 15 tests green. The PUBLIC twin `_internal_edges` has
+                # always handled `node.level`; only the overlay reader was asymmetric. The overlay
+                # happens to use no relative imports today, which is exactly why nobody noticed:
+                # the hole was invisible for the same reason it was harmless.
+                if node.level:
+                    # `from . import x` names the modules; `from .x import y` names the module in `mod`.
+                    overlay.update(
+                        n for n in ([mod.split(".")[-1]] if mod else [a.name for a in node.names])
+                        if n in ov)
+                    continue
                 root = mod.split(".")[0]
                 if root == "rung":
                     names = ([a.name for a in node.names]
@@ -172,6 +228,33 @@ def _overlay_imports() -> dict[str, dict[str, set[str]]]:
         overlay.discard(path.stem)
         out[path.stem] = {"core": core, "overlay": overlay}
     return out
+
+
+def test_no_overlay_module_but_the_plugin_imports_the_stage3_menus_module() -> None:
+    """Stage 2 imported `menus` to reach one predicate, which loaded the whole Stage-3 module graph
+    into every Stage-2 process — an edge `ARCHITECTURE.md` did not even record (audit P-30)."""
+    if not INTEL_DIR.exists():
+        pytest.skip("overlay absent — public-repo build")
+    imports = _overlay_imports()
+    offenders = sorted(
+        m for m, edges in imports.items()
+        if "menus" in edges["overlay"] and m not in MENUS_IMPORTERS_ALLOWED)
+    assert not offenders, (
+        f"{offenders} import `rung_intel.menus`. Only {sorted(MENUS_IMPORTERS_ALLOWED)} may: the "
+        "routing table and its predicate live in `rung_intel.routing` — import from there.")
+    # An allowlisted module that no longer imports it is an exemption that outlived its reason.
+    stale = sorted(m for m in MENUS_IMPORTERS_ALLOWED if "menus" not in imports[m]["overlay"])
+    assert not stale, f"{stale} no longer import `menus` — drop them from MENUS_IMPORTERS_ALLOWED"
+
+
+def test_the_routing_module_imports_only_its_registries_and_persistence() -> None:
+    if not INTEL_DIR.exists():
+        pytest.skip("overlay absent — public-repo build")
+    edges = _overlay_imports()["routing"]
+    wide = {"core": sorted(edges["core"] - _ROUTING_ALLOWED_CORE),
+            "overlay": sorted(edges["overlay"] - _ROUTING_ALLOWED_OVERLAY)}
+    assert not wide["core"] and not wide["overlay"], (
+        f"`routing` must stay the small module Stage 2 can afford to import; it now also imports {wide}")
 
 
 def _first_cycle(edges: dict[str, set[str]]) -> list[str] | None:
@@ -219,8 +302,10 @@ def test_public_core_imports_nothing_from_the_private_overlay() -> None:
     open-source core ship and run without the overlay (proprietary stages → registry stubs). The
     CLI reaches the overlay's stages through ``registry.resolve`` (a runtime lookup) and the overlay
     is discovered via the ``rung.plugins`` entry point — neither is a static import."""
+    # `skip_init=False`: `rung/__init__.py` is the one file that executes on `import rung`, so it is
+    # the file this contract most needs to cover — and it was the one file excluded.
     offenders = sorted(
-        str(p.relative_to(REPO_ROOT)) for p in _py_files(PUBLIC_DIR)
+        str(p.relative_to(REPO_ROOT)) for p in _py_files(PUBLIC_DIR, skip_init=False)
         if INTEL_PKG in _imported_roots(p)
     )
     assert not offenders, f"public core statically imports the private overlay: {offenders}"
@@ -359,10 +444,14 @@ def test_overlay_pure_platform_helpers_have_no_internal_imports() -> None:
         pytest.skip("overlay absent — public-repo build")
     imports = _overlay_imports()
     offenders = {
-        m: sorted(imports[m]["core"] | imports[m]["overlay"])
-        for m in PURE_HELPERS if imports.get(m, {}).get("core") or imports.get(m, {}).get("overlay")
+        m: sorted((imports[m]["core"] - _PURE_ALLOWED_CORE) | imports[m]["overlay"])
+        for m in PURE_HELPERS
+        if (imports.get(m, {}).get("core", set()) - _PURE_ALLOWED_CORE)
+        or imports.get(m, {}).get("overlay")
     }
-    assert not offenders, f"pure platform helpers must carry zero internal imports: {offenders}"
+    assert not offenders, (
+        "pure platform helpers may import nothing internal but the tier-0 `http` refusal helper: "
+        f"{offenders}")
 
 
 def test_overlay_aggregator_sweeps_stay_lean() -> None:
@@ -377,7 +466,8 @@ def test_overlay_aggregator_sweeps_stay_lean() -> None:
         or (imports.get(m, {}).get("overlay", set()) - _AGG_ALLOWED_OVERLAY)
     }
     assert not offenders, (
-        "aggregator sweeps may import only public `http` + overlay `aggregator_http`: " f"{offenders}"
+        "aggregator sweeps may import only public `http` and `html` + overlay `aggregator_http`: "
+        f"{offenders}"
     )
 
 
@@ -387,3 +477,76 @@ def test_overlay_internal_import_graph_is_acyclic() -> None:
     edges = {m: d["overlay"] for m, d in _overlay_imports().items()}
     cycle = _first_cycle(edges)
     assert cycle is None, f"overlay import cycle: {' -> '.join(cycle or [])}"
+
+
+# ── `db` forwards the reference API, and its typed block is the only thing keeping that honest ───
+
+def _module_level_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.TypeAlias):
+            names.add(node.name.id)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update((a.asname or a.name).split(".")[0] for a in node.names)
+    return names
+
+
+def _db_forwarding() -> tuple[set[str], set[str], dict[str, set[str]]]:
+    """``(names the TYPE_CHECKING block lists, names db.py defines itself, {db.<name>: files})``
+    over every tree present — the overlay, scripts and examples only when this is not the public build."""
+    repo = REPO_ROOT
+    db_tree = ast.parse((REPO_ROOT / "rung" / "db.py").read_text(encoding="utf-8"))
+    listed: set[str] = set()
+    for node in db_tree.body:
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+            for sub in node.body:
+                if isinstance(sub, ast.ImportFrom) and sub.module == "rung.reference_db":
+                    listed.update(alias.asname or alias.name for alias in sub.names)
+    used: dict[str, set[str]] = {}
+    for root in ("rung", "rung_intel", "scripts", "tests", "examples", "faces"):
+        for path in sorted((repo / root).rglob("*.py")) if (repo / root).is_dir() else []:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            binds_db = any(
+                isinstance(n, ast.ImportFrom) and n.module == "rung"
+                and any(a.name == "db" and a.asname in (None, "db") for a in n.names)
+                for n in ast.walk(tree))
+            if not binds_db:
+                continue
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "db":
+                    used.setdefault(n.attr, set()).add(str(path.relative_to(repo)))
+    return listed, _module_level_names(db_tree), used
+
+
+def test_every_name_reached_through_db_is_typed_or_defined_there() -> None:
+    """`db.__getattr__` forwards ANY name to `reference_db` as `Any`. For a name missing from the
+    TYPE_CHECKING block that silently turns the LiteralString SQL guarantee off — the block's own
+    comment says the four analysis guards were missing from it once. Nothing compared the block
+    with what is actually reached through `db.` (audit P-41f)."""
+    listed, defined, used = _db_forwarding()
+    forwarded = {name: files for name, files in used.items() if name not in defined}
+    assert forwarded, "no `db.<name>` reaches the forwarder — the scan found nothing to check"
+    untyped = {n: sorted(f) for n, f in forwarded.items() if not n.startswith("_") and n not in listed}
+    assert not untyped, (
+        f"reached through `db.` and missing from its TYPE_CHECKING block, so typed `Any`: {untyped}")
+    # A PRIVATE name has no business in that block; reach it where it lives. Four call sites did
+    # until 2026-10-04, one of them a SQL fragment.
+    private = {n: sorted(f) for n, f in forwarded.items() if n.startswith("_")}
+    assert not private, (
+        f"private `reference_db` names reached through `db`'s forwarder: {private} — import them "
+        "from `rung.reference_db`")
+
+
+def test_every_name_the_db_block_lists_exists_in_reference_db() -> None:
+    listed, _, _ = _db_forwarding()
+    ref_tree = ast.parse((REPO_ROOT / "rung" / "reference_db.py").read_text(encoding="utf-8"))
+    missing = sorted(listed - _module_level_names(ref_tree))
+    assert listed, "db.py's TYPE_CHECKING block lists nothing — the parse broke"
+    assert not missing, f"db.py's TYPE_CHECKING block imports names reference_db does not define: {missing}"
+
