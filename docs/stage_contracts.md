@@ -54,7 +54,9 @@ and not their contents.
 - **In:** `state_programs.best_url` (from search-states); `states.yml` `list_url:` overrides.
 - **Out:** `state_programs.list_url/list_type/list_found_at/list_status` ONLY, via
   `db.set_state_list` (reference_db.py). Status: `list_status` found|override|none.
-- **Re-run:** skips states that already have a list unless `--force`; commits per state.
+- **Re-run:** skips states that already have a list unless `--force`; commits per state. A landing
+  page that cannot be fetched raises rather than reading as "no list", so `--force` keeps the stored
+  `list_url` instead of writing NULL and dropping the state from extraction (2026-10-06).
 
 ### scrape-states — `sources/extract.py`
 - **In:** `state_programs.list_url/list_type` (states with a found/override list).
@@ -71,13 +73,17 @@ and not their contents.
     geocoder calls. Enforced across all three delete+reinsert callers by
     `tests/test_roster_replace_restores_geocode.py`.
   - `store_capture_attempts` (one `state_roster` row per state per run: succeeded/empty, or `failed`
-    with the reason when the roster was refused as a fragment — `PartialRoster` — in which case the
-    render and AI tiers are skipped and the prior rows stand) **only under
+    with the reason when the roster was refused as a fragment — `PartialRoster`, which an ArcGIS
+    layer still flagging rows at the page cap and a failed `ca_dcc` sub-box also raise since
+    2026-10-06 — in which case the render and AI tiers are skipped and the prior rows stand; one
+    handler's crash (`ExtractionFailed`) costs that state, never every state in the run, and is
+    recorded `failed` with its reason the same way) **only under
     `--record-history`**, same commit — what was attempted, beside what was seen (Phase 3).
   - `store_locations` + `store_observations` via `extract.record_roster_observations` **only under
     `--record-history`** — the `state_roster` leg of the store-lifecycle history (same shared engine,
     `db.record_location_observations`, as Stage 2's `company_site` leg), appended inside the same
-    non-empty-replace commit. A failed extraction records nothing, so observed absence stays a real
+    non-empty-replace commit, from records the geocode cache has already filled — before 2026-10-06
+    they were recorded from the raw rows, so a no-ZIP roster wrote no history at all. A failed extraction records nothing, so observed absence stays a real
     signal. See `docs/store_history_design.md`.
 - **Re-run:** idempotent per state.
 
@@ -319,6 +325,9 @@ and not their contents.
 - **Out:** stdout report; with `--write`, `store_lifecycle_events` (replace-by-state — a derivation
   may legitimately shrink, so no keep-the-best guard). Needs `--record-history` sweeps to have run —
   with fewer than `--closed-after-cycles` usable cycles it reports `first seen` and nothing else.
+- **Roster lag** is reported only when a roster cycle AFTER the store's last sighting on its own site
+  still lists it — a roster listing older than that sighting says nothing about the closure (2026-10-06).
+  Observation and attempt cycles are both keyed by their UTC date.
 - **Re-run:** idempotent. Same log + same `--closed-after-cycles` → the same rows.
 
 ## 3. Commit discipline
@@ -348,8 +357,13 @@ queue. The `jobs` table (`rung/queue.py`) is its transient companion ("what is b
 worked this run"): status pending|claimed|done|failed, claims via
 `FOR UPDATE SKIP LOCKED`, a partial unique index dedupes live jobs per `(task_type, target_key)`,
 and `requeue_stale` recovers claims from crashed workers at consuming-command startup.
-`requeue_stale` is wall-clock only, so it can't tell a *crashed* worker from a *slow-but-alive*
-one — it would re-`pending` a >60-min job another worker then reclaims. `queue.complete` guards
+`requeue_stale` re-`pending`s a claim only when it is both old AND its lease has lapsed, so a
+heartbeating long job is left alone (until the 2026-10-06 whole-tree review it was wall-clock only,
+and re-`pending`ed a >60-min job another worker then reclaimed). A row it or `reap_expired` fails at
+the attempt cap is stamped `finished_at`, so `prune_completed` can reach it; a TARGETED claim takes
+a just-requeued job at once (the requeue jitter staggers only untargeted claims), and
+`make_claimer` claims targeted keys in the order given, which is how Stage 3's stalest-first order
+reaches the queue. A dedupe claim that raises is completed `failed` rather than left claimed. `queue.complete` guards
 that: it is scoped to the holding worker (`claimed_by = worker AND status = 'claimed'`) and returns
 whether it still held the claim, so the orphaned slow worker's completion is a no-op and it rolls
 back its redundant write rather than clobbering the reclaimer's. The two partitioned data-write

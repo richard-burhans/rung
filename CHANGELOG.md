@@ -19,6 +19,33 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-06 (a whole-tree review)
+
+- **Sizes** (`rung.normalize`): a leading-dot decimal (`.5g`), a fraction of a gram or pound
+  (`1/2 g`, `1/2 lb`) and a compact multipack (`5x0.5g`) are read correctly; they read 5 g, 2 g /
+  896 g and 0.5 g, which put the per-gram price off by up to tenfold.
+- **Effective price in SQL** (`reference_db.EFFECTIVE_VARIANT_PRICE`): an undeclared menu outside a
+  medical-only jurisdiction now prices on the adult-use list, as `normalize.price_channel` does; a
+  NULL comparison had sent it to the lowest of both lists.
+- **State programs**: re-running `search-states` now updates a jurisdiction's `programs`, name, term
+  and agency; the upsert used to keep the first values for ever.
+- **Rosters** (`rung.sources`): a failed sub-box of the California sweep, or an ArcGIS layer still
+  flagging rows at the page cap, is a partial roster and never replaces the stored one; one
+  extractor's crash costs that state only; `find-lists --force` keeps the stored list when the
+  agency page is unreachable; a spreadsheet roster is read as a sheet; header mapping matches whole
+  words; a `HEAD`-refusing server is re-checked with `GET`; roster history is recorded after the
+  geocode cache fills the rows.
+- **Names and addresses**: brand folding never strips `420`/`710` or folds to a bare generic word;
+  trailing units are stripped from street keys; a unit keyword no longer becomes the house number;
+  re-seeding reuses an existing company spelling.
+- **Queue**: requeue requires a lapsed lease; failed rows are stamped and prunable; a targeted claim
+  takes a just-requeued job; targeted keys are claimed in the order given; the heartbeat runs off the
+  event loop; a failing dedupe releases its claim; the two aggregator filters are mutually exclusive.
+- **Elsewhere**: `fetch-fx` is incremental; `replace_company_stores` keeps cached coordinates;
+  `pick_canonical` matches the brand as a whole word; a descending address range is no longer
+  mirrored by the interpolating geocoder; a system Chromium is the binary that launches; the static
+  source requires `state_programs.parquet` and reads `%%` as psycopg does.
+
 ### Added — 2026-10-06
 
 - **`rung.virtual_display`** — an X display for a browser that must run with a window on a box

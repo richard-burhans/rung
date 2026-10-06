@@ -47,7 +47,8 @@ distinct locations — zero false merges.
 ## Operator clustering + canonical choice
 Companies that share any physical store are unioned into **operator clusters** (a second union-find
 over `company_id`). `pick_canonical` chooses the cluster's canonical company — the one whose brand
-appears in the scraped *store names* (Sunnyside's stores are named "Sunnyside …"). Non-canonical
+appears in the scraped *store names* (Sunnyside's stores are named "Sunnyside …") as a WHOLE word,
+with a leading article skipped: a substring test let "The Mint" win on "the" inside "Northern". Non-canonical
 companies' stores get `canonical_company_id` set to the canonical; the operator (canonical) name is
 the scrape/dedup key, the storefront alias is the display label.
 
