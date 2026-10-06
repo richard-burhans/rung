@@ -166,11 +166,20 @@ OFFSET_M = 18.0
 # intersection. Cayo and Talbot (2003) call this the **"corner inset"** (Zandbergen 2009 renames it
 # the "end offset") and report, verified in their own paper rather than through the review: "We found
 # the optimal combination of the street offset and corner inset for the entire sample to be 15 m and
-# 50 m respectively." Zandbergen (2009) is blunt about why the inset is the bigger knob: "the effect
+# 50 m respectively." Zandbergen (2009) says the SIDE OFFSET buys little: "the effect
 # of using a side offset perpendicular to the street segment is very small relative to the error
 # resulting from the incorrect placement ALONG the street segment", and where displacement along the
 # segment is substantial a side offset "may in fact result in decreased positional accuracy".
 # So the along-segment placement is where the error lives, and this is the knob that addresses it.
+#
+# CORRECTED 2026-09-01: this comment said "Zandbergen (2009) is blunt about why the inset is the
+# bigger knob", which over-reads him. He is negative on BOTH knobs, and the sentence about the inset
+# is the one immediately after the side-offset quote above: of Cayo's 50 m optimum, "However, the
+# effect on the positional error distribution was found to be minimal." The inference that the inset
+# is therefore the knob worth having is OURS, and it stands on its own reasoning — along-segment
+# placement is where the error is — not on his authority. The CONSTANT is unaffected: our own --tune
+# grid selected it, which is the right basis, and Cayo's own optimum is 50 m. Only the attribution
+# was wrong.
 #
 # Applied as a fraction of segment length, capped: a literal 50 m dropback would invert a 60 m block.
 #
