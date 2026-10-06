@@ -52,10 +52,22 @@ companies' stores get `canonical_company_id` set to the canonical; the operator 
 the scrape/dedup key, the storefront alias is the display label.
 
 ## Keep-the-best (which row survives a rooftop)
-One row per physical store stays canonical (`canonical_company_id IS NULL`); the rest are folded.
+One row per physical store AND MENU TYPE stays canonical (`canonical_company_id IS NULL`); the rest
+are folded. A store licensed for both programs lists a medical and an adult-use menu, and they are
+two catalogues (24–63% of product names in common, measured 2026-10-06), so `_menu_partitions`
+splits a rooftop whose rows declare BOTH types (`company_stores.menu_type`) into two partitions
+and each keeps a row; an undeclared row at such a rooftop — an aggregator twin — joins the adult-use
+partition, because the aggregators list the adult-use menu and a medical listing is the one that
+says so. A rooftop with one declared type or none is one partition, as it always was.
 The survivor is chosen by `_menu_target_rank` — **prefer the richest-menu handle** (Dutchie /
-first-party > Weedmaps / Leafly), then the canonical company, then a stable id — so a first-party
-store is never demoted to its empty Weedmaps/Leafly twin at the same rooftop. If the kept row won
+first-party > Weedmaps / Leafly), then, within a platform, **the handle that holds a menu snapshot**
+(`db.handles_with_snapshots` — a CURRENT snapshot; a retained one does not count, or a handle
+answering empty would outrank the live sibling that, never kept, was never scraped), then the canonical company, then a stable id — so a first-party
+store is never demoted to its empty Weedmaps/Leafly twin at the same rooftop, and a store's MED
+listing with no menu is not kept over its REC listing holding one. That second term landed
+2026-10-06: the tie within a platform fell to the older row, and eight rooftops had their only
+menu on the folded side (Hatch Addison's 1,475 products under the REC handle, the MED one kept
+empty). A kept handle scraped daily stays kept, because its snapshot is the fresh one. If the kept row won
 without coordinates but a folded sibling has them, the sibling's coords (and a blank address/zip) are
 copied onto the survivor so it still maps. `storefront_name` is stamped from the alias.
 

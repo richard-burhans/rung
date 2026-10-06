@@ -70,6 +70,7 @@ move is localized.
 | `http.py` | Generic curl_cffi session / Chrome impersonation / rate-limiter. |
 | `browser.py` | Generic pydoll/Chrome primitives. |
 | `text.py` | Generic normalizers + identity hash (the *keyword data* it reads is private). |
+| `html.py` | Generic page-structure / value primitives for the per-platform helpers: `as_float`, the string-aware brace scanner, the RSC flight-stream reassembler, `script_json(html, script_id)`. The embedded-state id is passed in by the caller, never written here. |
 | `normalize.py` | Generic numeric/size/terpene normalizers. |
 | `addresses.py` | Generic address-extraction primitives. |
 | `proxy.py` | Generic health-aware proxy pool. |

@@ -19,6 +19,39 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Changed — 2026-08-18 → 2026-10-06 (synced to the public repo 2026-10-06)
+
+The public repo had not been synced for seven weeks; these entries cover what reached it in one
+sync. Each item names the module, so a reader can find it.
+
+- **A refusal is never an empty result** (`rung.http`). `get_json` / `get_text` are the shared
+  fetch: one request, one refusal rule, one parse. A failure raises `FetchRefused` with a kind —
+  `blocked` (we were refused), `broken` (we are wrong) or `unavailable` (the source says no). An
+  edge network's own challenge header (`cf-mitigated`, `x-amzn-waf-action`) makes a response
+  `blocked` whatever its status. A paged walk that fails after its first page raises
+  `TruncatedMenu`, so a fragment is never stored as a shorter list.
+- **`rung.html`** — new tier-0 module for page primitives: the string-aware brace scanner,
+  `script_json`, and the RSC flight-stream reassembler (`flight_text`, with a `strict` mode for
+  callers that turn the stream into a list).
+- **Menu type** (`rung.text.menu_type_of`, `models.*.menu_type`, `rung.sources.dedupe`). A store
+  licensed for both programs lists a medical and an adult-use menu, and they are two catalogues.
+  Dedupe keeps one row per rooftop AND menu type. A listing's name declares its program only in a
+  bracket, after a separator, or as the final word of a name with no separator, so a brand like
+  "Nature Med" declares nothing.
+- **Price channel** (`rung.normalize.price_channel`). A variant's shelf price is its menu's own
+  program list, not the cheaper of the two. An undeclared menu in a medical-only jurisdiction
+  prices on the medical list. `reference_db.EFFECTIVE_VARIANT_PRICE` is the same rule in SQL.
+- **Retained snapshots are marked and bounded** (`reference_db`). A snapshot the empty-result guard
+  kept carries `retained_since`, exposed on `products_normalized`; `current_snapshot_where()` is the
+  predicate for "today's menu". A snapshot kept for 30 days is dropped on the next visit that
+  returns no menu; the history table is untouched.
+- **`queue.retire_orphans`** — fails pending jobs whose target no longer exists, which no
+  target-scoped consumer could otherwise claim.
+- **Stage-1 rosters** (`rung.sources.extract`, `rung.sources.state_search`). Licence numbers and
+  licensed-since dates on `DispensaryRecord`; Illinois's roster PDF read by column position;
+  placeholder and screen-reader-only cell text ignored; a refused partial roster recorded as
+  `failed` rather than as a short roster; Bing's advertisements no longer read as search results.
+
 ### Added
 
 - **`rung.rate_gate` — the waiting half of the cross-worker rate limiter, and the wiring that makes

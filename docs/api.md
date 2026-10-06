@@ -16,7 +16,11 @@ DBConn                                         # = psycopg.Connection; every sig
 `db.create_engine_tables()` builds only the domain-neutral engine tables (jobs, access_methods,
 token_buckets, proxies, proxy_tiers) — your pipeline then creates and writes its own tables directly.
 (`db.create_tables()` also builds the cannabis reference schema via `db.create_reference_tables()`; the
-reference application uses that.)
+reference application uses that.) Both are safe to call at every process start beside live workers:
+on a current schema they read the catalog and ask for no table lock. Give your own start-up DDL the
+same property with `db.add_missing_columns(conn, table, {column: type})`, `db.ensure_index(conn, ddl)`
+and `db.ensure_view(conn, ddl)` — a bare `ALTER TABLE … ADD COLUMN IF NOT EXISTS` or
+`CREATE INDEX IF NOT EXISTS` waits for its lock even when there is nothing to add.
 
 ## `rung.access` — the cost-ranked ladder
 
@@ -54,6 +58,7 @@ queue.claim_next(conn, task_type, worker, target_prefix=None) -> Job | None   # 
 queue.claim_target(conn, task_type, target_key, worker) -> Job | None         # claim one specific job
 queue.complete(conn, job_id, status, *, worker, error=None) -> bool           # worker-scoped; caller commits
 queue.reap_expired(conn, task_type) -> int                     # recover dead-worker leases
+queue.retire_orphans(conn, task_type, live_keys, *, target_prefix, error) -> list[str]   # fail pending jobs whose target is gone
 queue.prune_completed(conn, *, older_than_hours=168) -> int
 
 @dataclass

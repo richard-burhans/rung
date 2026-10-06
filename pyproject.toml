@@ -127,3 +127,17 @@ python-version = "3.13"
 # ignore comments look "unused" — but they are still required whenever the extra is absent. The rule is
 # therefore env-dependent noise here, so silence it; genuine type errors are still error-level.
 unused-ignore-comment = "ignore"
+
+# A local bound only inside a conditional branch, then read unconditionally further down. Off by
+# default in ty 0.0.72; turned ON here because this repository shipped exactly that bug and the gate
+# was blind to it: `build_clean_d1.build()` bound `repairs` only under `if tsv:` and then passed it
+# to `_write_manifest`, so `--parquet` WITHOUT `--tsv` raised `UnboundLocalError` at the manifest
+# write — after the whole multi-million-row copy had run. Every documented invocation passes both
+# flags together, which is precisely why a mode the CLI advertises stayed broken and no test noticed.
+#
+# ⚠ VERIFIED FREE BEFORE ENABLING, not assumed: with the fix reverted, ruff and ty both passed, and
+# with the rule on, ty finds it. Across the eight directories the gate checks the rule reports ZERO
+# today — the 431 hits elsewhere are all in `tests/`, which the gate does not type-check (fake client
+# `**kw` signatures and the `spec.loader.exec_module` idiom). So this costs nothing now and closes the
+# class permanently.
+possibly-unresolved-reference = "error"

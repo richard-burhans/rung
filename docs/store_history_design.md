@@ -92,7 +92,12 @@ it grows.
 key builders, which sit above `db` in the layering) reads the company's **current stored**
 `company_stores` rows (so it heartbeats correctly even when the keep-the-best replace *rejected* a
 low-yield re-scrape — the store is still alive) and applies the write discipline above via the
-shared engine (`db.record_location_observations`, see Phase 0.5).
+shared engine (`db.record_location_observations`, see Phase 0.5). **Except for a company nobody
+could look at** (`company_stores._worth_observing`, 2026-09-25): a row with no homepage runs only
+the geo-sweep, and when that yields nothing its stored rows are a snapshot from a site it no
+longer has — three Curaleaf CT licensee rows kept the closed Hartford store "seen alive" every
+Sunday from 2026-07-05 that way, so no cycle could record the departure. Such a pass records its
+`empty` capture attempt and no observation.
 
 Wired behind the **existing `record_history` flag**, exactly like product history:
 - `run_company_stores(..., record_history=False)` calls `record_store_observations` per company, in
@@ -231,10 +236,43 @@ on the same source, with the same canonical operator, in the same town (`compare
 **Revisit when history matures:** once several states have produced opening/closure pairs, calibrate
 against the real cases and decide whether to collapse.
 
-## OPEN GAP — we record what was SEEN, never what was ATTEMPTED
+## Phase 3 — record what was ATTEMPTED (SHIPPED 2026-09-25; the section below is the gap it closed)
 
-**Status: open, 2026-08-03. This is the ceiling on closure confidence, and more sweep cycles do not
-lift it.**
+`store_capture_attempts` is one row per (cycle, source, operator): `succeeded` (a rung yielded),
+`empty` (attempted, nothing yielded — the prior rows still heartbeat, so it manufactures no absence),
+`failed` (the persist crashed, or — on the roster leg since 2026-10-04 — the source answered with a
+fragment that `extract.PartialRoster` refused; either way nothing was written, and `error` says
+which). Both legs write it under `--record-history`, in
+the same commit as their observations: Stage 2 per company (`company_stores._consume`, on the done
+path AND the crash path), Stage 1 per state per run with no operator (`extract.run_extract_states`).
+An operator with NO row in a cycle that recorded attempts was not attempted — the job was shed by
+the host budget or never claimed — which is the same silence a crash used to leave, now legible.
+
+The derivation (`store_lifecycle.run_store_lifecycle`) reads it as evidence rules, per location:
+
+- **Evidence cycles.** A cycle counts toward a location's absence only when its last operator's
+  attempt that cycle `succeeded` (`_evidence_cycles`). A cycle with no attempt rows at all predates
+  the log and is judged as before. A cycle that recorded attempts but not a successful one for this
+  operator is dropped from THIS operator's history — absent + not captured is our instrument, and
+  the report counts these as `unattempted_absences` rather than letting them accrue toward a closure.
+- **A third confidence grade.** `corroborated` (the operator's other stores were seen in every missed
+  cycle) is unchanged. **`attested`** is new: every missed cycle recorded a `succeeded` capture of
+  the operator — the grade a single-store operator can never earn the other way, which is exactly
+  the 151. `unconfirmed` remains for the rest, and now means "before the log", not "ambiguous by
+  construction".
+- The roster leg keys its attempts on no operator; an `empty` roster cycle drops out of the roster
+  leg's evidence for every location, which the coverage guard could not see when a partial parse
+  kept the cycle populated.
+
+`store_lifecycle_events.confidence` carries the grade; `store-lifecycle` prints how many cycles the
+log covers per source and how many absences it discarded. The first sweep to write the log was the
+one after 2026-09-25's deploy; the `attested` count grows from there and the design notes below say
+why nothing earlier can be reconstructed.
+
+### The gap, as it stood (2026-08-03 → 2026-09-25)
+
+**Status when written: open. This was the ceiling on closure confidence, and more sweep cycles did
+not lift it.**
 
 `store_observations` is a record of stores *observed*. There is no per-cycle record of what was
 *tried*. `record_store_observations` runs after a company's scrape returns, in the same transaction as
@@ -263,11 +301,13 @@ departure**.
 tuples slow the `SKIP LOCKED` scans. So the queue is fast and the history is unreconstructable. That is
 a real trade, not an oversight, but nothing currently records the outcome anywhere durable first.
 
-**What would close it** (unbuilt, in rough order of cost):
+**What would close it** (option 1 is what shipped, as Phase 3 above; 2 and 3 remain unbuilt):
 
 1. Write an **attempt row per (cycle, company, source)** — succeeded / failed / not-scheduled — beside
    the observations. Then absence resolves: absent + attempt-succeeded is a departure; absent +
    attempt-failed is our instrument. This is the smallest change that actually answers the question.
+   *(Shipped. "Not-scheduled" is recorded by its absence: a cycle with attempt rows and none for
+   this operator.)*
 2. Failing that, have `prune-jobs` **archive** capture outcomes into a thin retained table before
    deleting, so the substrate is derivable retrospectively.
 3. Grade `unconfirmed` closures by the operator's *current* `access_methods` state as a weak proxy.
