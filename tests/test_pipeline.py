@@ -71,6 +71,90 @@ def test_preserve_rows_on_empty_extraction(monkeypatch):
     assert results[0].method == "none"
 
 
+def _stub_partial(monkeypatch, reason="page 3 of 7 failed"):
+    async def fake(url, list_type):
+        raise extract.PartialRoster(reason)
+    monkeypatch.setattr(extract, "extract_records", fake)
+
+
+def _ai_sentinel(monkeypatch) -> list[str]:
+    """Replace the AI tier with a recorder that WOULD install a roster of its own."""
+    from rung.sources import ai_fallback
+
+    called: list[str] = []
+
+    async def fake(url, source_tag="ai"):
+        called.append(url)
+        return [DispensaryRecord(source="ai", name="Hallucinated Store", address="9 Nowhere")]
+    monkeypatch.setattr(ai_fallback, "extract_with_ai", fake)
+    return called
+
+
+def test_partial_roster_keeps_rows_skips_ai_and_records_failed(monkeypatch):
+    """Audit P-35. A roster refused as a fragment looked merely EMPTY to the later tiers, so with
+    `--ai` the AI extractor ran and its rows REPLACED the roster the refusal existed to keep; and
+    the attempt was recorded `empty`, which says the source yielded nothing."""
+    conn = _conn()
+    _add_state(conn, "ZZ")
+    for nm in ("A", "B", "C"):
+        db.insert_dispensary(conn, DispensaryRecord(source="html", name=nm, state="ZZ"))
+    conn.commit()
+    _stub_partial(monkeypatch, "page 3 of 7 failed")
+    called = _ai_sentinel(monkeypatch)
+
+    results = _run(conn, only={"ZZ"}, use_ai=True, record_history=True)
+
+    assert called == [], "the AI tier ran on a state whose roster was refused, not empty"
+    assert _count(conn, "ZZ") == 3
+    names = {r[0] for r in conn.execute("SELECT name FROM dispensaries WHERE state = 'ZZ'").fetchall()}
+    assert names == {"A", "B", "C"}
+    assert (results[0].count, results[0].method) == (0, "none")
+    attempt = conn.execute(
+        "SELECT outcome, error FROM store_capture_attempts WHERE state = 'ZZ'").fetchall()
+    assert attempt == [("failed", "page 3 of 7 failed")]
+
+
+def test_a_genuinely_empty_roster_still_reaches_the_ai_tier(monkeypatch):
+    """ANTI-VACUITY: the gate is specific to a refused fragment. An empty extraction is what the
+    AI tier is FOR, and its attempt is recorded under the AI's own result."""
+    conn = _conn()
+    _add_state(conn, "ZZ")
+    _stub_extract(monkeypatch, [])
+    called = _ai_sentinel(monkeypatch)
+
+    results = _run(conn, only={"ZZ"}, use_ai=True, record_history=True)
+
+    assert called == ["http://example/list"]
+    assert (results[0].count, results[0].method) == (1, "ai")
+    attempt = conn.execute(
+        "SELECT outcome, error FROM store_capture_attempts WHERE state = 'ZZ'").fetchall()
+    assert attempt == [("succeeded", None)]
+
+
+def test_partial_roster_is_not_offered_to_the_render_tier(monkeypatch):
+    """The DEFENSIVE half. No handler that raises `PartialRoster` serves a renderable list_type
+    today, so this cannot happen in production — the stub raises from `html` to show the guard
+    holds if one ever does. A guard nothing pins is one a refactor removes."""
+    conn = _conn()
+    _add_state(conn, "ZZ", list_url="http://example/refused")   # list_type "html": renderable
+    _add_state(conn, "YY", list_url="http://example/empty")     # an ordinary empty html state
+    rendered: list[str] = []
+
+    async def fake_extract(url, list_type):
+        if url.endswith("/refused"):
+            raise extract.PartialRoster("refused")
+        return []
+
+    async def fake_render(renderable, extracted, methods):
+        rendered.extend(r.abbr for r in renderable)
+
+    monkeypatch.setattr(extract, "extract_records", fake_extract)
+    monkeypatch.setattr(extract, "_render_empty_targets", fake_render)
+    _run(conn, only={"ZZ", "YY"}, use_render=True)
+
+    assert rendered == ["YY"], "the empty state is rendered; the refused one never is"
+
+
 def test_list_columns_not_clobbered_by_state_upsert():
     conn = _conn()
     _add_state(conn, "ZZ", list_url="http://kept/list", list_type="pdf")

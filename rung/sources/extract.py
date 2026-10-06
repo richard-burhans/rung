@@ -20,6 +20,7 @@ import csv
 import datetime
 import html
 import io
+import itertools
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -121,8 +122,20 @@ def _record_from_values(source: str, values: dict[str, str | None]) -> Dispensar
 
 # ── HTML tables ──────────────────────────────────────────────────────────────
 
+# Screen-reader-only text is part of a cell's DOM and not of its meaning: Florida's MMTC page wraps
+# every licence-letter link in `<span class="sr-only">(opens in new tab)</span>`, and 24 roster rows
+# were named "Ayr Cannabis Dispensary(opens in new tab)" until 2026-09-24 — each then failed to
+# match its own operator's stores and surfaced as a "possible closure".
+_HIDDEN_CELL_TEXT = "span.sr-only, span.visually-hidden, .screen-reader-text"
+
+
 def _row_cells(tr) -> list[str]:
-    return [(c.text() or "").strip() for c in tr.css("td, th")]
+    cells = []
+    for cell in tr.css("td, th"):
+        for hidden in cell.css(_HIDDEN_CELL_TEXT):
+            hidden.decompose()
+        cells.append((cell.text() or "").strip())
+    return cells
 
 
 def _looks_like_name(value: str) -> bool:
@@ -178,14 +191,34 @@ def _split_name_address(value: str) -> tuple[str, str | None]:
     return value.strip(), None
 
 
+# A cell that SAYS it holds nothing: Florida's operator table fills its blank columns with "n/a",
+# which mapped onto `phone` and made 49 address-less licensees read as fully located rows.
+_PLACEHOLDER_VALUES = frozenset({"n/a", "na", "-", "—", "–", "none", "null", "tbd", "n.a.", "not applicable"})
+
+
+def _present(value: str | None) -> bool:
+    return bool(value) and value.strip().lower() not in _PLACEHOLDER_VALUES
+
+
 def _location_fraction(records: list[DispensaryRecord]) -> float:
-    """Share of records carrying any location signal (address/city/zip/phone)."""
+    """Share of records carrying any REAL location signal (address/city/zip/phone) — a placeholder
+    such as "n/a" or "-" in one of those cells is not a signal."""
     if not records:
         return 0.0
     located = sum(
-        1 for r in records if r.address or r.city or r.zip_code or r.phone
+        1 for r in records
+        if _present(r.address) or _present(r.city) or _present(r.zip_code) or _present(r.phone)
     )
     return located / len(records)
+
+
+def _rooftop_fraction(records: list[DispensaryRecord]) -> float:
+    """Share of records that place a STORE somewhere — address, city or zip. A phone is a contact,
+    not a rooftop: 17 of Florida's 49 licensed operators list one, and none of them is a store."""
+    if not records:
+        return 0.0
+    placed = sum(1 for r in records if _present(r.address) or _present(r.city) or _present(r.zip_code))
+    return placed / len(records)
 
 
 def _street_fraction(cells: list[str]) -> float:
@@ -297,12 +330,24 @@ def _extract_html(html: str) -> list[DispensaryRecord]:
     tree = HTMLParser(html)
     aggregated: list[DispensaryRecord] = []
     seen: set[tuple[str | None, ...]] = set()
+    tables: list[tuple[list[DispensaryRecord], float]] = []
     for table in tree.css("table"):
         records, header_named = _extract_table(table)
         if not records:
             continue
         if not header_named and _location_fraction(records) < 0.5:
             continue
+        tables.append((records, _rooftop_fraction(records)))
+    # A LICENSEE table beside a STORE table is not a second store list. Florida's MMTC page carries
+    # both: 49 licensed operators (name + licence number, no address) above 781 dispensing
+    # locations. The header-named rule trusted the first outright, so every operator became a
+    # roster row with no rooftop, which compare then reported as a store the operator had closed.
+    # When any table on the page places its rows at a rooftop, a table that places almost none of
+    # its own is the other kind of list and is dropped; a page whose only table is address-less
+    # (NY's legal-entity licensees) is unchanged, because there is nothing better on it.
+    if any(placed >= 0.5 for _, placed in tables):
+        tables = [(records, placed) for records, placed in tables if placed >= 0.2]
+    for records, _placed in tables:
         for record in records:
             # Dedup on the full identity, not just (name, address): operators
             # with many locations often share a name and have no street address
@@ -485,6 +530,168 @@ def _extract_az_dhs(content: bytes) -> list[DispensaryRecord]:
     return records
 
 
+# ── Illinois IDFPR 'Combined License List' PDF (list_type='il_idfpr') ─────────
+# IDFPR publishes one PDF combining three lists; only the first, "Active Adult Use Dispensing
+# Organization Licenses" (289 on 2026-09-24), is a store roster — the other two are conditional
+# licences with no storefront. Its table is borderless and every cell wraps: the licence holder
+# and the dispensary name run over two or three lines, and the address column holds the street,
+# then "City, IL 60060", then the phone. The generic pdfplumber path turned each wrapped line into
+# a roster row, so 111 of 248 Illinois rows were fragments like "of the Quad Cities," and "LLC"
+# with no address. Like az_dhs, words are bucketed into columns by x-position; a record is closed
+# by the PHONE line in the address column, which every entry ends with. The section boundaries
+# come from the PDF's own table of contents on page 1, not from a page count.
+_IL_COLS = (("holder", 0), ("name", 140), ("address", 245), ("date", 390), ("credential", 475))
+_IL_PHONE_RE = re.compile(r"^\(\d{3}\)\s*\d{3}-\d{4}$")
+_IL_CITY_RE = re.compile(r"^(.+?),\s*(?:IL|Illinois)\s+(\d{5})(?:-\d{4})?$", re.IGNORECASE)
+_IL_SKIP_RE = re.compile(
+    r"license holder|dispensary name|address & phone|issuance date|credential number"
+    r"|total number of|highlighted in|bolded were|idpfr\.illinois|governor|secretary|director"
+    r"|pritzker|treto|lindsay|^page \d+|active adult use dispensing",
+    re.IGNORECASE,
+)
+_IL_TOC_RE = re.compile(r"(ACTIVE ADULT USE|ORIGINAL LOTTERY|SECL CONDITIONAL)[^\d]*?(\d+)\s*$",
+                        re.IGNORECASE | re.MULTILINE)
+
+
+def _il_column(x0: float) -> str:
+    column = _IL_COLS[0][0]
+    for name, start in _IL_COLS:
+        if x0 >= start - 4:
+            column = name
+    return column
+
+
+def _il_section_pages(toc_text: str) -> tuple[int, int | None]:
+    """``(first page, first page of the next section)`` of the adult-use list, 1-based, from the TOC.
+
+    Falls back to "page 2 onward" when the TOC cannot be read, so a re-formatted cover page degrades
+    to over-reading the conditional lists (rows without a phone never close, so they are dropped)
+    rather than to reading nothing.
+    """
+    starts = {label.upper()[:6]: int(page) for label, page in _IL_TOC_RE.findall(toc_text)}
+    first = starts.get("ACTIVE", 2)
+    following = [p for label, p in starts.items() if label != "ACTIVE" and p > first]
+    return first, (min(following) if following else None)
+
+
+_IL_ANCHOR_RE = re.compile(r"AUDO", re.IGNORECASE)   # every adult-use entry carries one -AUDO credential
+_IL_STREET_SUFFIX_RE = re.compile(
+    r"\b(?:st|ave|rd|blvd|dr|hwy|highway|pkwy|ln|ct|pl|plaza|way|route|rte|road|street|avenue"
+    r"|boulevard|drive|lane|court|circle|cir|trail|trl|terrace|ter|square|sq|loop|pike|parkway)\.?$",
+    re.IGNORECASE,
+)
+_IL_UNIT_RE = re.compile(r"^(?:#\S+|ste\.?|suite|unit|bldg\.?|building|[a-z]|\d+[a-z]?|[a-z]\d+)$", re.IGNORECASE)
+_IL_PHONE_ANYWHERE_RE = re.compile(r"(?:\(\d{3}\)\s*-?\s*|\b\d{3}-)\d{3}\s*-\s*\d{4}")
+
+
+def il_idfpr_records(pages: list[list[dict]]) -> list[DispensaryRecord]:
+    """The adult-use roster from the words of its pages — ``[{text, x0, top}, …]`` per page.
+
+    Every entry carries exactly one ``…-AUDO`` credential, drawn at the entry's vertical middle, so
+    the credentials are the ANCHORS: each line of the table belongs to the anchor nearest it, and
+    one record is one anchor. (Two earlier cuts closed a record on its phone line, then on a
+    vertical gap; the first lost 83 of 289 entries into their neighbours because a phone is not on
+    every entry, the second split 289 into 318 because the gaps are not uniform. The anchor count
+    IS the entry count, which is the invariant a parser of this table should rest on.) Split from
+    the PDF reading so a captured page of words is a fixture.
+    """
+    records: list[DispensaryRecord] = []
+    for words in pages:
+        lines: dict[int, list[dict]] = {}
+        for word in words:
+            lines.setdefault(round(float(word["top"]) / 3), []).append(word)
+        parsed: list[tuple[float, dict[str, str]]] = []
+        for key in sorted(lines):
+            line_words = sorted(lines[key], key=lambda w: float(w["x0"]))
+            cells: dict[str, list[str]] = {}
+            for word in line_words:
+                cells.setdefault(_il_column(float(word["x0"])), []).append(str(word["text"]))
+            joined = {column: " ".join(parts) for column, parts in cells.items()}
+            if _IL_SKIP_RE.search(" ".join(joined.values())):
+                continue
+            parsed.append((min(float(w["top"]) for w in line_words), joined))
+        anchors = [top for top, joined in parsed if _IL_ANCHOR_RE.search(joined.get("credential", ""))]
+        if not anchors:
+            continue
+        entries: list[dict[str, list[str]]] = [{column: [] for column, _ in _IL_COLS} for _ in anchors]
+        # Between two anchors the boundary is the WIDEST vertical gap between consecutive lines —
+        # the whitespace the table draws between entries — not the midpoint: a wrapped name's last
+        # line or a zip on its own line sits nearer the next anchor than its own, and "nearest
+        # anchor" filed 39 of 289 addresses with their neighbours.
+        boundaries: list[float] = []
+        for lower, upper in itertools.pairwise(anchors):
+            between = [top for top, _ in parsed if lower < top <= upper]
+            gaps = [(after - before, before) for before, after in itertools.pairwise(between)]
+            boundaries.append(max(gaps)[1] if gaps else (lower + upper) / 2)
+        for top, joined in parsed:
+            index = sum(1 for boundary in boundaries if top > boundary)
+            for column, text in joined.items():
+                entries[index][column].append(text)
+        records.extend(record for record in map(_il_record, entries) if record is not None)
+    return records
+
+
+def _il_split_address(lines: list[str]) -> tuple[str | None, str | None, str | None, str | None]:
+    """``(street, city, zip, phone)`` from an entry's address-column lines, in any wrapping.
+
+    The street and "City, IL 60060" may share a line or split across two, and a long city may
+    wrap onto the zip line ("993 E Rollins Rd Round" / "Lake Beach, IL 60073"), so the non-phone
+    lines are joined and the city is what follows the last street suffix (past any unit token).
+    """
+    text = " ".join(lines)
+    phone_match = _IL_PHONE_ANYWHERE_RE.search(text)
+    phone = re.sub(r"\s*-\s*", "-", phone_match.group(0)).replace(")-", ") ") if phone_match else None
+    if phone_match:
+        text = (text[:phone_match.start()] + text[phone_match.end():])
+    # Source quirks, verbatim from the 2026-09-24 list: "Tel: (TBD)", a bare "TBD", "Tel:" with
+    # nothing after it. None of them is an address token.
+    text = re.sub(r"\s*\bTel:?\s*(?:\(TBD\))?\s*$|\s+TBD\s*$", "", text.strip(), flags=re.IGNORECASE).strip()
+    # A trailing 1–2 digit token after the zip is a FOOTNOTE marker ("IL 60707 2"), not data.
+    match = re.search(
+        r"^(.*?),?\s*(?:(?:IL|Illinois)\.?,?\s*)?(\d{5})(?:\s*-\s*\d{4})?(?:\s+\d{1,2})?\s*$",
+        text, re.IGNORECASE)
+    if not match:
+        return (text or None), None, None, phone
+    before, zip_code = match.group(1).strip().rstrip(","), match.group(2)
+    tokens = before.split()
+    cut = None
+    for index in range(len(tokens) - 1, -1, -1):
+        if _IL_STREET_SUFFIX_RE.match(tokens[index]):
+            cut = index + 1
+            break
+    if cut is None:
+        # no recognisable suffix: everything before the comma the source itself drew is the street
+        street, _, city = before.rpartition(",")
+        return (street.strip() or before or None), (city.strip() or None), zip_code, phone
+    while cut < len(tokens) and _IL_UNIT_RE.match(tokens[cut]):
+        cut += 1
+    street, city = " ".join(tokens[:cut]).rstrip(","), " ".join(tokens[cut:]).strip(", ")
+    return (street or None), (city or None), zip_code, phone
+
+
+def _il_record(cells: dict[str, list[str]]) -> DispensaryRecord | None:
+    street, city, zip_code, phone = _il_split_address(cells["address"])
+    name = _clean(" ".join(cells["name"]).rstrip("*")) or _clean(" ".join(cells["holder"]))
+    if not name:
+        return None
+    return DispensaryRecord(
+        source="il_idfpr", name=name, address=_clean(street) if street else None,
+        city=city, zip_code=zip_code, phone=phone,
+        licence_number=_clean(" ".join(cells["credential"])) or None,
+    )
+
+
+def _extract_il_idfpr(content: bytes) -> list[DispensaryRecord]:
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        first, stop = _il_section_pages(pdf.pages[0].extract_text() or "")
+        last = (stop or len(pdf.pages) + 1) - 1
+        pages = [
+            [{"text": w["text"], "x0": w["x0"], "top": w["top"]} for w in page.extract_words()]
+            for page in pdf.pages[first - 1:last]
+        ]
+    return il_idfpr_records(pages)
+
+
 # ── CSV ──────────────────────────────────────────────────────────────────────
 
 _DBA_HEADERS = frozenset({"dba", "d/b/a", "doing business as", "trade name", "trade_name"})
@@ -527,25 +734,66 @@ def _extract_csv(text: str) -> list[DispensaryRecord]:
     return records
 
 
-# ── Colorado MED 'Stores' Google Sheet CSV (list_type='co_med') ──────────────
-# The CO MED publishes its licensed stores as a Google Sheet (exported as CSV). Columns:
-# License Number, Facility Name (legal entity), DBA (storefront brand), Facility Type,
-# Street, City, ZIP Code, ... The generic CSV path would pick "Facility Name" (legal) for
-# the name because it precedes "DBA"; this handler prefers the DBA brand (like az_dhs).
+# ── Colorado MED licensed stores, Google Sheet (list_type='co_med') ──────────
+# The CO MED publishes its licensed stores as ONE Google Sheet with TWO tabs, `Medical` (271 rows on
+# 2026-09-24) and `Retail` (654). Columns on both: License Number, Facility Name (legal entity), DBA
+# (storefront brand), Facility Type, Street, City, ZIP Code, … The generic CSV path would pick
+# "Facility Name" (legal) for the name because it precedes "DBA"; this handler prefers the DBA
+# brand (like az_dhs).
+#
+# ⚠ UNTIL 2026-09-24 THIS READ THE CSV EXPORT, WHICH IS THE FIRST TAB ONLY. Colorado's roster was
+# the 271 medical stores against 824 stores we hold — a 31% "completeness" that measured the export
+# format, not the state. The list URL is now the XLSX export, every sheet is read, and a rooftop
+# licensed under both programs (the common case: one store, two licences) is ONE roster row —
+# the Retail row wins, because this is a store roster and not a licence ledger. The CSV form is
+# still accepted so a text export keeps working.
+_CO_STORE_TYPES = frozenset({"medical marijuana store", "retail marijuana store"})
 
-def _extract_co_med(text: str) -> list[DispensaryRecord]:
-    reader = csv.DictReader(io.StringIO(text))
-    records: list[DispensaryRecord] = []
-    for row in reader:
-        lower = {(k or "").strip().lower(): v for k, v in row.items()}
-        name = _clean(lower.get("dba")) or _clean(lower.get("facility name"))
+
+def _co_rows(content: bytes | str) -> list[dict[str, str]]:
+    """Every row of every sheet (xlsx) or of the one CSV, as ``{lower header: value}`` dicts."""
+    if isinstance(content, bytes) and content[:2] == b"PK":
+        book = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+        rows: list[dict[str, str]] = []
+        for sheet in book.worksheets:
+            lines = sheet.iter_rows(values_only=True)
+            header = [str(h or "").strip().lower() for h in next(lines, ())]
+            if "facility name" not in header:
+                continue
+            for values in lines:
+                row = {key: ("" if v is None else str(v).strip()) for key, v in zip(header, values, strict=False)}
+                if any(row.values()):
+                    rows.append(row)
+        return rows
+    text = content.decode("utf-8", "replace") if isinstance(content, bytes) else content
+    return [{(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+            for row in csv.DictReader(io.StringIO(text))]
+
+
+def _extract_co_med(content: bytes | str) -> list[DispensaryRecord]:
+    by_rooftop: dict[tuple[str, str], DispensaryRecord] = {}
+    order: list[tuple[str, str]] = []
+    for row in _co_rows(content):
+        facility_type = row.get("facility type", "").lower()
+        if facility_type and facility_type not in _CO_STORE_TYPES:
+            continue
+        name = _clean(row.get("dba")) or _clean(row.get("facility name"))
         if not name:
             continue
-        records.append(DispensaryRecord(
-            source="co_med", name=name, address=_clean(lower.get("street")),
-            city=_clean(lower.get("city")), zip_code=_clean(lower.get("zip code")),
-        ))
-    return records
+        record = DispensaryRecord(
+            source="co_med", name=name, address=_clean(row.get("street")),
+            city=_clean(row.get("city")), zip_code=_clean(row.get("zip code")),
+            licence_number=_clean(row.get("license number")),
+        )
+        rooftop = (
+            (record.address or "").lower(), (record.zip_code or "").lower(),
+        ) if record.address else (name.lower(), (record.city or "").lower())
+        if rooftop not in by_rooftop:
+            order.append(rooftop)
+            by_rooftop[rooftop] = record
+        elif facility_type == "retail marijuana store":
+            by_rooftop[rooftop] = record  # one store, two licences: the retail row names it
+    return [by_rooftop[key] for key in order]
 
 
 # ── Massachusetts CCC 'commenced operations' CSV (list_type='ma_ccc') ────────
@@ -652,13 +900,34 @@ def _kml_point(placemark) -> tuple[float | None, float | None]:
 
 # ── ArcGIS ───────────────────────────────────────────────────────────────────
 
-def _arcgis_attr(attrs: dict, *names: str) -> str | None:
-    """Pick the first attribute whose key loosely matches any of names."""
+class PartialRoster(Exception):
+    """A roster handler stopped AFTER it had gathered some rows: what it holds is a fragment.
+
+    `run_extract_states` replaces a state's rows whenever the extraction is non-empty, so a paging
+    failure that returned the pages it had would delete the full prior roster and install the
+    fragment — and `compare` would then report the missing stores as absent from the state list.
+    Handlers raise this instead; the orchestrator prints it and keeps the prior rows (review
+    finding, 2026-09-26) — and SKIPS THE LATER TIERS for that state, records the attempt `failed`
+    with this exception's text, and reports the state's method as ``none`` (2026-10-04, audit
+    P-35: until then the state merely looked empty, so the opt-in AI tier could extract a roster
+    of its own and replace the one this verdict had just refused to replace).
+    """
+
+
+def _arcgis_attr(attrs: dict, *names: str, exclude: tuple[str, ...] = ()) -> str | None:
+    """Pick the first NON-EMPTY attribute whose key loosely matches any of names, in the order the
+    names are given; a key containing any ``exclude`` token is never considered.
+
+    An empty match used to end the search (Ohio's 47 stores with a blank DBA lost their licensee
+    name that way, 2026-09-25), and a loose stem could land on a neighbour it was never meant for
+    (`licen` on `licensetype`, which the live payload lists before `user_licen`)."""
     lower = {k.lower(): v for k, v in attrs.items()}
     for want in names:
         for key, val in lower.items():
-            if want in key:
-                return _clean(str(val)) if val not in (None, "") else None
+            if want in key and not any(token in key for token in exclude):
+                cleaned = _clean(str(val)) if val not in (None, "") else None
+                if cleaned:
+                    return cleaned
     return None
 
 
@@ -691,8 +960,11 @@ def _arcgis_float(attrs: dict, *names: str) -> float | None:
 def _arcgis_record(feat: dict) -> DispensaryRecord | None:
     """One ArcGIS feature → a DispensaryRecord, or None when it carries no usable name."""
     attrs = feat.get("attributes") or {}
+    # Ohio's layer (maps.ohio.gov `Geocoded_Dispensaries_`) carries shapefile-truncated names —
+    # `user_dispe`, `user_busin`, `user_stree`, `user_licen` — so the ten-character stems are
+    # matched beside the words they truncate (2026-09-25; the roster read as 0 rows without them).
     name = _arcgis_attr(
-        attrs, "dispensar", "name", "dba", "business", "licensee", "facility", "store"
+        attrs, "dispensar", "dispe", "name", "dba", "business", "busin", "licensee", "facility", "store"
     )
     if not name:
         return None
@@ -704,6 +976,13 @@ def _arcgis_record(feat: dict) -> DispensaryRecord | None:
     # `_arcgis_attr` tries the names in order.
     latitude = _arcgis_float(attrs, "latitude")
     longitude = _arcgis_float(attrs, "longitude", "longitd")
+    if latitude is None or longitude is None:
+        # No coordinate ATTRIBUTE: the feature's own point geometry (requested in WGS84 by
+        # `_query_arcgis_layer`) is the same fact — Ohio's layer names its columns `user_lat` /
+        # `user_lon`, which no spelling above reaches, and its geometry is exact.
+        geometry = feat.get("geometry") or {}
+        if isinstance(geometry, dict) and isinstance(geometry.get("x"), (int, float)) and isinstance(geometry.get("y"), (int, float)):
+            latitude, longitude = float(geometry["y"]), float(geometry["x"])
     if (
         latitude is None or longitude is None
         or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180)
@@ -712,13 +991,19 @@ def _arcgis_record(feat: dict) -> DispensaryRecord | None:
         latitude = longitude = None
     return DispensaryRecord(
         source="arcgis", name=name,
-        address=_arcgis_attr(attrs, "address", "addr", "street"),
+        address=_arcgis_attr(attrs, "address", "addr", "street", "stree"),
         city=_arcgis_attr(attrs, "city", "town"),
         state=_arcgis_attr(attrs, "state", "province"),
         zip_code=_arcgis_attr(attrs, "zip", "postal"),
         phone=_arcgis_attr(attrs, "phone", "tel"),
         website=_arcgis_attr(attrs, "website", "web", "url"),
         latitude=latitude, longitude=longitude,
+        # The regulator's own store id when the layer carries one (Ohio: `user_licen`,
+        # `CCD000072-00`); `_arcgis_attr` stops at the first key, so `licensetype` must not win.
+        licence_number=_arcgis_attr(
+            attrs, "licencenumber", "licensenumber", "licence_number", "license_number", "licen", "permit",
+            exclude=("type", "status", "class", "categ"),
+        ),
     )
 
 
@@ -728,7 +1013,8 @@ async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]
     A service-root URL (…/FeatureServer) defaults to layer 0. A `where=` query
     string on the URL filters the layer (e.g. to retailer-only license types);
     otherwise all rows are returned. Pages with resultOffset so a layer larger than its
-    maxRecordCount isn't silently truncated at the first page.
+    maxRecordCount isn't silently truncated at the first page. Geometry is requested in WGS84 so
+    a layer with no coordinate attributes still yields a geo key (`_arcgis_record`).
     """
     parsed = urlparse(layer_url)
     where = parse_qs(parsed.query).get("where", ["1=1"])[0] if parsed.query else "1=1"
@@ -742,12 +1028,20 @@ async def _query_arcgis_layer(layer_url: str, session) -> list[DispensaryRecord]
             q = (
                 f"{base}/query?where={quote(where)}&outFields=*&f=json"
                 f"&resultRecordCount={_ARCGIS_PAGE_SIZE}"
-                f"&resultOffset={offset}&returnGeometry=false"
+                f"&resultOffset={offset}&returnGeometry=true&outSR=4326"
             )
             payload = (await session.get(q, timeout=30)).json()
-        except Exception:
+        except Exception as exc:
+            if records:
+                raise PartialRoster(
+                    f"arcgis layer {base}: page at offset {offset} failed after {len(records)} "
+                    f"row(s) ({type(exc).__name__})") from exc
             break
         features = payload.get("features") or []
+        if not features and payload.get("exceededTransferLimit") and records:
+            raise PartialRoster(
+                f"arcgis layer {base}: an empty page at offset {offset} while the server still flags "
+                f"more, after {len(records)} row(s)")
         records.extend(rec for feat in features if (rec := _arcgis_record(feat)) is not None)
         # The server's flag — not our requested page size — says whether more rows remain: a
         # server clamped below _ARCGIS_PAGE_SIZE serves short-but-not-final pages. An empty page
@@ -798,6 +1092,89 @@ async def _extract_on_agco(url: str, session) -> list[DispensaryRecord]:
     return []
 
 
+# ── Ontario AGCO open-data CSV (list_type='on_agco_csv') ─────────────────────
+#
+# The SAME stores the ArcGIS map serves, plus the columns the map omits. Measured 2026-09-16 against
+# both sources live: filtering this file to `Authorized to Open` gives 1,897 rows against the map's
+# 1,901, with only TWO addresses differing in each direction and identical field coverage (100% on
+# name/address/city/postcode/coords, 69.8% website against 69.9%). It is refreshed daily —
+# `Last-Modified` was that morning.
+#
+# WHAT IT ADDS, and why it is worth a handler:
+#   * `LicenceNumber` on 100% of rows — the regulator's own per-store id, the same durable key
+#     Alberta's `Authorization Number` gives. A name, a trade name and an address format all change;
+#     `CRSA1161431` does not, and name+address is what every dedupe and compare path falls back on.
+#   * `LicenceStatus` — which distinguishes the 58 stores on `Expired - Deemed to Continue` from the
+#     1,839 `Active`. That population is invisible in the map entirely.
+#   * `ApplicationType` — 127 `Transfer` rows, an ownership-change signal better than inferring one
+#     from an operator rename.
+#
+# ⚠ **`Cancelled` IS NOT A CLOSURE, AND MUST NOT BE READ AS ONE.** The file carries 673 cancelled
+# rows and they are cancelled APPLICATIONS: 244 of them sit at an address that is authorized today,
+# so the store is open and it was an earlier application that died. Their only dates are the original
+# public-notice window (often 2019), not a cancellation date. Reading them as closures would be wrong
+# for a third of the set. This handler returns open stores only.
+#
+# ⚠ **IT DOES NOT CARRY AN OPERATOR.** No Ontario source does — all four AGCO map layers publish the
+# same 14 fields and none names a licensee, and the 98 "One Plant" rows here hold 92 distinct licence
+# numbers because an authorization is issued per premises. This does not collapse the duplicate
+# company records, and that is settled rather than untried.
+#
+# The ArcGIS handler above is deliberately LEFT IN PLACE though nothing calls it: reverting is then
+# one `list_type` in `states.yml` rather than a code change. A dead URL here is caught loudly —
+# `coverage_healthcheck`'s `roster_missing` fires on a zero-row roster.
+_AGCO_OPEN_STATUS = "Authorized to Open"
+
+
+def _extract_on_agco_csv(text: str) -> list[DispensaryRecord]:
+    """Ontario's roster from AGCO's open-data CSV, open stores only, carrying the licence number."""
+    rows = list(csv.DictReader(io.StringIO(text)))
+    if not rows:
+        return []
+    # The file is served with a UTF-8 BOM, so the first header arrives as '\ufeffLicenceNumber'.
+    # Read it by position rather than by a name that depends on how the BOM was stripped.
+    licence_key = next(iter(rows[0]))
+    out: list[DispensaryRecord] = []
+    # ⚠ THE EXPORT REPEATS ROWS, AND THE LICENCE NUMBER IS WHAT LETS US SEE IT. 37 licences appear
+    # twice with every field identical but `RowNum` — one store, two lines. The ArcGIS map has the
+    # same flaw and no key to detect it with: 1,901 rows for 1,860 distinct (name, address) pairs, 41
+    # repeats we have been storing as separate dispensaries all along. Both sources agree on 1,860
+    # real stores once deduplicated, so this is not a choice between them — it is the first thing the
+    # regulator's id buys.
+    seen: set[str] = set()
+    for row in rows:
+        if (row.get("ApplicationStatusEn") or "").strip() != _AGCO_OPEN_STATUS:
+            continue
+        name = (row.get("PremisesName") or "").strip()
+        if not name:
+            continue
+        licence = (row.get(licence_key) or "").strip()
+        if licence:
+            if licence in seen:
+                continue
+            seen.add(licence)
+        out.append(DispensaryRecord(
+            source="on_agco_csv", name=name,
+            address=(row.get("StreetAddress") or "").strip() or None,
+            city=(row.get("City") or "").strip() or None,
+            state="ON",
+            zip_code=(row.get("PostalCode") or "").strip() or None,
+            website=(row.get("WebsiteEn") or "").strip() or None,
+            latitude=_float_or_none(row.get("Latitude")),
+            longitude=_float_or_none(row.get("Longitude")),
+            licence_number=licence or None,
+        ))
+    return out
+
+
+def _float_or_none(value: str | None) -> float | None:
+    """A coordinate cell as a float, or None when blank or unparseable."""
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Alberta AGLC cannabis-licensee report (list_type='ab_aglc') ──────────────
 
 # The report's stable header names (verified live 2026-07-04); parsed by name so a
@@ -810,7 +1187,28 @@ _AGLC_FIELDS = {
     "province": "Site Province Abbrev",
     "zip_code": "Site Postal Code",
     "phone": "Telephone Number",
+    # AGLC's own per-store id. Numeric in the sheet, so `_xls_text` folds 803780.0 -> '803780'.
+    "licence_number": "Authorization Number",
+    # When the authorization first took effect — the regulator's record of the store OPENING.
+    "licensed_since": "Initial Effective Date",
 }
+
+
+def _aglc_date(value: str | None) -> str | None:
+    """AGLC's `Initial Effective Date` (`8/30/2021`) as an ISO date, or None.
+
+    ⚠ IT IS M/D/YYYY — US ORDER, FROM A CANADIAN AGENCY, which is the trap. Settled by measuring
+    rather than assuming: of 963 values, 562 have a SECOND component above 12 (`8/30/2021`,
+    `10/31/2022`) and NOT ONE has a first component above 12. Read as D/M this would silently
+    mis-date more than half the corpus, and every wrong date would still parse.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.datetime.strptime(text, "%m/%d/%Y").date().isoformat()
+    except ValueError:
+        return None
 
 
 def _xls_text(cell) -> str | None:
@@ -866,6 +1264,8 @@ def _aglc_record(values: dict[str, str | None]) -> DispensaryRecord | None:
         source="ab_aglc", name=name, address=address,
         city=values.get("city"), state="AB",
         zip_code=values.get("zip_code"), phone=values.get("phone"),
+        licence_number=values.get("licence_number"),
+        licensed_since=_aglc_date(values.get("licensed_since")),
     )
 
 
@@ -1073,6 +1473,13 @@ def _coord(value: object) -> float | None:
     return None
 
 
+def _atlist_stop(records: list[DispensaryRecord], why: str) -> list[DispensaryRecord]:
+    """[] when nothing was gathered (the request's own failure); a fragment is never returned."""
+    if records:
+        raise PartialRoster(f"atlist map: a later page failed after {len(records)} marker(s) ({why})")
+    return []
+
+
 async def _extract_atlist(url: str, session) -> list[DispensaryRecord]:
     """Every marker on a publicly-shared Atlist map, paging through its opaque `nextToken`."""
     found = _ATLIST_MAP_ID_RE.search(url)
@@ -1086,16 +1493,16 @@ async def _extract_atlist(url: str, session) -> list[DispensaryRecord]:
         params = {"nextToken": token} if token else None
         try:
             response = await session.get(endpoint, headers=headers, params=params, timeout=60)
-        except Exception:
-            return records
+        except Exception as exc:
+            return _atlist_stop(records, f"{type(exc).__name__}")
         if response.status_code >= 400:
-            return records
+            return _atlist_stop(records, f"HTTP {response.status_code}")
         try:
             payload = response.json()
         except ValueError:
-            return records
+            return _atlist_stop(records, "unparseable payload")
         if not isinstance(payload, dict):
-            return records
+            return _atlist_stop(records, "payload is not an object")
         for marker in payload.get("markers") or []:
             if isinstance(marker, dict):
                 record = _atlist_record(marker)
@@ -1256,6 +1663,10 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
             return
         data = payload.get("data") or []
         total = (payload.get("metadata") or {}).get("totalCount", len(data))
+        if total > len(data) and depth >= 6:
+            raise PartialRoster(
+                f"ca_dcc: a box at subdivision depth {depth} still holds {total} > {len(data)} "
+                "licences — the page cap would keep a fragment")
         if total > len(data) and depth < 6:  # capped — subdivide into quadrants
             mid_lat, mid_lng = (min_lat + max_lat) / 2, (min_lng + max_lng) / 2
             await sweep((min_lat, mid_lat, min_lng, mid_lng), depth + 1)
@@ -1283,7 +1694,7 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 # so the two never drift. Any other value falls through to the html parser.
 ListType = Literal[
     "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
-    "on_agco", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "lookup", "html",
+    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "lookup", "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
 
@@ -1325,13 +1736,17 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
                 return _extract_pdf(resp.content)
             if list_type == "az_dhs" and resp.content[:5].startswith(b"%PDF"):
                 return _extract_az_dhs(resp.content)
+            if list_type == "il_idfpr" and resp.content[:5].startswith(b"%PDF"):
+                return _extract_il_idfpr(resp.content)
             # OLE2 magic — an .xls URL sometimes serves an HTML error page; trust the bytes.
             if list_type == "ab_aglc" and resp.content[:4] == b"\xd0\xcf\x11\xe0":
                 return _extract_ab_aglc(resp.content)
             if list_type == "co_med":
-                return _extract_co_med(resp.text)
+                return _extract_co_med(resp.content)
             if list_type == "ma_ccc":
                 return _extract_ma_ccc(resp.text)
+            if list_type == "on_agco_csv":
+                return _extract_on_agco_csv(resp.text)
             if list_type == "csv":
                 return _extract_csv(resp.text)
             if list_type == "kml":
@@ -1395,10 +1810,20 @@ async def _render_empty_targets(
     extracted: dict[str, list[DispensaryRecord]],
     methods: dict[str, str],
 ) -> None:
-    """Render each still-empty target in one shared Chrome session, in place."""
+    """Render each still-empty target in one shared Chrome session, in place.
+
+    A machine with no Chromium SKIPS the tier and says so — the states stay empty and keep their
+    prior rows; nothing is recorded as a verdict about them (the same rule as `access.Unequipped`
+    one stage over; review finding, 2026-09-26).
+    """
     from pydoll.browser.chromium import Chrome
 
-    from rung.browser import make_browser_options
+    from rung.browser import chromium_available, make_browser_options
+
+    if not chromium_available():
+        print(f"  render tier SKIPPED for {len(targets)} state(s): no Chromium on this machine "
+              "(toolchain.toml names the install route) — prior rows are kept")
+        return
 
     async with Chrome(options=make_browser_options()) as browser:
         tab = await browser.start()
@@ -1466,6 +1891,10 @@ async def run_extract_states(
     existing rows are replaced atomically and only when extraction yields data,
     so re-runs are idempotent and a dead URL never wipes prior good rows.
 
+    A state whose tier-1 handler raised :class:`PartialRoster` is NOT an empty state: the
+    source answered and we refused the answer. It keeps its prior rows, is offered to
+    neither later tier, and its capture attempt is recorded ``failed`` with the reason.
+
     ``record_history`` (opt-in): also append store-lifecycle history
     (``state_roster`` observations) alongside each non-empty state replace, in the
     same commit — see :func:`record_roster_observations`.
@@ -1477,28 +1906,52 @@ async def run_extract_states(
         insert_dispensary,
     )
 
+    # A jurisdiction that DECLARES it publishes no licensee roster (`publishes_licensee_roster:
+    # false` in states.yml, with the evidence beside it) has nothing to extract, whatever URL the
+    # crawler once stored for it. Mississippi's stored "list" was the Department of Revenue's
+    # medical-cannabis landing page, and its one extracted row was the department's own street
+    # address — a roster of one building, which compare then reported as 76 stores the state was
+    # missing. The healthcheck already exempts these states; the extraction now agrees with it.
+    from rung.sources.state_lists import load_states
+
+    roster_less = {s.abbr for s in load_states() if not s.publishes_licensee_roster}
     targets = [
         r for r in get_all_state_programs(conn)
         if r.list_url and r.list_status in ("found", "override", "stored")
+        and r.abbr not in roster_less
         and (only is None or r.abbr in only)
     ]
 
     # Tier 1 — static extraction, concurrently.
     async def _extract(rec):
-        records = await extract_records(rec.list_url, rec.list_type or "html")
-        return rec, records
+        try:
+            records = await extract_records(rec.list_url, rec.list_type or "html")
+        except PartialRoster as exc:
+            # A fragment must not replace the prior roster: an empty result below keeps it. The
+            # REASON travels with it, because "empty" is exactly what this state is not.
+            print(f"  {rec.abbr}: roster extraction was PARTIAL and is discarded — {exc}")
+            return rec, [], str(exc)
+        return rec, records, None
 
     raw = await asyncio.gather(*(_extract(r) for r in targets))
-    extracted: dict[str, list[DispensaryRecord]] = {rec.abbr: recs for rec, recs in raw}
+    extracted: dict[str, list[DispensaryRecord]] = {rec.abbr: recs for rec, recs, _ in raw}
     methods: dict[str, str] = {
-        rec.abbr: ("static" if recs else "none") for rec, recs in raw
+        rec.abbr: ("static" if recs else "none") for rec, recs, _ in raw
     }
+    # States whose roster was REFUSED as a fragment, with why. Kept beside `methods` rather than
+    # as a fifth method word: `ExtractResult.method` is a documented four-word vocabulary the CLI
+    # prints, and a refusal is not a way of extracting.
+    partial: dict[str, str] = {rec.abbr: why for rec, _, why in raw if why is not None}
 
     # Tier 2 — browser render of still-empty JS pages (one shared Chrome).
     if use_render:
+        # `not in partial` is DEFENSIVE here: every handler that raises `PartialRoster` today
+        # serves a list_type (arcgis, on_agco, atlist, ca_dcc) this filter already excludes, so
+        # no refused state can be rendered. It holds the line if an html-path handler ever raises.
         renderable = [
             r for r in targets
-            if not extracted[r.abbr] and (r.list_type in (None, "html", "unknown"))
+            if not extracted[r.abbr] and r.abbr not in partial
+            and (r.list_type in (None, "html", "unknown"))
         ]
         if renderable:
             await _render_empty_targets(renderable, extracted, methods)
@@ -1508,7 +1961,10 @@ async def run_extract_states(
     for rec in targets:
         records = extracted[rec.abbr]
         method = methods[rec.abbr]
-        if not records and use_ai and rec.list_url:
+        # `not in partial` is THE FIX (audit P-35). This tier has no list_type filter, so a state
+        # whose roster was just refused as a fragment looked merely empty, the AI extracted a
+        # roster of its own, and the DELETE below replaced the rows the refusal existed to keep.
+        if not records and use_ai and rec.list_url and rec.abbr not in partial:
             try:
                 from rung.sources.ai_fallback import extract_with_ai
                 records = await extract_with_ai(rec.list_url, source_tag="ai")
@@ -1542,6 +1998,19 @@ async def run_extract_states(
             # anticipated failure (an empty scrape wiping good rows) and never saw this one. Costs no
             # geocoder calls; same commit as the replace, so the rows are never briefly un-enriched.
             apply_geocode_cache(conn, "dispensaries", rec.abbr)
+        if record_history:
+            # What was ATTEMPTED this cycle, beside what was seen: an empty extraction writes no
+            # observations (the guard above keeps the prior rows), and without this row the
+            # roster leg's silence that cycle would read as every store leaving the roster.
+            #
+            # A refused fragment is `failed`, not `empty`: "attempted, nothing yielded" is false
+            # of a source that yielded and was turned away, and the reason is worth keeping.
+            outcome = "succeeded" if records else ("failed" if rec.abbr in partial else "empty")
+            db.record_capture_attempt(
+                conn, state=rec.abbr, source="state_roster", outcome=outcome, method=method,
+                error=partial.get(rec.abbr), record_count=len(records),
+            )
+        if records or record_history:
             conn.commit()
 
         results.append(

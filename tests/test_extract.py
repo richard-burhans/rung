@@ -49,10 +49,12 @@ class _FakeArcgisSession:
     def __init__(self, total):
         self.total = total
         self.offsets = []
+        self.urls = []
 
     async def get(self, url, timeout=None):
         offset = int(_re.search(r"resultOffset=(\d+)", url).group(1))
         self.offsets.append(offset)
+        self.urls.append(url)
         rows = [{"attributes": {"name": f"Store {i}"}}
                 for i in range(offset, min(offset + _ARCGIS_PAGE_SIZE, self.total))]
         return _FakeArcgisResp(
@@ -930,3 +932,376 @@ def test_va_cca_record_tolerates_a_missing_address_line2() -> None:
     rec = _va_cca_record({"addressTitle": "Y", "addressLine1": "2 Oak Ave"})
     assert rec is not None
     assert rec.city is None and rec.zip_code is None and rec.address == "2 Oak Ave"
+
+
+# ── The regulator's own store id, where a roster publishes one ───────────────────────────────────
+#
+# Alberta's AGLC report is a LICENSEE report and carries `Authorization Number` per store; we parsed
+# 11 columns and kept 7, dropping it. Ontario's AGCO open-data CSV carries `LicenceNumber`
+# (CRSA1161431) across 30 columns, where the ArcGIS map we consume exposes only 14 and none of them
+# is an id at all.
+#
+# ⚠ IT IS A STORE KEY, NOT AN OPERATOR KEY. Measured 2026-09-16 against AGCO's CSV: 98 "One Plant"
+# rows carry 92 distinct licence numbers, because an authorization is issued per premises. It does
+# not collapse an operator's many company records — what it gives is an identity for the STORE that
+# survives a rename or a reformatted address.
+
+
+def test_the_alberta_record_carries_its_authorization_number() -> None:
+    from rung.sources.extract import _aglc_record
+
+    record = _aglc_record({
+        "province": "AB", "name": "Freedom Cannabis", "address": "9827 279 ST",
+        "city": "ACHESON", "zip_code": "T7X 6J4", "phone": "8774523760",
+        "licence_number": "301320",
+    })
+    assert record is not None
+    assert record.licence_number == "301320"
+
+
+def test_a_roster_without_one_simply_has_none() -> None:
+    """Most rosters publish no id; the column must stay optional rather than invented."""
+    from rung.models import DispensaryRecord
+
+    assert DispensaryRecord(source="arcgis", name="x").licence_number is None
+
+
+def test_the_alberta_field_map_names_the_column_it_reads() -> None:
+    """Parsed BY NAME, so a column reorder in the report cannot silently shift the id."""
+    from rung.sources.extract import _AGLC_FIELDS
+
+    assert _AGLC_FIELDS["licence_number"] == "Authorization Number"
+
+
+def test_an_out_of_province_row_is_still_dropped_with_the_id_present() -> None:
+    """The report lists BC/ON supplier sites too; carrying an id must not smuggle them in as AB."""
+    from rung.sources.extract import _aglc_record
+
+    assert _aglc_record({
+        "province": "BC", "name": "Dunn Cannabis", "city": "ABBOTSFORD",
+        "licence_number": "301671",
+    }) is None
+
+
+# ── Ontario's AGCO open-data CSV (list_type='on_agco_csv') ───────────────────────────────────────
+#
+# The same stores the ArcGIS map serves, plus the columns it omits. Verified live 2026-09-16 against
+# both: filtered to `Authorized to Open` this gives 1,897 rows against the map's 1,901, only two
+# addresses differing each way, identical coverage. After deduplicating on the licence number both
+# sources agree on 1,860 REAL stores — the map carries 41 repeated rows and has no key to notice.
+
+_AGCO_HEADER = (
+    "﻿LicenceNumber,FileNumber,ObjectDefDescription,ApplicationStatusEn,Latitude,Longitude,"
+    "PremisesName,StreetAddress,City,Province,PostalCode,LicenceStatus,ApplicationType,WebsiteEn\n"
+)
+
+
+def _agco_row(licence, status, name, addr="1 MAIN ST", city="TORONTO",
+              lat="43.6", lon="-79.3", lic_status="Active", app="New Application", site=""):
+    return (f"{licence},F1,CRSA,{status},{lat},{lon},{name},{addr},{city},ON,M1M1M1,"
+            f"{lic_status},{app},{site}\n")
+
+
+def test_only_authorized_to_open_stores_are_returned() -> None:
+    """`Cancelled` rows are cancelled APPLICATIONS, not closed stores — 244 of the 673 sit at an
+    address that is authorized today. Returning them would invent closures for a third of the set."""
+    from rung.sources.extract import _extract_on_agco_csv
+
+    text = (_AGCO_HEADER
+            + _agco_row("CRSA1", "Authorized to Open", "Open Store")
+            + _agco_row("CRSA2", "Cancelled", "Dead Application")
+            + _agco_row("CRSA3", "In Progress", "Pending Store")
+            + _agco_row("CRSA4", "Public Notice", "Noticed Store"))
+    recs = _extract_on_agco_csv(text)
+    assert [r.name for r in recs] == ["Open Store"]
+
+
+def test_the_licence_number_is_captured_despite_the_bom() -> None:
+    """The file is served with a UTF-8 BOM, so the first header arrives as '\\ufeffLicenceNumber'.
+    Read by POSITION, so however the BOM is stripped the id still lands."""
+    from rung.sources.extract import _extract_on_agco_csv
+
+    recs = _extract_on_agco_csv(_AGCO_HEADER + _agco_row("CRSA1161431", "Authorized to Open", "X"))
+    assert recs[0].licence_number == "CRSA1161431"
+
+
+def test_a_repeated_licence_yields_ONE_store() -> None:
+    """37 licences appear twice with every field identical but RowNum. The map has the same flaw —
+    1,901 rows for 1,860 distinct stores — and no key to detect it."""
+    from rung.sources.extract import _extract_on_agco_csv
+
+    text = (_AGCO_HEADER
+            + _agco_row("CRSA1161431", "Authorized to Open", "One Plant Stouffville")
+            + _agco_row("CRSA1161431", "Authorized to Open", "One Plant Stouffville")
+            + _agco_row("CRSA9", "Authorized to Open", "Other Store"))
+    recs = _extract_on_agco_csv(text)
+    assert len(recs) == 2
+    assert {r.licence_number for r in recs} == {"CRSA1161431", "CRSA9"}
+
+
+def test_the_core_fields_and_state_land() -> None:
+    from rung.sources.extract import _extract_on_agco_csv
+
+    recs = _extract_on_agco_csv(
+        _AGCO_HEADER + _agco_row("CRSA1", "Authorized to Open", "Purple Moose",
+                                 addr="575 LAVAL DR", city="OSHAWA", site="https://x.ca"))
+    r = recs[0]
+    assert (r.name, r.address, r.city, r.state) == ("Purple Moose", "575 LAVAL DR", "OSHAWA", "ON")
+    assert (r.latitude, r.longitude) == (43.6, -79.3)
+    assert r.website == "https://x.ca" and r.source == "on_agco_csv"
+
+
+def test_a_blank_coordinate_is_none_rather_than_a_crash() -> None:
+    from rung.sources.extract import _extract_on_agco_csv
+
+    recs = _extract_on_agco_csv(
+        _AGCO_HEADER + _agco_row("CRSA1", "Authorized to Open", "No Coords", lat="", lon="n/a"))
+    assert recs[0].latitude is None and recs[0].longitude is None
+
+
+def test_ontario_is_wired_to_the_csv_with_the_arcgis_handler_kept_for_revert() -> None:
+    """The revert must stay one config line, so the old handler may not be deleted."""
+    from pathlib import Path
+
+    import yaml
+
+    from rung.sources import extract
+
+    states = yaml.safe_load(Path("rung/data/states.yml").read_text(encoding="utf-8"))
+    on = next(s for s in states if s.get("abbr") == "ON")
+    assert on["list_type"] == "on_agco_csv"
+    assert "opendata" in on["list_url"]
+    assert hasattr(extract, "_extract_on_agco"), "the ArcGIS handler is the documented revert path"
+    assert "on_agco" in extract.HANDLED_LIST_TYPES
+
+
+# ── The regulator's record of when a store OPENED ────────────────────────────────────────────────
+#
+# `store_lifecycle_events` infers an opening from a store's first appearance in OUR roster, which is
+# bounded by when we started scraping rather than by when the store opened. Alberta publishes the
+# authorization's `Initial Effective Date` on 100% of rows, back to 2018-10-17 — the day Canada
+# legalised recreational cannabis, which is itself the check that the parse is right.
+
+
+def test_the_effective_date_is_read_as_month_first() -> None:
+    """⚠ M/D/YYYY — US ORDER FROM A CANADIAN AGENCY, and read as D/M it would silently mis-date more
+    than half the corpus while still parsing. Settled by measurement: of 963 values, 562 have a
+    second component above 12 and not one has a first component above 12."""
+    from rung.sources.extract import _aglc_date
+
+    assert _aglc_date("8/30/2021") == "2021-08-30"     # unambiguous: 30 can only be a day
+    assert _aglc_date("10/4/2021") == "2021-10-04"     # ambiguous: month-first is the measured order
+    assert _aglc_date("10/17/2018") == "2018-10-17"    # legalisation day, the earliest in the file
+
+
+def test_a_blank_or_unparseable_date_is_none_rather_than_a_guess() -> None:
+    from rung.sources.extract import _aglc_date
+
+    assert _aglc_date("") is None
+    assert _aglc_date(None) is None
+    assert _aglc_date("not a date") is None
+    assert _aglc_date("2021-08-30") is None, "an ISO string is not this source's format; do not coerce"
+
+
+def test_the_alberta_record_carries_the_opening_date() -> None:
+    from rung.sources.extract import _aglc_record
+
+    record = _aglc_record({
+        "province": "AB", "name": "Freedom Cannabis", "city": "ACHESON",
+        "licence_number": "301320", "licensed_since": "8/30/2021",
+    })
+    assert record is not None and record.licensed_since == "2021-08-30"
+
+
+def test_the_alberta_field_map_names_the_date_column() -> None:
+    from rung.sources.extract import _AGLC_FIELDS
+
+    assert _AGLC_FIELDS["licensed_since"] == "Initial Effective Date"
+
+
+def test_the_manager_name_is_NOT_captured() -> None:
+    """A deliberate omission, pinned so it is not added back absent-mindedly.
+
+    AGLC publishes a named manager on 86% of rows (336 distinct people). It has no identified use
+    here, and holding it would create a standing obligation on every export path — the clean_d1
+    parquet, the published site, any future query — which the public-build leak guard does not watch
+    because that guard covers CODE, not data. It is one re-scrape away if a purpose ever appears; a
+    linkage use should be met with an opaque group id derived at ingest, never the name.
+    """
+    from rung.models import DispensaryRecord
+    from rung.sources.extract import _AGLC_FIELDS
+
+    assert "Manager Name" not in _AGLC_FIELDS.values()
+    assert not any("manager" in f for f in DispensaryRecord.__dataclass_fields__)
+
+
+# ── 2026-09-24: the six roster-trust fixes ───────────────────────────────────────────────────────
+
+
+def test_screen_reader_only_text_is_not_part_of_a_cell() -> None:
+    """Florida wraps every licence-letter link in an sr-only "(opens in new tab)"; 24 roster rows
+    carried it in their NAME and matched nothing."""
+    from rung.sources.extract import _extract_html
+
+    html = """<table><tr><th>Dispensary Name</th><th>Address</th><th>City</th><th>Zip</th></tr>
+    <tr><td>Ayr Cannabis Dispensary<span class="sr-only">(opens in new tab)</span></td>
+        <td>1 Main St</td><td>Tampa</td><td>33601</td></tr></table>"""
+    (record,) = _extract_html(html)
+    assert record.name == "Ayr Cannabis Dispensary"
+
+
+def test_a_placeholder_cell_is_not_a_location_signal() -> None:
+    """Florida's operator table fills its blank phone column with "n/a"; that made 49 address-less
+    licensees count as located, and the table survived the rule below."""
+    from rung.models import DispensaryRecord
+    from rung.sources.extract import _location_fraction
+
+    rows = [DispensaryRecord(source="html", name="A Good Decision, LLC", state="FL", phone="n/a"),
+            DispensaryRecord(source="html", name="Alamanda Farms LLC", state="FL", phone="-")]
+    assert _location_fraction(rows) == 0.0
+    assert _location_fraction([DispensaryRecord(source="html", name="X", state="FL", city="Tampa")]) == 1.0
+
+
+def test_a_licensee_table_beside_a_store_table_is_not_a_second_store_list() -> None:
+    """Florida's MMTC page: 49 licensed operators (name + licence, no address) above 781
+    dispensing locations. The operators are not stores; they became 49 "closures"."""
+    from rung.sources.extract import _extract_html
+
+    html = """
+    <table><tr><th>MMTC Name</th><th>Phone</th><th>Authorization Status</th><th>License Number</th></tr>
+      <tr><td>A Good Decision, LLC</td><td>n/a</td><td>Initial Licensure</td><td>MMTC-2026-0029</td></tr>
+      <tr><td>Ayr Cannabis Dispensary</td><td>833-254-4877</td><td>Licensed</td><td>MMTC-2015-0002</td></tr>
+      <tr><td>Alamanda Farms LLC</td><td>n/a</td><td>Initial Licensure</td><td>MMTC-2026-0030</td></tr></table>
+    <table><tr><th>Dispensary Name</th><th>Address</th><th>City</th><th>Zip</th></tr>
+      <tr><td>Mint Cannabis</td><td>10456 Stelling Drive</td><td>Riverview</td><td>33578</td></tr>
+      <tr><td>Trulieve</td><td>1 Bay St</td><td>Tampa</td><td>33601</td></tr></table>"""
+    names = [r.name for r in _extract_html(html)]
+    assert names == ["Mint Cannabis", "Trulieve"]
+
+
+def test_a_page_whose_only_table_is_address_less_still_yields_it() -> None:
+    """NY's legal-entity licensee list has no addresses and is the only list there is."""
+    from rung.sources.extract import _extract_html
+
+    html = """<table><tr><th>Licensee Name</th><th>License Number</th></tr>
+      <tr><td>Housing Works Cannabis Co</td><td>OCM-1</td></tr></table>"""
+    assert [r.name for r in _extract_html(html)] == ["Housing Works Cannabis Co"]
+
+
+def test_co_med_reads_every_sheet_of_the_xlsx_and_folds_dual_licences() -> None:
+    import io
+
+    import openpyxl
+
+    from rung.sources.extract import _extract_co_med
+
+    book = openpyxl.Workbook()
+    med = book.active
+    med.title = "Medical"
+    hdr = ["License Number", "Facility Name", "DBA", "Facility Type", "Street", "City", "ZIP Code"]
+    med.append(hdr)
+    med.append(["402-1", "1-11 LLC", "1:11", "Medical Marijuana Store", "17034 Highway 17", "Moffat", "81143"])
+    med.append(["402-2", "Dual LLC", "Dual Med", "Medical Marijuana Store", "5 Main St", "Denver", "80202"])
+    med.append(["402-3", "Grower LLC", "", "Medical Marijuana Cultivation", "9 Farm Rd", "Pueblo", "81001"])
+    ret = book.create_sheet("Retail")
+    ret.append(hdr)
+    ret.append(["403-1", "Dual LLC", "Dual Retail", "Retail Marijuana Store", "5 Main St", "Denver", "80202"])
+    ret.append(["403-2", "NoBrand LLC", None, "Retail Marijuana Store", "7 High St", "Boulder", "80301"])
+    buf = io.BytesIO()
+    book.save(buf)
+
+    recs = _extract_co_med(buf.getvalue())
+    assert [r.name for r in recs] == ["1:11", "Dual Retail", "NoBrand LLC"]   # one rooftop; retail names it
+    assert recs[1].licence_number == "403-1" and recs[2].address == "7 High St"
+    assert all(r.source == "co_med" for r in recs)
+
+
+def test_co_med_still_accepts_the_csv_export() -> None:
+    from rung.sources.extract import _extract_co_med
+
+    csv_text = ("License Number,Facility Name,DBA,Facility Type,Street,City,ZIP Code\n"
+                "402-1,1-11 LLC,1:11,Medical Marijuana Store,17034 Highway 17,Moffat,81143\n")
+    (rec,) = _extract_co_med(csv_text)
+    assert rec.name == "1:11" and rec.zip_code == "81143"
+
+
+def test_il_idfpr_parses_wrapped_rows_from_captured_word_positions() -> None:
+    """Two real pages (2026-09-24) of the IDFPR combined list, as pdfplumber words."""
+    import json
+    from pathlib import Path
+
+    from rung.sources.extract import HANDLED_LIST_TYPES, il_idfpr_records
+
+    assert "il_idfpr" in HANDLED_LIST_TYPES
+    pages = json.loads((Path(__file__).resolve().parent / "fixtures" / "il_idfpr_words.json").read_text(encoding="utf-8"))
+    records = il_idfpr_records([p["words"] for p in pages])
+    anchors = sum(1 for p in pages for w in p["words"] if "AUDO" in w["text"])
+    assert len(records) == anchors == 24                      # one record per -AUDO credential
+    by_name = {r.name: r for r in records}
+    rise = by_name["Rise - Mundelein"]
+    assert (rise.address, rise.city, rise.zip_code, rise.phone) == ("1325 Armour Boulevard", "Mundelein", "60060", "(847) 616-8966")
+    assert "284.000001-AUDO" in (rise.licence_number or "")
+    joliet = by_name["Rise - Joliet Rock Creek"]          # a name wrapped over two lines
+    assert joliet.address == "1627 Rock Creek Blvd." and joliet.zip_code == "60431"
+    assert all(r.address and r.zip_code and r.city for r in records)   # no fragments
+    assert sum(1 for r in records if r.phone) >= 20                     # the list omits a few phones
+    assert not any(r.name in ("LLC", "of the Quad Cities,") for r in records)
+
+
+def test_il_section_pages_come_from_the_table_of_contents() -> None:
+    from rung.sources.extract import _il_section_pages
+
+    toc = ("ACTIVE ADULT USE DISPENSING ORGANIZATION LICENSES.......... 2\n"
+           "ORIGINAL LOTTERY CONDITIONAL LICENSE LIST ................ 23\n"
+           "SECL CONDITIONAL LICENSE LIST .......................... 32\n")
+    assert _il_section_pages(toc) == (2, 23)
+    assert _il_section_pages("no toc here") == (2, None)
+
+
+# Ohio's hosted layer (maps.ohio.gov `Geocoded_Dispensaries_`, 2026-09-25): shapefile-truncated
+# field names, coordinates only as `user_lat`/`user_lon` plus the point geometry, a licence number,
+# and a `licensetype` column that a loose "licen" match must not mistake for the licence.
+_OHIO_FEATURE = {
+    "attributes": {   # the live payload lists `licensetype` BEFORE `user_licen`
+        "editor": "ogrip_agol", "licensetype": "Dual",
+        "objectid": 1, "user_licen": "CCD000072-00", "user_busin": "Slightly Toasted, LLC",
+        "user_dispe": "Bliss Ohio", "user_stree": "331 E Main St", "user_city": "Kent",
+        "user_zip": 44240, "user_state": "Ohio", "user_count": "Portage", "user_phone": "(330) 765-2508",
+        "user_type": "Dual Use Dispensary", "user_lic_1": "Active", "user_lat": 41.15384408,
+        "user_lon": -81.35419411, "hours": "M-Sat: 10AM-8PM",
+    },
+    "geometry": {"x": -81.353434499785, "y": 41.153903999853036},
+}
+
+
+def test_arcgis_record_reads_ohios_truncated_fields_and_geometry() -> None:
+    rec = _arcgis_record(_OHIO_FEATURE)
+    assert rec is not None
+    assert rec.name == "Bliss Ohio"                  # the DBA, before the licensee
+    assert rec.address == "331 E Main St" and rec.city == "Kent" and rec.zip_code == "44240"
+    assert rec.state == "Ohio" and rec.phone == "(330) 765-2508"
+    assert rec.licence_number == "CCD000072-00"      # not `licensetype`
+    assert rec.latitude == 41.153903999853036 and rec.longitude == -81.353434499785
+
+
+def test_arcgis_attr_skips_an_empty_match_and_excluded_keys() -> None:
+    """47 of Ohio's 228 stores carry a blank DBA: the empty first match must not end the search."""
+    blank_dba = dict(_OHIO_FEATURE["attributes"], user_dispe="")
+    assert _arcgis_record({"attributes": blank_dba}).name == "Slightly Toasted, LLC"
+    assert _arcgis_attr({"licensetype": "Dual", "user_licen": "CCD1"}, "licen", exclude=("type",)) == "CCD1"
+    assert _arcgis_attr({"licensetype": "Dual"}, "licen", exclude=("type",)) is None
+    assert _arcgis_attr({"Dispensary": "", "Name": "  "}, "dispensar", "name") is None
+
+
+def test_arcgis_record_prefers_a_coordinate_attribute_over_geometry() -> None:
+    rec = _arcgis_record({"attributes": {"Name": "X", "Latitude": 43.66, "Longitude": -79.38},
+                          "geometry": {"x": -1.0, "y": 1.0}})
+    assert rec.latitude == 43.66 and rec.longitude == -79.38
+    rec = _arcgis_record({"attributes": {"Name": "X"}, "geometry": {"x": 0, "y": 0}})
+    assert rec.latitude is None and rec.longitude is None   # a 0,0 geometry is a placeholder too
+
+
+def test_arcgis_query_asks_for_wgs84_geometry() -> None:
+    session = _FakeArcgisSession(3)
+    asyncio.run(_query_arcgis_layer("https://x/FeatureServer/0", session))
+    assert session.urls and all("returnGeometry=true" in u and "outSR=4326" in u for u in session.urls)

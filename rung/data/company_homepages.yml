@@ -1,13 +1,40 @@
 # Explicit homepage overrides for the recon spider.
-# A non-null value always wins over DB derivation.
-# null means: derive from dispensaries.website using frequency voting.
-# Keys must match canonical_name in the companies table exactly.
+# Keys must match canonical_name in the companies table EXACTLY. A value is one of three things:
+#
+#   Curaleaf: https://curaleaf.com
+#   Ayr Wellness: null
+#   RISE:
+#     default: https://risecannabis.com
+#     BC: null
+#
+# A state key is a code states.yml knows, or `default`. ⚠ ONTARIO MUST BE QUOTED — `"ON":` — because
+# unquoted ON is the YAML boolean True (so are YES/NO/OFF; no other state code is). The loader
+# (`recon.load_homepage_overrides`) is strict: a duplicate key, an unknown state, an unquoted ON, an
+# empty string or any other shape refuses the whole file, and tests/test_recon.py loads this file,
+# so a bad edit fails the gate rather than the nightly healthcheck.
+#
+# ⚠ THE KEY IS GLOBAL, AND A STRANGER CAN CARRY THE SAME NAME. The exact lookup protects a regional
+#    operator only while its spelling differs: "RISE" is also the canonical_name of Rise Cannabis
+#    (Victoria, BC) and Rise Cannabis Co. (Saskatchewan); "Ascend" of Ascend Cannabis Co. (CO) and
+#    Ascend Dispensary (OR); "Mission" of Mission Cannabis (BC). Each held Green Thumb's / Ascend
+#    Wellness's / Mission's homepage, platform jane and a failed Jane walk until 2026-10-05. The
+#    per-state `null` is how the file says "not here". Before adding a key, look at EVERY state
+#    whose company carries the spelling (the stores it holds say who it is), not only the one you
+#    are seeding. The lookup is deliberately not loosened to a folded match for the same reason.
+#
+# ⚠ AND A COMPANY'S NAME CAN MOVE UNDER ITS KEY. The 2026-07-14 refold renamed "GTI Ohio, LLC" to
+#    "GTI Ohio" and so on; the keys kept the old spellings and matched nothing, hidden by the June
+#    recon rows until a 2026-10-05 re-run overwrote four of them with `no_url`. The coverage
+#    healthcheck's `recon_would_drop_homepage` / `recon_would_change_homepage` forecast what a
+#    re-run would erase or re-point, and `homepage_override_dead_key` names a key reaching no
+#    company — read them BEFORE running `recon`, because the run erases the evidence they read.
 
 Apothecarium Dispensary: https://apothecarium.com
-Ascend Dispensary: https://www.letsascend.com
 Ayr Wellness: null
 Beyond Hello: https://www.beyond-hello.com
+"Beyond / Hello": https://www.beyond-hello.com
 Bloc Dispensary: https://blocdispensary.com
+Bloc: https://blocdispensary.com
 Columbia Care: https://columbia.care
 Curaleaf: https://curaleaf.com
 Delta 9 Pittsburgh: https://www.delta9pa.com
@@ -15,18 +42,23 @@ Ethos: https://ethoscannabis.com
 Fluent Care: https://getfluent.com
 FLUENT: https://getfluent.com
 Hive: https://thehivedispensary.com
-Insa: https://insa.com/pa/
-Keystone Integrated Care: https://www.sunnyside.shop/
-Keystone ReLeaf: https://keystonecannaremedies.com
+Insa:
+  default: https://insa.com
+  PA: https://insa.com/pa/
 Liberty: https://libertycannabis.com
 Local Leaf by Penn Health Group: https://localleafpa.com
 Maitri Medicinals: https://maitrimedicinals.com
 MariMart: null
 Organic Remedies: https://organicremediespa.com
-RISE: https://risecannabis.com
+RISE:
+  default: https://risecannabis.com
+  BC: null
+  SK: null
 Restore Integrative Wellness Center: https://restoreiwc.com
 Standard Farms: null
-Sunnyside: https://sunnyside.shop
+Sunnyside:
+  default: https://sunnyside.shop
+  MB: null
 Terra Pharm: https://terra-pharm.com
 Terrapin Care Station: null
 Trulieve: https://trulieve.com
@@ -41,27 +73,31 @@ Zen Leaf: https://zenleafdispensaries.com
 #    entries above. Homepages live-probed before seeding (all return 200).
 "Sunnyside*": https://www.sunnyside.shop/
 ZenLeaf: https://zenleafdispensaries.com
-Ascend: https://www.letsascend.com
+Ascend:
+  default: https://www.letsascend.com
+  CO: null
+  OR: null
 Ivy Hall: https://www.ivyhalldispensary.com
 NuEra: https://nuera.com
 nuEra: https://nuera.com
 Terrabis: https://terrabis.co
-Windy City Cannabis: https://windycitycannabis.com
+Windy City: https://windycitycannabis.com
 EarthMed: https://www.earthmed.com
 Earthmed: https://www.earthmed.com
 High Profile: https://highprofilecannabis.com
-Revolution Dispensary: https://revolutioncannabis.com
+Revolution: https://revolutioncannabis.com
 "Nature’s Care Company": https://naturescarecompany.com
-Mission: https://missiondispensaries.com
+Mission:
+  default: https://missiondispensaries.com
+  BC: null
 
 # ── Maryland operators (multi-state expansion, seeded 2026-06-16). MD's html roster has no
 #    websites either. Curaleaf / RISE / Verilife / Zen Leaf / Trulieve already covered above.
 #    Homepages live-probed (all 200); Green Goods / Green Point / Remedy skipped (TLS errors).
-Story Cannabis: https://storycannabis.com
-The Apothecarium Dispensary: https://apothecarium.com
+Story: https://storycannabis.com
+The Apothecarium: https://apothecarium.com
 Culta: https://culta.com
 Health for Life: https://www.healthforlifedispensaries.com
-Liberty Cannabis: https://libertycannabis.com
 gLeaf: https://gleaf.com
 Bloom Medicinals: https://bloommedicinals.com
 Mana: https://manasupply.com
@@ -69,11 +105,41 @@ Mana: https://manasupply.com
 # ── Ohio non-Dutchie operators (seeded 2026-06-16). OH's Dutchie operators auto-attribute
 #    homeless via the geo-sweep (no homepage needed), so only seed the jane/sweed/cresco ones
 #    not already covered globally (Curaleaf/Beyond Hello/Sunnyside/Bloom/Zen Leaf/RISE/Trulieve).
-"GTI Ohio, LLC": https://risecannabis.com
-Klutch Cannabis: https://klutchcannabis.com
+GTI Ohio: https://risecannabis.com
+Klutch: https://klutchcannabis.com
 Terrasana: https://www.terrasana.com
 
 # ── Florida non-Dutchie operators (seeded 2026-06-16). FL's 392-store Dutchie pool
 #    auto-attributes Ayr/Curaleaf/Parallel/Planet 13/GrowHealthy/Sanctuary/Jungle Boys/
 #    Cookies/Mint/Insa homeless; Trulieve covered by the global entry.
 "GTI (Rise Dispensaries)": https://risecannabis.com
+CHRONTACT: https://popscannabis.ca
+
+# ── Spellings the fold reaches but the exact key did not (audited 2026-10-05). 28 companies were
+#    reached only through `normalize_brand(extract_brand(name))`; each was judged by the stores it
+#    holds and the roster rows behind it, and the homepage was probed. Eight are the same operator
+#    under another state's spelling and are keyed here. The rest are deliberately NOT keyed:
+#      - a DIFFERENT operator sharing the word: BC "HIVE" (Hive Cannabis, a BC chain — not PA's
+#        The Hive), CO "ASCEND" / "ASCEND CANNABIS CO." and OR "ASCEND" (not Ascend Wellness,
+#        which has no CO or OR stores), SK "Rise Cannabis Co." (riseonhigh.com, not GTI's RISE).
+#        ⚠ Those same strangers ALSO carry the exact names "RISE", "Ascend" and "Mission" in BC, SK,
+#        CO and OR — which the exact keys did reach, until the per-state scopes above said not to.
+#      - MA / NJ / NY "Health For Life": the company holds Mayflower, MPX NJ and Be. listings and
+#        healthforlifedispensaries.com covers Maryland and Arizona only — nothing it could serve.
+#      - a 0-store DUPLICATE of a company already carrying the operator in that state (FL "GTI",
+#        IL "Nature’s Care", MA "I.N.S.A", OH "Trulieve Cannabis Dispensary"): keying it would walk
+#        the operator twice and file the same stores under two companies.
+#      - served BETTER by the roster's own state-specific website, which an override would replace:
+#        NJ "Apothecarium" (apothecariumnj.com) and PA "Apothecarium" (shop.apothecarium.com),
+#        CT "TRULIEVE" / "ZEN LEAF", NJ "BLOC", PA "Local Leaf by Penn Health".
+#    "CURALEAF" IS keyed although CT derives ct.curaleaf.com from its roster: the curaleaf_api rung
+#    gates only on `curaleaf.com` in the host and reads a fixed state-filtered API, so CT is served
+#    the same either way and Nevada's six Weedmaps-only stores gain the rung.
+HIGH PROFILE: https://highprofilecannabis.com
+BEYOND/HELLO: https://www.beyond-hello.com
+ZEN LEAF: https://zenleafdispensaries.com
+CURALEAF: https://curaleaf.com
+Rise Holdings: https://risecannabis.com
+I.N.S.A.: https://insa.com/ma/
+INSA: https://insa.com/oh/
+Fluent: https://getfluent.com

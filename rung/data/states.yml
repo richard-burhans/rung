@@ -68,7 +68,11 @@
   # CO MED publishes its licensed "Stores" list as a (monthly-updated) Google Sheet; the
   # CSV export has DBA + street + zip. co_med prefers the DBA brand over the legal entity.
   # NOTE: this sheet is the MEDICAL stores; retail stores are bootstrapped from the Dutchie pool.
-  list_url: https://docs.google.com/spreadsheets/d/1PqYThJJwGEsrwWvciu9vXosuC0BzAw4YtD03RvlSKzE/export?format=csv
+  # ⚠ XLSX, NOT CSV. The sheet has TWO tabs — `Medical` (271) and `Retail` (654) — and the CSV
+  # export is the first tab only, which is how Colorado's roster was 271 medical stores against
+  # 824 held (2026-09-24). The xlsx export carries every sheet; `_extract_co_med` reads them all
+  # and folds a rooftop licensed under both programs into one row.
+  list_url: https://docs.google.com/spreadsheets/d/1PqYThJJwGEsrwWvciu9vXosuC0BzAw4YtD03RvlSKzE/export?format=xlsx
   list_type: co_med
 
 - abbr: CT
@@ -147,6 +151,10 @@
   known_url: https://idfpr.illinois.gov/
   # IDFPR's licensed-dispensary roster (the crawler lands on a links page).
   list_url: https://idfpr.illinois.gov/content/dam/soi/en/web/idfpr/forms/cannabis/all-cannabis-licenses.pdf
+  # The combined PDF wraps every cell over several lines; the generic pdf path made 111 of 248 rows
+  # name fragments with no address (2026-09-24). `il_idfpr` buckets words by column and closes a
+  # record on its phone line, and reads only the adult-use section the TOC names.
+  list_type: il_idfpr
 
 - abbr: IN
   name: Indiana
@@ -231,6 +239,13 @@
   program_term: medical marijuana
   agency: Mississippi State Department of Health
   known_url: https://www.mmcp.ms.gov/
+  # Checked 2026-09-24: neither regulator publishes a dispensary list. The MSDH (mmcp.ms.gov)
+  # offers only a per-licence "Verify License" lookup on its licensing portal; the Department of
+  # Revenue, which licenses dispensaries, has landing, applicant and licensee-information pages
+  # with guides and no roster. The crawler had stored the DOR landing page as the "list" and the
+  # one row it extracted was the department's own address (500 Clinton Center Drive), which
+  # compare then read as 76 stores the state was missing. Declared roster-less, like NL.
+  publishes_licensee_roster: false
 
 - abbr: MT
   name: Montana
@@ -313,8 +328,15 @@
   program_term: cannabis
   agency: Division of Cannabis Control
   known_url: https://com.ohio.gov/divisions-and-programs/cannabis-control/cannabis-control
-  # The crawler picks a portal stub; this is the page with the dispensary table.
-  list_url: https://com.ohio.gov/wps/portal/gov/com/divisions-and-programs/cannabis-control/about-dcc/licenses/dispensaries/dispensary-licenses
+  # com.ohio.gov answers a CloudFront/S3 404 for EVERY path — the site root included — from the
+  # sandbox, the VPS and an external fetcher alike (2026-09-25; the roster had been frozen at its
+  # 2026-06-05 scrape, 113 days). The Division's own "Ohio Medical Marijuana Dispensaries" web map
+  # (arcgis.com item 9acf32deb4dc4107848c32f177c3377f, owner ogrip_agol) is backed by this hosted
+  # layer: every licensed dispensary with licence number, DBA, licensee, street, city, zip, county,
+  # phone, hours, type and status, geocoded, edited through 2026-09-22 (228 rows, all Active). The
+  # `where` keeps only Active licences should inactive ones ever be published beside them.
+  list_url: https://maps.ohio.gov/arcgis/rest/services/Hosted/Geocoded_Dispensaries_/FeatureServer/0?where=user_lic_1%3D%27Active%27
+  list_type: arcgis
 
 - abbr: OK
   name: Oklahoma
@@ -476,13 +498,23 @@
   program_term: cannabis
   agency: Alcohol and Gaming Commission of Ontario
   known_url: https://www.agco.ca/en/cannabis/status-current-cannabis-retail-store-applications
-  # AGCO's store map is an ArcGIS Experience app whose FeatureServer layers are
-  # date-stamped and rotate on republish (Authorized_to_open_20250620 …); the on_agco
-  # handler resolves the current "Authorized To Open" layer from this stable app item
-  # at runtime instead of pinning the dated URL (docs/canada_expansion.md §2).
-  # 1,866 stores, 100% coords, 72% website-filled (verified live 2026-07-04).
-  list_url: https://experience.arcgis.com/experience/86b8b6c8725a4a6484ce60fbd0447ca6
-  list_type: on_agco
+  # AGCO's OPEN-DATA CSV, not the ArcGIS map — the same stores plus the columns the map omits.
+  # Verified live 2026-09-16 against both: filtered to `Authorized to Open` this gives 1,897 rows
+  # against the map's 1,901, only TWO addresses differing each way, identical field coverage (100%
+  # name/address/city/postcode/coords, 69.8% website vs 69.9%), and `Last-Modified` that morning.
+  # It adds `LicenceNumber` on every row — the regulator's per-store id, which a rename or an address
+  # reformat cannot break — plus `LicenceStatus` (58 stores are `Expired - Deemed to Continue`,
+  # invisible in the map) and `ApplicationType` (127 transfers).
+  #
+  # ⚠ TO REVERT, change `list_type` back to `on_agco`: that handler is still present and still
+  # resolves the current dated FeatureServer layer from the Experience app item
+  # (https://experience.arcgis.com/experience/86b8b6c8725a4a6484ce60fbd0447ca6). It is kept
+  # deliberately so a bad CSV day costs one line here rather than a code change.
+  #
+  # ⚠ The CSV also carries 673 `Cancelled` rows. They are cancelled APPLICATIONS, not closed stores —
+  # 244 sit at an address authorized today — so the handler returns open stores only.
+  list_url: https://www.agco.ca/sites/default/files/opendata/AGCOWebSiteCRSANewProcessMapData.csv
+  list_type: on_agco_csv
 
 - abbr: AB
   name: Alberta
@@ -572,9 +604,20 @@
   country: CA
   programs: recreational
   program_term: cannabis
-  # Hybrid market: 59 private retailers + the NLC's own online store (Cannabis NL /
-  # shopcannabisnl.com, a Shopify storefront) — seeded via seed-shopify-storefronts. The
-  # private-retailer roster (from nlliquorcorp.com) + aggregator pools are a follow-up.
+  # Hybrid market: private retailers + the NLC's own online store (Cannabis NL /
+  # shopcannabisnl.com, a Shopify storefront) — seeded via seed-shopify-storefronts, whose embedded
+  # store-locator app yields the outlets.
+  #
+  # ⚠ THIS COMMENT USED TO SAY "the private-retailer roster (from nlliquorcorp.com) + aggregator
+  # pools are a follow-up", AND THAT WAS A GUESS THAT SURVIVED AS A PLAN. Checked 2026-09-14: NLC
+  # publishes no list of its licensed retailers. `/doing-business-with-nlc/cannabis/
+  # licensed-cannabis-retailers` is a B2B hub (how to apply, the order portal, the handbook); its
+  # "Public Notices" page carries licence APPLICATIONS and mixes alcohol venues in; the province's
+  # open-data licence page does not mention cannabis at all. The government's own cannabis page
+  # answers the question directly — "There are more than 20 retailers spread throughout the
+  # province... Information on how to legally purchase cannabis can be found at: ShopCannabisNL" —
+  # i.e. the Crown storefront's locator IS the list, which is what we already scrape.
+  publishes_licensee_roster: false
   agency: Newfoundland Labrador Liquor Corporation (NLC)
   known_url: https://shopcannabisnl.com/
 

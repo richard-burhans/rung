@@ -1,5 +1,8 @@
 """Tests for state_search pure helpers (no network): URL filter, classifier, queries."""
 
+from pathlib import Path
+
+from rung.sources import state_search
 from rung.sources.state_search import (
     StateInfo,
     _build_queries,
@@ -96,3 +99,83 @@ def test_ddg_challenge_marks_the_backend_blocked_not_empty(monkeypatch) -> None:
         "a 202 challenge page is a DEAD BACKEND, not an empty result set. Reporting it as 'no results' "
         "is how discovery came to invent homepages from whatever the other engine returned."
     )
+
+
+# ── Bing: organic results only ───────────────────────────────────────────────────────────────────
+#
+# Driven by `tests/fixtures/bing_results.html`, a real results page saved 2026-09-12. The query was
+# `"Greenery Spot" cannabis dispensary NY official website`, chosen because the operator's own site
+# (greeneryspot.com) does NOT appear on it — so the fixture also pins the honest negative: this
+# backend returning a page is not the same as it returning the answer.
+
+_BING_FIXTURE = Path(__file__).parent / "fixtures" / "bing_results.html"
+
+
+def _fixture_html() -> str:
+    import html as html_mod
+
+    return html_mod.unescape(_BING_FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_only_organic_results_are_read_not_the_whole_page() -> None:
+    """The bug this replaces: a whole-page `u=a1…` regex ranks ADVERTISEMENTS as search results.
+
+    Measured on the live page this fixture came from — 30 tracker links against 10 organic ones —
+    and for `"Milligrams" cannabis dispensary NJ official website` the first six were walmart.com.
+    `homepage_discovery` probes these and `state_lists` follows them, so an ad here is an ad those
+    stages treat as evidence.
+    """
+    import re
+
+    html = _fixture_html()
+    whole_page = len(re.findall(r"[?&]u=(a1[A-Za-z0-9_-]+)", html))
+    organic = state_search.bing_organic_hrefs(html)
+    assert organic, "the fixture has organic blocks; the selector must find them"
+    assert len(organic) < whole_page, (
+        f"the whole-page scan sees {whole_page} links and the organic one {len(organic)}; if these "
+        "are equal the selector is not actually scoping anything"
+    )
+
+
+def test_every_returned_href_is_an_absolute_destination_not_a_tracker() -> None:
+    """A caller probes these. A bing.com/ck/a tracker would be probed as if it were the operator."""
+    for href in state_search.bing_organic_hrefs(_fixture_html()):
+        assert href.startswith("http"), href
+        assert "bing.com/ck/" not in href, f"undecoded tracker leaked through: {href}"
+
+
+def test_a_tracker_decodes_to_its_destination() -> None:
+    import base64
+
+    encoded = base64.urlsafe_b64encode(b"https://greeneryspot.com/").decode().rstrip("=")
+    assert state_search.bing_destination(f"https://www.bing.com/ck/a?u=a1{encoded}&x=1") \
+        == "https://greeneryspot.com/"
+
+
+def test_a_direct_href_passes_through_and_junk_does_not() -> None:
+    assert state_search.bing_destination("https://example.com/x") == "https://example.com/x"
+    assert state_search.bing_destination("/relative/path") is None
+    assert state_search.bing_destination("https://www.bing.com/ck/a?u=a1!!!not-base64!!!") is None
+
+
+def test_a_page_with_no_organic_block_blocks_the_backend_rather_than_answering(monkeypatch) -> None:
+    """No organic block = a challenge, an error, or markup we no longer read — never 'no results'.
+
+    Falling back to the whole-page scan here is what would answer with advertisements, and a caller
+    cannot tell a bad answer from a good one. `blocked` is the only honest verdict.
+    """
+    import asyncio
+
+    class _Resp:
+        status_code = 200
+        text = "<html><body><a href='https://www.bing.com/ck/a?u=a1aHR0cHM6Ly9hZC5jb20'>ad</a></body></html>"
+
+    class _Session:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    monkeypatch.setattr(state_search, "make_session", lambda *a, **k: _Session())
+    backend = state_search._BingBackend()
+    assert asyncio.run(backend.search("anything", lambda hrefs: hrefs)) == []
+    assert backend.blocked, "a page we cannot read must mark the backend blocked"

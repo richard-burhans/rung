@@ -59,6 +59,12 @@ class StateInfo:
     list_url: str = ""   # optional curated dispensary-list URL; overrides crawl discovery
     list_type: str = ""  # optional explicit type for list_url (e.g. ca_dcc); else inferred
     country: str = "US"  # ISO-3166 alpha-2; Canadian provinces carry country: CA in states.yml
+    # Whether the jurisdiction publishes a list of LICENSED RETAILERS that Stage 1 could roster.
+    # False is a fact about the regulator, not about our coverage: where the Crown retailer's own
+    # store locator IS the only store list, an empty `dispensaries` table is the expected state and
+    # flagging it teaches people to ignore the check. Default True — most jurisdictions publish one,
+    # and assuming they do not is how a real gap goes quiet.
+    publishes_licensee_roster: bool = True
 
 
 @dataclass
@@ -85,6 +91,7 @@ def load_states() -> list[StateInfo]:
             list_url=s.get("list_url", ""),
             list_type=s.get("list_type", ""),
             country=s.get("country", "US"),
+            publishes_licensee_roster=s.get("publishes_licensee_roster", True),
         )
         for s in raw
     ]
@@ -117,7 +124,17 @@ def _classify_url(url: str) -> str:
 
 
 def _filter_gov_urls(hrefs: list[str]) -> list[str]:
-    """Return deduplicated .gov URLs from a list of hrefs, skipping noise domains."""
+    """Return deduplicated GOVERNMENT-SUFFIX URLs — `.gov` **and `.us`** (`_GOV_SUFFIXES`) — from a
+    list of hrefs, skipping noise domains.
+
+    ⚠ THIS SAID ".gov URLs" UNTIL 2026-09-15 AND `.us` IS AN OPEN COMMERCIAL TLD. The suffix is kept
+    because real state hosts use it (`*.state.xx.us`), but it means a dispensary directory on a
+    bought `.us` domain passes this filter and can reach `state_programs.best_url` — after which
+    `_verify_candidates` PREFERS the stored URL over the curated `known_url` on every later run.
+    Measured 2026-09-15: 0 live `state_programs` rows sit on a `.us` host, so nothing is exploiting
+    it. Recorded rather than tightened: narrowing to `*.state.*.us` would drop the legitimate shape
+    the suffix was added for, and no live row needs the protection yet.
+    """
     seen: set[str] = set()
     results: list[str] = []
     for href in hrefs:
@@ -205,8 +222,65 @@ class _DDGBackend(_Backend):
         return results
 
 
+# Bing wraps a result's destination in its own click-tracker: `/ck/a?…&u=a1<urlsafe-base64>&…`.
+_BING_REDIRECT_RE = re.compile(r"[?&]u=(a1[A-Za-z0-9_-]+)")
+# ORGANIC results only. `li.b_algo` is Bing's own class for them; the heading anchor (`h2 a`) and the
+# title link (`a.tilk`) are where the destination sits.
+_BING_ORGANIC_SELECTOR = "li.b_algo h2 a[href], li.b_algo a.tilk[href]"
+
+
+def bing_destination(href: str) -> str | None:
+    """The real URL behind a Bing href — decoded if it is a click-tracker, passed through if direct.
+
+    Returns None for anything that is not an absolute http(s) URL, so a malformed or relative
+    tracker contributes nothing rather than a plausible-looking fragment.
+    """
+    match = _BING_REDIRECT_RE.search(href)
+    if match is None:
+        # A CLICK-TRACKER WE CANNOT DECODE IS NOT A DESTINATION. Passing it through returns a
+        # bing.com URL as the operator's homepage — which a caller then probes, and which answers
+        # 200, because bing.com does. Only a genuinely direct href may pass.
+        if "/ck/a" in href or "bing.com" in href:
+            return None
+        return href if href.startswith("http") else None
+    encoded = match.group(1)[2:]
+    encoded += "=" * ((4 - len(encoded) % 4) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(encoded).decode("utf-8", errors="replace")
+    except ValueError:
+        # Only malformed base64 is expected here (binascii.Error ⊂ ValueError);
+        # let anything else (a real bug) surface rather than swallowing it.
+        return None
+    return decoded if decoded.startswith("http") else None
+
+
+def bing_organic_hrefs(html: str) -> list[str]:
+    """Destinations of Bing's ORGANIC results, in page order; [] when the page has no organic block.
+
+    ⚠ **SCOPED TO `li.b_algo` ON PURPOSE.** This used to regex `u=a1…` across the WHOLE page, which
+    catches every tracker Bing emits — sponsored placements, the sidebar, related-search chrome — and
+    ranks them alongside real results. Measured 2026-09-12 on a live page: the whole-page scan
+    returned 30 links against 10 organic ones, and for the query `"Milligrams" cannabis dispensary NJ
+    official website` the first six were **walmart.com**. `"Northern Leaf Cannabis Company"` returned
+    northerntool.com and a US District Court.
+
+    That is not a cosmetic ranking complaint. `homepage_discovery` probes the top candidates and
+    `state_lists` follows them looking for a roster, so an advertisement in this list is an
+    advertisement those stages treat as evidence. The `_EXCLUDED_DOMAINS` note above records what it
+    costs when a degraded Bing contributes plausible-looking URLs: 19 Nevada operators got a
+    fabricated homepage.
+    """
+    tree = HTMLParser(html)
+    hrefs = []
+    for node in tree.css(_BING_ORGANIC_SELECTOR):
+        destination = bing_destination(node.attributes.get("href") or "")
+        if destination is not None:
+            hrefs.append(destination)
+    return hrefs
+
+
 class _BingBackend(_Backend):
-    """Bing search via curl_cffi with base64-decoded redirect URLs."""
+    """Bing search via curl_cffi, reading its organic results and decoding their redirects."""
 
     name = "bing"
 
@@ -221,26 +295,15 @@ class _BingBackend(_Backend):
             return []
 
         decoded_html = html_mod.unescape(resp.text)
-        u_params = re.findall(r"[?&]u=(a1[A-Za-z0-9_-]+)", decoded_html)
-        hrefs = []
-        for up in u_params:
-            b64 = up[2:]
-            pad = 4 - len(b64) % 4
-            if pad != 4:
-                b64 += "=" * pad
-            try:
-                href = base64.urlsafe_b64decode(b64).decode("utf-8", errors="replace")
-                if href.startswith("http"):
-                    hrefs.append(href)
-            except ValueError:
-                # Only malformed base64 is expected here (binascii.Error ⊂ ValueError);
-                # let anything else (a real bug) surface rather than swallowing it.
-                pass
-
-        results = filter_fn(hrefs)
+        hrefs = bing_organic_hrefs(decoded_html)
         if not hrefs:
+            # NO ORGANIC BLOCK AT ALL means the page is a challenge, an error, or markup we no longer
+            # understand — all three are "this backend is not usable", and none of them is "the
+            # operator has no website". Falling back to the whole-page scan here would answer with
+            # advertisements, which is the failure this function exists to end.
             self.blocked = True
-        return results
+            return []
+        return filter_fn(hrefs)
 
 
 class _GoogleBackend(_Backend):
