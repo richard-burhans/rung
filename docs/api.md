@@ -92,7 +92,7 @@ http.HONEST_USER_AGENT                                     # the self-identifyin
 
 All network access must go through `make_session()` (AST-enforced by `tests/test_http.py`).
 
-## `rung.rate_limit` / `rung.rate_gate` / `rung.browser`
+## `rung.rate_limit` / `rung.rate_gate` / `rung.browser` / `rung.virtual_display`
 
 ```python
 rate_limit.try_acquire(conn, host, *, rate_per_sec, burst, cost) -> bool   # cross-worker token bucket
@@ -100,7 +100,15 @@ rate_gate.HostGate(conn_factory, *, max_wait_s)          # the waiting gate over
 await gate.acquire(key, *, rate_per_sec, burst, cost)    # True = go; False = over budget, shed
 gate.stats.summary() / gate.close()                      # telemetry; release the connection
 browser.render_html(...) / browser.make_browser_options() / browser.get_script_value(...)  # pydoll/Chrome
+virtual_display.missing_binaries("xvfb") -> list[str]    # system binaries absent (empty = ready)
+with virtual_display.virtual_display("xvfb", width=1920, height=1080) as env: ...  # env["DISPLAY"]
 ```
+
+`virtual_display` gives a browser that must run with a window an X display on a box with none
+(a server, a container, CI): Xvfb, or Xorg with the `dummy` driver. It sets `DISPLAY` and
+neutralises a Wayland session for the duration, restores the environment on exit, and yields the
+geometry so the caller can check where the browser actually drew. The X server binaries are system
+packages, not Python dependencies.
 
 `try_acquire` is non-blocking and leaves the transaction to its caller; `HostGate` is what waits,
 on a connection of its own. A gate is per process, so with egress-scoped keys it coordinates the

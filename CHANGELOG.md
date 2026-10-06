@@ -19,6 +19,16 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-06
+
+- **`rung.virtual_display`** — an X display for a browser that must run with a window on a box
+  with none (a server, a container, CI): Xvfb, or Xorg with the `dummy` video driver, re-implementing
+  Chromium's own Xvfb test helper. `virtual_display("xvfb")` is a context manager that picks a free
+  `DISPLAY`, waits until the server answers, neutralises a Wayland session (else the browser ignores
+  `DISPLAY` and draws on the real screen), restores the environment on exit, and yields the geometry
+  so the caller can verify where the browser drew. `missing_binaries()` reports which system
+  binaries are absent. Previously private; it names no target and imports nothing internal.
+
 ### Changed — 2026-08-18 → 2026-10-06 (synced to the public repo 2026-10-06)
 
 The public repo had not been synced for seven weeks; these entries cover what reached it in one

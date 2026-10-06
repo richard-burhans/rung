@@ -69,6 +69,7 @@ move is localized.
 | `models.py` | Generic persisted-record dataclasses. |
 | `http.py` | Generic curl_cffi session / Chrome impersonation / rate-limiter. |
 | `browser.py` | Generic pydoll/Chrome primitives. |
+| `virtual_display.py` | Generic Xvfb / Xorg+dummy display for a head-full browser (moved from the overlay 2026-10-06). |
 | `text.py` | Generic normalizers + identity hash (the *keyword data* it reads is private). |
 | `html.py` | Generic page-structure / value primitives for the per-platform helpers: `as_float`, the string-aware brace scanner, the RSC flight-stream reassembler, `script_json(html, script_id)`. The embedded-state id is passed in by the caller, never written here. |
 | `normalize.py` | Generic numeric/size/terpene normalizers. |

@@ -32,9 +32,10 @@ INTEL_PKG = "rung_intel"
 # in PUBLIC_MODULES but no tier, i.e. their layering was unguarded — the same "a tier the guard does
 # not know about is not a tier" gap the overlay note below calls out).
 # `licensing` and `operators` are the same shape as `brands`: YAML crosswalk readers with zero
-# internal imports.
+# internal imports. `virtual_display` (an X display for a head-full browser) imports nothing at all.
 BASE = frozenset({"models", "http", "html", "browser", "text", "addresses", "normalize", "static_source",
-                  "brands", "licensing", "operators", "geocode_rnf", "geocode_points"})  # tier 0
+                  "brands", "licensing", "operators", "geocode_rnf", "geocode_points",
+                  "virtual_display"})  # tier 0
 TIER1 = frozenset({"db", "queue"})            # tier 1 — persistence + work queue
 TIER2 = frozenset({"access"})                 # tier 2 — access-method engine
 FOUNDATION = BASE | TIER1 | TIER2
@@ -60,6 +61,10 @@ PUBLIC_MODULES = frozenset({
     # The cross-state operator key: retail-banner ownership assembled from SEC filings and one trade
     # report, i.e. public-record corporate structure, exactly like `brand_parent.yml` beside it.
     "operators",
+    # An Xvfb / Xorg+dummy display for a browser that must run with a window on a display-less box —
+    # Chromium's own test-harness recipe, re-implemented. Moved here from the private overlay on
+    # 2026-10-06: it names no target and imports nothing internal.
+    "virtual_display",
 })
 
 # ── Overlay tiers (the proprietary modules left PUBLIC_DIR in the carve-out; their internal layering
