@@ -74,7 +74,6 @@ move is localized.
 | `html.py` | Generic page-structure / value primitives for the per-platform helpers: `as_float`, the string-aware brace scanner, the RSC flight-stream reassembler, `script_json(html, script_id)`. The embedded-state id is passed in by the caller, never written here. |
 | `normalize.py` | Generic numeric/size/terpene normalizers. |
 | `addresses.py` | Generic address-extraction primitives. |
-| `proxy.py` | Generic health-aware proxy pool. |
 | `db.py` | Postgres schema + CRUD (generic persistence). |
 | `static_source.py` | DuckDB-over-Parquet adapter `db.get_connection` delegates to under `RUNG_DATA_SOURCE=static` — runs the analysis off a frozen clean dataset (the Galaxy / outside-researcher reproducibility path); takes a file path, never a credential. |
 | `queue.py` | Generic Postgres work queue (`FOR UPDATE SKIP LOCKED`). |
@@ -101,6 +100,7 @@ move is localized.
 | `rung_intel/compare.py` | Roster-gap comparison — **the intel deliverable**. |
 | `rung_intel/recon.py` | Operator→platform detection (first step of the know-how). |
 | `bootstrap.py` | Dutchie/Weedmaps/Leafly pool bootstraps (know-how). |
+| `rung_intel/proxy.py` | The proxy pool — which exit a request leaves from, and when to rotate it. Listed as public in this table until 2026-10-06, though it left the public core on 2026-06-29; the core keeps only `make_session(proxy=…)` and the `proxies`/`proxy_tiers` table DDL. |
 | `rung_intel/dutchie.py`, `dutchie_plus.py`, `weedmaps.py`, `leafly.py`, `sweedpos.py`, `trulieve.py`, `cresco.py`, `curaleaf.py`, `fluent.py`, `hytiva.py` | Per-platform scraping recipes. |
 | `dev/analyze.py` | Dev-only AI inspector. |
 
