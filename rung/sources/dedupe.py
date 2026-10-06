@@ -277,9 +277,17 @@ class _UnionFind[T]:
         self._parent[self.find(b)] = self.find(a)
 
 
+#: Leading words that are not a brand: "The Mint" is branded "mint".
+_NON_BRAND_LEADS = frozenset({"the", "a", "an"})
+
+
 def _brand_token(name: str) -> str:
-    tokens = re.split(r"[^a-z0-9]+", name.lower())
-    return tokens[0] if tokens and tokens[0] else name.lower()
+    """The first word of a company name that can carry the brand — a leading article is skipped."""
+    tokens = [token for token in re.split(r"[^a-z0-9]+", name.lower()) if token]
+    branded = [token for token in tokens if token not in _NON_BRAND_LEADS]
+    if branded:
+        return branded[0]
+    return tokens[0] if tokens else name.lower()
 
 
 def _city_in_name(city: str | None, alias_name: str) -> bool:
@@ -363,10 +371,15 @@ def pick_canonical(
 ) -> int:
     """The canonical company of an operator cluster: the one whose brand token most
     often appears in its scraped store names; then the one with the most stores (the
-    surviving operator usually carries the full set); then shortest name, then id."""
+    surviving operator usually carries the full set); then shortest name, then id.
+
+    The brand must appear as a WHOLE WORD. A substring test let "The Mint"'s first token, "the",
+    match inside "Northern" and "Bethesda" and win the canonical over the real operator (the
+    2026-10-06 whole-tree review)."""
     def score(cid: int) -> tuple[int, int, int, int]:
         brand = _brand_token(names[cid])
-        matches = sum(1 for sn in store_names.get(cid, []) if brand and brand in sn.lower())
+        pattern = re.compile(rf"(?<![a-z0-9]){re.escape(brand)}(?![a-z0-9])") if brand else None
+        matches = sum(1 for sn in store_names.get(cid, []) if pattern and pattern.search(sn.lower()))
         store_count = len(store_names.get(cid, []))
         return (matches, store_count, -len(names[cid]), -cid)
 

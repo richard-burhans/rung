@@ -183,6 +183,19 @@ def scrape_states(only: str, render: bool, ai: bool, record_history: bool) -> No
     ))
 
 
+def _refuse_both_aggregator_filters(skip_aggregators: bool, only_aggregators: bool) -> None:
+    """``--skip-aggregators`` and ``--only-aggregators`` together filter out every store: the run
+    scrapes nothing and reports no error. Refuse the combination instead of running it."""
+    if skip_aggregators and only_aggregators:
+        raise click.UsageError("--skip-aggregators and --only-aggregators are mutually exclusive")
+
+
+#: The dedupe claim's lease. A fold is one synchronous pass with no heartbeat, so the lease must
+#: outlast the longest fold or `reap-jobs` reclaims a LIVE fold and a second one runs beside it;
+#: the default 30-minute lease was the only bound on it.
+_DEDUPE_LEASE_MINUTES = 180
+
+
 def _run_dedupe_claimed(conn: db.DBConn, abbr: str):
     """Run one state's fold under the one-dedupe-per-state claim, or return ``None`` if another worker
     already holds it (skip — that run folds this state).
@@ -199,10 +212,20 @@ def _run_dedupe_claimed(conn: db.DBConn, abbr: str):
     queue.requeue_stale(conn, "dedupe")
     queue.enqueue(conn, "dedupe", abbr)
     conn.commit()
-    job = queue.claim_target(conn, "dedupe", abbr, worker)
+    job = queue.claim_target(conn, "dedupe", abbr, worker, lease_minutes=_DEDUPE_LEASE_MINUTES)
     if job is None:
         return None
-    report = run_dedupe(conn, abbr)
+    try:
+        report = run_dedupe(conn, abbr)
+    except Exception as exc:
+        # Release the claim as FAILED before the error propagates. Without this the job stayed
+        # `claimed`, and every later fold of the state — `dedupe-stores` and the auto-fold after a
+        # scrape — printed "already running" and skipped until the lease ran out.
+        conn.rollback()
+        queue.complete(conn, job.id, "failed", worker=worker,
+                       error=f"{type(exc).__name__}: {exc}"[:500])
+        conn.commit()
+        raise
     queue.complete(conn, job.id, "done", worker=worker)
     conn.commit()
     return report
@@ -310,6 +333,7 @@ def scrape_menus_cmd(
     stop_on_cooldown: bool, only: str, record_history: bool,
 ) -> None:
     """Scrape each handled store's menu into store_products (Stage 3)."""
+    _refuse_both_aggregator_filters(skip_aggregators, only_aggregators)
     asyncio.run(_run_store_menus(
         state=state.strip().upper(), max_age_hours=max_age_hours,
         skip_aggregators=skip_aggregators, only_aggregators=only_aggregators,
@@ -471,6 +495,7 @@ def worker_cmd(
     jobs at startup, keep a per-worker heartbeat, and claim via SKIP LOCKED; this command adds the
     standalone entrypoint, the two-stage combination, and an optional continuous poll loop.
     """
+    _refuse_both_aggregator_filters(skip_aggregators, only_aggregators)
     states = [s.strip().upper() for s in state.split(",") if s.strip()]
     asyncio.run(_run_worker(
         states=states, task=task, max_age_hours=max_age_hours,

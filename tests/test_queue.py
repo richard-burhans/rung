@@ -91,7 +91,7 @@ def test_requeue_stale_recovers_then_fails_at_attempt_cap() -> None:
     queue.enqueue(conn, "t", "k")
     conn.commit()
     queue.claim_next(conn, "t", "w1")
-    conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours'")
+    conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours', lease_until = now() - interval '90 minutes'")
     assert queue.requeue_stale(conn, "t") == 1
     conn.commit()
     assert conn.execute("SELECT status, attempts FROM jobs").fetchone() == ("pending", 1)
@@ -101,7 +101,7 @@ def test_requeue_stale_recovers_then_fails_at_attempt_cap() -> None:
     for _ in range(2):
         conn.execute("UPDATE jobs SET scheduled_at = now()")
         queue.claim_next(conn, "t", "w1")
-        conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours'")
+        conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours', lease_until = now() - interval '90 minutes'")
         queue.requeue_stale(conn, "t")
         conn.commit()
     assert conn.execute("SELECT status, error FROM jobs").fetchone() == (
@@ -205,7 +205,7 @@ def test_reclaim_isolation_holds_across_two_live_connections() -> None:
 
     job = queue.claim_next(conn_a, "t", "w1")
     assert job is not None
-    conn_a.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours'")  # w1 looks stale
+    conn_a.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours', lease_until = now() - interval '90 minutes'")  # w1 looks stale
     queue.requeue_stale(conn_a, "t")                      # claimed -> pending
     conn_a.execute("UPDATE jobs SET scheduled_at = now()")  # clear the requeue jitter
     conn_a.commit()                                       # w2 must see the freed row
@@ -233,7 +233,7 @@ def test_requeued_reclaim_orphans_the_original_workers_completion() -> None:
     conn.commit()
     job = queue.claim_next(conn, "t", "w1")
     assert job is not None
-    conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours'")  # w1 now looks stale
+    conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours', lease_until = now() - interval '90 minutes'")  # w1 now looks stale
     queue.requeue_stale(conn, "t")                       # claimed -> pending
     conn.execute("UPDATE jobs SET scheduled_at = now()")  # clear the requeue jitter so it claims now
     conn.commit()
@@ -580,7 +580,7 @@ def test_requeue_stale_spreads_pending_retries() -> None:
     conn.commit()
     for _ in range(20):
         queue.claim_next(conn, "t", "w1")
-    conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours'")
+    conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours', lease_until = now() - interval '90 minutes'")
     assert queue.requeue_stale(conn, "t") == 20
     conn.commit()
     # Each retry is re-queued with a small (~0–30s) future scheduled_at, and the wave is spread

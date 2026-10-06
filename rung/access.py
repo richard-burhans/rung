@@ -186,6 +186,16 @@ def _host_of(resource_url: str | None) -> str:
     return urlparse(resource_url).netloc.removeprefix("www.")
 
 
+def _governor_key(resource_url: str | None, method_name: str) -> str:
+    """The re-explore governor's per-host bucket for a winner: its host, or — for a winner that stored
+    no URL — its METHOD, the nearest stand-in for the site it calls (one rung, one platform API).
+
+    Every URL-less winner used to share the '' bucket, so after ``host_hard`` admissions of ANY of
+    them no other URL-less stale winner was re-explored for the rest of the run, whatever site it
+    used (the 2026-10-06 whole-tree review)."""
+    return _host_of(resource_url) or f"method:{method_name}"
+
+
 @dataclass
 class ReExploreGovernor:
     """RED-inspired admission control for *discretionary* staleness re-walks.
@@ -392,7 +402,7 @@ async def run_target(
         re_explore = (
             governor is not None
             and age is not None
-            and governor.admit(age, _host_of(resource_url))
+            and governor.admit(age, _governor_key(resource_url, winner_name))
         )
         # A NEW rung added to the catalog below the winner's cost has no attempt
         # row yet — walk cheapest-first once so it gets its shot (the winner still

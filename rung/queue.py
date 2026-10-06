@@ -91,13 +91,19 @@ ON CONFLICT (task_type, target_key) WHERE status IN ('pending', 'claimed')
 DO NOTHING
 """
 
+# A TARGETED claim does not wait for `scheduled_at`. The requeue and reap paths push a reclaimed row up
+# to ~30 s ahead so a WAVE of requeued jobs does not stampede a shared pool (`claim_next`) — but a caller
+# naming one target is not a wave, and the row it wants is that very row: `enqueue` is a no-op while it
+# exists, so waiting meant the claim returned None and a just-reaped dedupe printed "already running"
+# and skipped its fold (the 2026-10-06 whole-tree review). Nothing enqueues with `spread_seconds` today;
+# a targeted claim of such a job would take it early, by design.
 _CLAIM_TARGET = """
 UPDATE jobs SET status = 'claimed', claimed_by = %s, claimed_at = now(),
                 last_heartbeat = now(), lease_until = now() + make_interval(mins => %s),
                 attempts = attempts + 1
 WHERE id = (SELECT id FROM jobs
             WHERE task_type = %s AND target_key = %s
-              AND status = 'pending' AND scheduled_at <= now()
+              AND status = 'pending'
             ORDER BY id LIMIT 1
             FOR UPDATE SKIP LOCKED)
 RETURNING id, task_type, target_key, payload, attempts
@@ -106,11 +112,16 @@ RETURNING id, task_type, target_key, payload, attempts
 # On the →pending branch also spread the next attempt: a wave of jobs requeued at the same instant
 # would otherwise all become claimable together and stampede the target. scheduled_at is hashed
 # ~0–30s off the target_key (deterministic per target), so simultaneously-requeued jobs de-sync. The
-# →failed branch leaves scheduled_at untouched (a failed job is never re-claimed).
+# →failed branch leaves scheduled_at untouched (a failed job is never re-claimed), and stamps
+# `finished_at`, without which `prune_completed` (which deletes only finished rows) never removes it.
+# A claim whose lease a heartbeat is still extending is LIVE however old it is, and is left alone:
+# selecting on claim age alone re-queued a heartbeating worker's job at the next process start, so the
+# target was scraped twice and the first worker's `complete` found the claim gone.
 _REQUEUE_STALE = """
 UPDATE jobs
 SET status       = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed' END,
     error        = CASE WHEN attempts < max_attempts THEN error ELSE 'claim timeout' END,
+    finished_at  = CASE WHEN attempts < max_attempts THEN finished_at ELSE now() END,
     claimed_by   = NULL,
     claimed_at   = NULL,
     scheduled_at = CASE WHEN attempts < max_attempts
@@ -118,6 +129,7 @@ SET status       = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed
                         ELSE scheduled_at END
 WHERE task_type = %s AND status = 'claimed'
   AND claimed_at < now() - make_interval(mins => %s)
+  AND (lease_until IS NULL OR lease_until < now())
 """
 
 # Lease-aware reaper: re-queue (or fail at the attempt cap) any claim whose lease has expired —
@@ -128,6 +140,7 @@ _REAP_EXPIRED = """
 UPDATE jobs
 SET status       = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed' END,
     error        = CASE WHEN attempts < max_attempts THEN error ELSE 'lease expired' END,
+    finished_at  = CASE WHEN attempts < max_attempts THEN finished_at ELSE now() END,
     claimed_by   = NULL,
     claimed_at   = NULL,
     lease_until  = NULL,
@@ -236,12 +249,18 @@ def make_claimer(
     else drain the shared queue, scoped to ``target_prefix``/``target_suffix`` when given (one state,
     so a full ``--state`` run doesn't claim+fail another state's jobs; Stage-2 scopes by suffix because
     its key ends with the state). Only this claim step is common across the stages; their ``_consume``
-    loops (stop-event, per-stage persist/complete handling) stay per-runner."""
+    loops (stop-event, per-stage persist/complete handling) stay per-runner.
+
+    ``targeted_keys`` are claimed IN THE ORDER GIVEN, so a caller that orders them (stalest first)
+    gets that order. It used ``list.pop()`` until 2026-10-06, which takes from the END: a stalest-first
+    list was claimed freshest-first, and a run killed partway truncated the same stale tail every
+    night. The caller's list is not modified."""
+    remaining = iter(list(targeted_keys)) if targeted_keys is not None else None
+
     def _claim() -> Job | None:
-        if targeted_keys is not None:
-            while targeted_keys:
-                job = claim_target(conn, task_type, targeted_keys.pop(), worker,
-                                   lease_minutes=lease_minutes)
+        if remaining is not None:
+            for key in remaining:
+                job = claim_target(conn, task_type, key, worker, lease_minutes=lease_minutes)
                 if job is not None:
                     return job
             return None
@@ -309,29 +328,41 @@ async def heartbeat_forever(
     stderr (the queue has no user-facing output of its own; stderr keeps the diagnostic out of
     piped stdout), the dedicated connection is reopened, and the next bump waits a full
     ``interval_s`` — no hot spin, and a permanent failure keeps announcing itself every interval.
+
+    **Every database call runs in a worker thread** (`asyncio.to_thread`), never on the event loop:
+    the bump, the commit and the reconnect are blocking psycopg calls, and the loop is shared with
+    every in-flight scrape. A reconnect that hung through a Postgres restart froze them all, and
+    their HTTP timeouts fired against a loop that was not running.
     """
-    conn = conn_factory()
-    try:
-        while True:
+
+    def _tick(conn: db.DBConn) -> db.DBConn:
+        """One bump; on failure, report and return a fresh connection (or the dead one)."""
+        try:
+            bump_worker_heartbeat(conn, worker, lease_minutes=lease_minutes)
+            conn.commit()
+            return conn
+        except Exception as exc:  # transient DB failure — log, reconnect, retry next tick
+            print(
+                f"queue: heartbeat bump failed for worker {worker!r} "
+                f"({type(exc).__name__}: {exc}) — retrying in {interval_s}s",
+                file=sys.stderr,
+            )
+            with contextlib.suppress(Exception):
+                conn.close()
             try:
-                bump_worker_heartbeat(conn, worker, lease_minutes=lease_minutes)
-                conn.commit()
-            except Exception as exc:  # transient DB failure — log, reconnect, retry next tick
+                return conn_factory()
+            except Exception as exc2:
                 print(
-                    f"queue: heartbeat bump failed for worker {worker!r} "
-                    f"({type(exc).__name__}: {exc}) — retrying in {interval_s}s",
+                    f"queue: heartbeat reconnect failed for worker {worker!r} "
+                    f"({type(exc2).__name__}: {exc2}) — retrying in {interval_s}s",
                     file=sys.stderr,
                 )
-                with contextlib.suppress(Exception):
-                    conn.close()
-                try:
-                    conn = conn_factory()
-                except Exception as exc2:
-                    print(
-                        f"queue: heartbeat reconnect failed for worker {worker!r} "
-                        f"({type(exc2).__name__}: {exc2}) — retrying in {interval_s}s",
-                        file=sys.stderr,
-                    )
+                return conn
+
+    conn = await asyncio.to_thread(conn_factory)
+    try:
+        while True:
+            conn = await asyncio.to_thread(_tick, conn)
             await asyncio.sleep(interval_s)
     except asyncio.CancelledError:
         return
