@@ -720,8 +720,10 @@ def record_access_attempt(
     """Upsert the outcome of one method attempt against one target. Caller commits.
 
     ``status`` must be one of ``ACCESS_STATUSES``. On 'ok' the last_ok_at timestamp advances; on any
-    other outcome, last_fail_at. attempts increments on every call. A null resource_url/params
-    preserves the stored value.
+    other outcome, last_fail_at. attempts increments on every call. On 'ok' a null resource_url /
+    params preserves the stored value; on any OTHER outcome the stored values are REPLACED with what
+    was passed — null included — so the next attempt re-discovers instead of re-serving a locator
+    that just failed (the stale-hint lock; see ``_UPSERT_ACCESS_METHOD``).
     """
     if status not in ACCESS_STATUSES:
         raise ValueError(f"unknown access status {status!r}; expected one of {sorted(ACCESS_STATUSES)}")

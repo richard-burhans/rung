@@ -28,6 +28,7 @@ for any name missing from its ``TYPE_CHECKING`` block.
 """
 
 import contextlib
+import dataclasses
 import datetime
 import json
 from typing import LiteralString, Protocol
@@ -1098,6 +1099,53 @@ _HANDLE_UPGRADE_RETENTION = 0.8
 _MENU_UPGRADE_RETENTION = 0.5
 
 
+def _with_cached_geocodes(
+    conn: DBConn, records: list[CompanyStoreRecord]
+) -> list[CompanyStoreRecord]:
+    """``records`` with missing lat/lon/ZIP/city filled from ``geocode_cache`` — the per-record twin
+    of `apply_geocode_cache`, with its rules: lat and lon only together, ZIP and city only when the
+    cached value is non-empty, and never over a value the source published.
+
+    A Stage-2 replace deletes a company's rows and inserts the new scrape, so coordinates a geocode
+    backfill had given those rows were lost on every re-scrape; `GEOCODED_TABLES` names
+    `company_stores` for exactly this restore, and until 2026-10-06 nothing ran it for that table.
+    Filling the records before insert costs one cache lookup per replace, not a state-wide pass.
+    """
+    keyed = {
+        index: query
+        for index, record in enumerate(records)
+        if (record.latitude is None or record.zip_code is None or record.city is None)
+        and record.address
+        and (query := text.geocode_query(record.address, record.city, record.state, record.zip_code))
+    }
+    if not keyed:
+        return records
+    # A schema without the cache (a minimal test schema; `create_tables` always makes it) has nothing
+    # to restore — that is an empty cache, not an error.
+    present = conn.execute("SELECT to_regclass('geocode_cache') IS NOT NULL").fetchone()
+    if not present or not present[0]:
+        return records
+    cached = get_geocode_cache(conn, sorted(set(keyed.values())))
+    if not cached:
+        return records
+    filled = list(records)
+    for index, query in keyed.items():
+        if query not in cached:
+            continue
+        latitude, longitude, zip_code, city = cached[query]
+        record = records[index]
+        updates: dict[str, object] = {}
+        if record.latitude is None and latitude is not None and longitude is not None:
+            updates["latitude"], updates["longitude"] = latitude, longitude
+        if record.zip_code is None and zip_code:
+            updates["zip_code"] = zip_code
+        if record.city is None and city:
+            updates["city"] = city
+        if updates:
+            filled[index] = dataclasses.replace(record, **updates)
+    return filled
+
+
 def replace_company_stores(
     conn: DBConn,
     company_id: int,
@@ -1136,10 +1184,14 @@ def replace_company_stores(
     reads, and until 2026-09-25 it out-ranked the real platform handle that arrived later — four
     Tendy and two Sweed operators kept their unroutable rows over routable ones. Without it (the
     public core alone, tests) the non-aggregator rule stands by itself.
+
+    The incoming records are first filled from the geocode cache (`_with_cached_geocodes`), so a
+    re-scrape keeps the coordinates a geocode backfill gave the rows it replaces.
     """
     existing = count_company_stores(conn, company_id, abbr)
     if not records:
         return existing, False
+    records = _with_cached_geocodes(conn, records)
 
     existing_distinct = _distinct_stored_stores(conn, company_id, abbr)
     new_distinct = _distinct_new_stores(records)
@@ -1834,15 +1886,21 @@ def is_medical_only(conn: DBConn, abbr: str) -> bool:
 #: Two discount scripts each carried a copy that took the lowest of BOTH channels, while
 #: `original_price` has been stamped from the menu's own channel since #870 — so a rec menu with a
 #: cheaper medical list reported a markdown it does not have (the 2026-10-06 ultra review).
+#: Whether ``sp``'s menu prices on the medical channel — `normalize.price_channel` in SQL. NULL-safe
+#: on purpose: with `menu_type = 'medical'`, an undeclared row outside the medical-only states made
+#: the predicate NULL, `NOT` of it NULL too, and the row fell through BOTH channel branches into the
+#: all-channel minimum below — the cheaper program's price for most undeclared rows.
+_MEDICAL_CHANNEL: LiteralString = (
+    "(sp.menu_type IS NOT DISTINCT FROM 'medical' OR (sp.menu_type IS NULL AND COALESCE(sp.state IN "
+    + MEDICAL_ONLY_SUBQUERY + ", false)))"
+)
 EFFECTIVE_VARIANT_PRICE: LiteralString = (
     "CASE "
-    "WHEN (sp.menu_type = 'medical' OR (sp.menu_type IS NULL AND sp.state IN "
-    + MEDICAL_ONLY_SUBQUERY + ")) "
+    "WHEN " + _MEDICAL_CHANNEL + " "
     "AND (vv ? 'price_med' OR vv ? 'special_price_med') THEN LEAST("
     "COALESCE((vv->>'special_price_med')::float, 'Infinity'::float), "
     "COALESCE((vv->>'price_med')::float, 'Infinity'::float)) "
-    "WHEN NOT (sp.menu_type = 'medical' OR (sp.menu_type IS NULL AND sp.state IN "
-    + MEDICAL_ONLY_SUBQUERY + ")) "
+    "WHEN NOT " + _MEDICAL_CHANNEL + " "
     "AND (vv ? 'price_rec' OR vv ? 'special_price_rec') "
     "THEN LEAST("
     "COALESCE((vv->>'special_price_rec')::float, 'Infinity'::float), "
@@ -2170,6 +2228,10 @@ INSERT INTO state_programs
    all_gov_urls, last_checked, check_status, searched_at, error, country)
 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 ON CONFLICT (abbr) DO UPDATE SET
+  name         = excluded.name,
+  programs     = excluded.programs,
+  program_term = excluded.program_term,
+  agency       = excluded.agency,
   best_url     = excluded.best_url,
   source_type  = excluded.source_type,
   all_gov_urls = excluded.all_gov_urls,
@@ -2182,7 +2244,12 @@ ON CONFLICT (abbr) DO UPDATE SET
 
 
 def upsert_state_program(conn: DBConn, record: StateProgramRecord) -> None:
-    """Upsert one StateProgramRecord. Caller must commit."""
+    """Upsert one StateProgramRecord. Caller must commit.
+
+    A re-upsert rewrites the program fields too (``name``, ``programs``, ``program_term``,
+    ``agency``): every caller builds them from the jurisdiction registry, which is their source. They
+    were insert-only until 2026-10-06, so a state whose program changed in the registry kept its first
+    value — and ``programs`` decides whether an undeclared menu prices on the medical list."""
     conn.execute(
         _UPSERT_STATE_PROGRAM,
         (

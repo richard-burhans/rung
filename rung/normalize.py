@@ -57,22 +57,30 @@ _LABEL_TO_GRAMS: dict[str, float | None] = {
     "ounce": 28.0,
 }
 
+# The number may lead with its decimal point (".5g" is half a gram, not five grams).
 _NUMERIC_UNIT_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(milligrams|milligram|grams|gram|ounces|ounce|lbs|lb|pound|mg|oz|g)\b",
+    r"(\d*\.\d+|\d+)\s*(milligrams|milligram|grams|gram|ounces|ounce|lbs|lb|pound|mg|oz|g)\b",
     re.IGNORECASE,
 )
-# A fraction of an ounce: "1/8 oz", "1/4 ounce".
-_FRACTION_OZ_RE = re.compile(r"(\d+)\s*/\s*(\d+)\s*(?:oz|ounce|ounces)\b", re.IGNORECASE)
-# A multipack count: "5pk", "5 pack", "3 x 0.5g", "10x". Bounded so a stray id can't multiply.
-_MULTIPACK_RE = re.compile(r"(\d{1,3})\s*(?:x|×|pk|pack)\b", re.IGNORECASE)
+# A fraction of a unit: "1/8 oz", "1/4 ounce", "1/2 g", "1/2 lb". It used to accept ounces only, so
+# "1/2 g" fell through to the numeric pattern and read its denominator as the weight (2 g).
+_FRACTION_RE = re.compile(
+    r"(\d+)\s*/\s*(\d+)\s*(grams|gram|ounces|ounce|lbs|lb|pound|oz|g)\b", re.IGNORECASE
+)
+# A multipack count: "5pk", "5 pack", "3 x 0.5g", "5x0.5g", "10x". Bounded so a stray id can't
+# multiply. An "x" counts when no letter follows it — "5x0.5g" has a digit there, which the old
+# trailing word boundary refused, so a 5-pack sized as one unit.
+_MULTIPACK_RE = re.compile(r"(\d{1,3})\s*(?:[x×](?![a-z])|pk\b|pack\b)", re.IGNORECASE)
 
 
 def size_to_grams(raw: object) -> float | None:
     """Grams for a variant size label, or None when it carries no weight / can't be parsed.
 
-    Handles discrete labels ("eighth_ounce", "gram", "each"→None), fractions ("1/8 oz" → 3.5),
+    Handles discrete labels ("eighth_ounce", "gram", "each"→None), fractions ("1/8 oz" → 3.5,
+    "1/2 g" → 0.5), a leading decimal point (".5g" → 0.5),
     and numeric+unit ("3.5g", "100mg" → 0.1, "1 oz" → 28) with a ``N x``/``Npk`` multipack
-    multiplier ("5pk 0.5g" → 2.5). Unitless or unrecognized input → None (never a bare guess).
+    multiplier ("5pk 0.5g" and "5x0.5g" → 2.5). Unitless or unrecognized input → None (never a bare
+    guess).
     """
     if not isinstance(raw, str) or not raw.strip():
         return None
@@ -84,11 +92,12 @@ def size_to_grams(raw: object) -> float | None:
     count = int(count_match.group(1)) if count_match else 1
     if count < 1:
         count = 1
-    fraction = _FRACTION_OZ_RE.search(text)
+    fraction = _FRACTION_RE.search(text)
     if fraction:
         numerator, denominator = float(fraction.group(1)), float(fraction.group(2))
         if denominator:
-            return _plausible_g((numerator / denominator) * _GRAMS_PER_OUNCE * count)
+            unit = _UNIT_TO_GRAMS[fraction.group(3).lower()]
+            return _plausible_g((numerator / denominator) * unit * count)
     match = _NUMERIC_UNIT_RE.search(text)
     if match:
         grams = float(match.group(1)) * _UNIT_TO_GRAMS[match.group(2).lower()]
