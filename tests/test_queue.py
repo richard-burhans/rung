@@ -259,6 +259,47 @@ def test_claim_next_target_prefix_scopes_to_state() -> None:
     assert ok is not None and ok.target_key == "OK:dutchie:b"
 
 
+def test_retire_orphans_fails_only_pending_jobs_outside_the_live_set() -> None:
+    """A pending job whose target is gone is failed with the reason; nothing else is touched."""
+    conn = _conn()
+    for key in ("NY:leafly:gone", "NY:leafly:held", "NY:leafly:working", "OK:leafly:gone"):
+        queue.enqueue(conn, "store_menu", key)
+    queue.enqueue(conn, "dedupe", "NY:leafly:gone")       # another task type sharing the key shape
+    conn.commit()
+    claimed = queue.claim_target(conn, "store_menu", "NY:leafly:working", "w1")
+    assert claimed is not None
+
+    retired = queue.retire_orphans(conn, "store_menu", {"NY:leafly:held"}, target_prefix="NY:",
+                                   error="no store row for target")
+    conn.commit()
+
+    assert retired == ["NY:leafly:gone"]
+    rows = dict(conn.execute(
+        "SELECT task_type || ' ' || target_key, status FROM jobs"
+    ).fetchall())
+    assert rows == {
+        "store_menu NY:leafly:gone": "failed",
+        "store_menu NY:leafly:held": "pending",       # still a target
+        "store_menu NY:leafly:working": "claimed",    # a live worker's; it resolves its own claim
+        "store_menu OK:leafly:gone": "pending",       # outside the prefix
+        "dedupe NY:leafly:gone": "pending",           # outside the task type
+    }
+    assert conn.execute(
+        "SELECT error, finished_at IS NOT NULL, attempts FROM jobs WHERE status = 'failed'"
+    ).fetchone() == ("no store row for target", True, 0)
+
+
+def test_retire_orphans_with_no_live_target_retires_the_whole_prefix() -> None:
+    """An empty live set is a scope that holds nothing, so every pending job under it is an orphan."""
+    conn = _conn()
+    queue.enqueue(conn, "store_menu", "NY:leafly:a")
+    queue.enqueue(conn, "store_menu", "OK:leafly:b")
+    conn.commit()
+    assert queue.retire_orphans(conn, "store_menu", set(), target_prefix="NY:", error="gone") == [
+        "NY:leafly:a"
+    ]
+
+
 def test_claim_next_target_suffix_scopes_to_state() -> None:
     """Stage-2's key is '{company_id}:{state}' (state as SUFFIX), so a per-state run must scope by
     suffix — the prefix trick can't reach it. Same orphan-jobs guarantee as the prefix test."""

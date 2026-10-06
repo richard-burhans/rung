@@ -225,3 +225,20 @@ def test_cursor_fetchall_and_iteration_share_the_position() -> None:
     it = static_source._Cursor([(1,), (2,)], [])
     assert next(iter(it)) == (1,)
     assert it.fetchone() == (2,)  # iteration consumed the first row
+
+
+def test_retained_since_is_null_not_fresh_on_a_vintage_that_predates_it(static_dir):
+    """`retained_since` reached the views on 2026-10-06. A pre-column vintage reads it as NULL — the
+    vintage was never assessed — and `reference_db.current_snapshot_where()` keeps every such row,
+    which is why the guard is a predicate on the column and not a derived `current` boolean: a
+    boolean would read TRUE for a row nobody ever measured."""
+    from rung import reference_db
+
+    assert "retained_since" not in _SP_COLS
+    with static_source.StaticConnection(static_dir) as con:
+        rows = con.execute(
+            f"SELECT id, retained_since FROM products_normalized WHERE {reference_db.current_snapshot_where()} ORDER BY id"
+        ).fetchall()
+        total = con.execute("SELECT count(*) FROM products_normalized").fetchone()[0]
+    assert rows and len(rows) == total
+    assert {r[1] for r in rows} == {None}

@@ -31,7 +31,26 @@ from typing import Any, Self
 _CURRENCY = "CASE WHEN prog.country = 'CA' THEN 'CAD' ELSE 'USD' END"
 
 # The DuckDB twin of reference_db._CREATE_PRODUCTS_NORMALIZED_VIEW: the SAME output columns in the SAME
-# order, only the dialect differs (::double vs ::numeric, local _CURRENCY). Hoisted to a module constant
+# order, only the dialect differs (local _CURRENCY).
+#
+# ⚠ `price_per_g` IS NO LONGER DERIVED HERE, AND THAT IS THE POINT (2026-08-22). This view used to
+# compute `round((price / size_g)::double, 2)` against the Postgres view's `::numeric` -- exact decimal
+# on one side, binary float on the other -- and the two answers DISAGREE on 0.2155% of rows: 5,642 of
+# 2,617,648 on the 2026-08-17 internal cut. `4.015` is the shape: it is not exactly representable in
+# binary and lands just below the tie, so this side said 4.01 and Postgres said 4.02. A reviewer
+# replicating off the deposit got a different number from ours on one row in ~460, silently.
+# (⚠ Until 2026-09-14 this comment said 26,941 / 1.03% and used `110.63 / 2` as the example. Both were
+# wrong -- a 4.8x overstatement, and an example where BOTH engines return 55.32. It was the last of
+# seven surfaces carrying the bad pair, and the only one an independent re-derivation had to find
+# twice: the first sweep corrected the six that name a dialect and missed this one, which is the file
+# the whole materialization exists to disarm.) `build_clean_d1._PROJECTION` now
+# MATERIALIZES the column in Postgres and this view reads the stored value, which removes the second
+# implementation instead of trying to hold two dialects in lockstep by vigilance.
+#
+# A deposit built BEFORE that change has no such column; `_COLUMNS_ADDED_AFTER_FREEZE` back-fills it
+# as NULL, which is the honest answer -- the vintage never carried it -- rather than silently
+# recomputing a value this file no longer knows how to reproduce.
+# Hoisted to a module constant
 # so a lockstep test can pin its column list to the canonical Postgres view — a column added to one view
 # but not this one silently diverges the static/Galaxy path from live Postgres, and the import guard
 # (which inspects imports, not SQL) can't catch it. See tests/test_db.py::test_products_normalized_views_stay_in_sync.
@@ -40,11 +59,17 @@ CREATE VIEW products_normalized AS
 SELECT sp.id, sp.company_id, sp.state, sp.store_key, sp.platform, sp.source,
        sp.external_product_id, sp.name, sp.brand, sp.category_std AS category,
        sp.strain_type_std AS strain_type, sp.price, sp.size_g,
-       CASE WHEN sp.size_g > 0 AND sp.price IS NOT NULL
-            THEN round((sp.price / sp.size_g)::double, 2) END AS price_per_g,
+       -- STORED when the vintage has it, COMPUTED when it does not. A deposit built before
+       -- 2026-08-22 carries no `price_per_g`, and returning NULL for it would silently empty the ten
+       -- analyses that read this column against every vintage anybody currently holds. The fallback
+       -- reproduces exactly what THIS view produced for those vintages, binary rounding included --
+       -- faithful to how they were actually read, rather than quietly better.
+       coalesce(sp.price_per_g,
+                CASE WHEN sp.size_g > 0 AND sp.price IS NOT NULL
+                     THEN round((sp.price / sp.size_g)::double, 2) END) AS price_per_g,
        sp.thc, sp.cbd, sp.thc_mg, sp.cbd_mg, sp.terp_total, sp.terpenes_std, sp.scraped_at,
        sp.product_type_std AS product_type, sp.cannabinoids_std, {_CURRENCY} AS currency,
-       sp.obtention_std, sp.potency_implausible
+       sp.obtention_std, sp.potency_implausible, sp.retained_since, sp.menu_type
 FROM store_products sp
 LEFT JOIN state_programs prog ON prog.abbr = sp.state
 """
@@ -99,9 +124,16 @@ class _Cursor:
 # predates the check, so the row was never assessed, which is why
 # `reference_db.plausible_potency_where` tests `IS NOT TRUE` rather than `= FALSE`.
 _COLUMNS_ADDED_AFTER_FREEZE: dict[str, str] = {
+    "price_per_g": "DOUBLE",
     "category_overridden": "BOOLEAN",
     "terpenes_repaired": "BOOLEAN",
     "potency_implausible": "BOOLEAN",
+    # Stamped from 2026-09-13; present in the 2026-08-03 vintage only as a backfill. NULL here means
+    # the vintage was never assessed, which `reference_db.current_snapshot_where` keeps (IS NULL)
+    # and says so rather than reading as "fresh".
+    "retained_since": "TIMESTAMP",
+    # medical | adult_use | NULL, stamped from 2026-10-06; NULL on every earlier vintage.
+    "menu_type": "VARCHAR",
 }
 
 

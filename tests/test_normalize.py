@@ -370,3 +370,29 @@ def test_enrich_record_is_idempotent():
     enrich_record(record)
     assert record.size_g == 1.0
     assert record.variants[0]["price_per_g"] == 10.0
+
+
+# ── the price channel, and the stamp it must not read back (2026-10-06 ultra review) ─────────────
+
+
+def test_an_undeclared_menu_in_a_medical_only_state_prices_medical() -> None:
+    from rung.normalize import price_channel
+    assert price_channel(None) == "rec"
+    assert price_channel(None, medical_only=True) == "med"
+    assert price_channel("adult_use", medical_only=True) == "rec"   # a declaration still wins
+    assert price_channel("medical") == "med"
+
+
+def test_our_own_original_price_stamp_is_not_read_back_as_a_markdown() -> None:
+    """An all-channel run stamped original_price=50 (the rec regular). Re-enriched on the medical
+    channel, that stamp used to survive against an effective 40: a 20% markdown that does not exist."""
+    from rung.normalize import enrich_variants
+    variants = [{"option": "1g", "price_med": 40, "price_rec": 50, "special_price_rec": 35}]
+    enrich_variants(variants, "Flower")
+    assert variants[0]["original_price"] == 50
+    enrich_variants(variants, "Flower", "med")
+    assert "original_price" not in variants[0]
+    # A platform-stamped regular beside a single `price` (Weedmaps/Hytiva) is still honoured.
+    platform = [{"option": "1g", "price": 30, "original_price": 40}]
+    enrich_variants(platform, "Flower")
+    assert platform[0]["original_price"] == 40

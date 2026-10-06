@@ -30,12 +30,19 @@ for any name missing from its ``TYPE_CHECKING`` block.
 import contextlib
 import datetime
 import json
-from typing import LiteralString
+from typing import LiteralString, Protocol
 
 from psycopg.types.json import Jsonb
 
 from rung import text
-from rung.db import DBConn, create_engine_tables
+from rung.db import (
+    DBConn,
+    add_missing_columns,
+    constraint_definition,
+    create_engine_tables,
+    ensure_index,
+    ensure_view,
+)
 from rung.models import (
     CompanyReconRecord,
     CompanyStoreRecord,
@@ -59,9 +66,15 @@ CREATE TABLE IF NOT EXISTS dispensaries (
     website           TEXT,
     latitude          DOUBLE PRECISION,
     longitude         DOUBLE PRECISION,
+    licence_number    TEXT,
+    licensed_since    TEXT,
     scraped_at        TEXT    NOT NULL
 )
 """
+
+#: Columns added to `dispensaries` after the table first shipped; applied by `_migrate_dispensaries`
+#: so an existing database gains them without a hand-run migration.
+_DISPENSARIES_ADDED_COLUMNS = {"licence_number": "TEXT", "licensed_since": "TEXT"}
 
 # company_id logically references companies(id), but the companies table is owned
 # (and created later) by seed_companies.py, so no FK constraint — Postgres would
@@ -129,6 +142,7 @@ CREATE TABLE IF NOT EXISTS company_stores (
     store_url      TEXT,
     canonical_company_id INTEGER,
     storefront_name TEXT,
+    menu_type      TEXT,    -- medical | adult_use | NULL (not declared); see models.CompanyStoreRecord
     scraped_at     TEXT    NOT NULL
 )
 """
@@ -146,13 +160,16 @@ _COMPANY_STORE_ADDED_COLUMNS = {
     # The brand on THIS location's storefront (the alias name where one applies),
     # for reporting. Distinct from the operator (the dedup/grouping key).
     "storefront_name": "TEXT",
+    # medical | adult_use | NULL (not declared) — `text.menu_type_of` on the listing's name and
+    # store URL, stamped at Stage-2 persist; dedupe's rooftop key is (rooftop, menu type).
+    "menu_type": "TEXT",
 }
 
 _INSERT_DISPENSARY = """
 INSERT INTO dispensaries
   (source, name, address, city, state, zip_code, phone,
-   website, latitude, longitude, scraped_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+   website, latitude, longitude, licence_number, licensed_since, scraped_at)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _UPSERT_RECON = """
@@ -231,6 +248,25 @@ CREATE TABLE IF NOT EXISTS store_products (
     cannabinoids_std    JSONB,
     variants            JSONB,
     scraped_at          TEXT    NOT NULL,
+    -- When the keep-the-best guard first KEPT this snapshot instead of refreshing it; NULL when the
+    -- rows are the product of a real scrape. `scraped_at` says when the menu was observed and stays
+    -- true; this says the observation has not been renewed since, which only the write path knows.
+    -- The pair is the point: an age alone cannot separate "swept monthly, 20 d old" from "failing for
+    -- 68 d and still publishing June", and the second is a fact about the STORE (closed, delisted,
+    -- rung broken), not about our cadence. Same family as `product_type_defaulted` above — a value
+    -- that is real but was not observed when it appears to have been, and an analysis must be able to
+    -- tell. Deliberately a TIMESTAMP and not a flag, and deliberately carrying NO staleness policy:
+    -- the core records the fact, the reader picks the ceiling (`coverage_healthcheck.py` uses 5x the
+    -- platform's cadence). A ceiling here would be a second copy of that rule, free to drift.
+    -- ⚠ A ROW PREDATING THIS COLUMN MAY CARRY A DERIVED VALUE, spelled identically to a live one.
+    -- The moment the guard FIRST kept a snapshot is not recoverable after the fact — `access_methods`
+    -- keeps only the LATEST failure, never the first one after the last success — so a backfill can
+    -- only write the snapshot's own max(scraped_at), which errs toward flagging by at most one sweep
+    -- cycle. Nothing separates the two per row, and the next successful sweep replaces them with
+    -- exact ones. If that distinction ever matters to an analysis, it has to be drawn before then.
+    retained_since      TIMESTAMPTZ,
+    -- The kept store row's menu type at scrape time: medical | adult_use | NULL (2026-10-06).
+    menu_type           TEXT,
     -- The percent-OR-mg potency contract (CLAUDE.md): a cannabinoid is published as a percent
     -- (thc/cbd) OR a per-dose mg (thc_mg/cbd_mg), never both. The extractors route by the
     -- platform's unit; this makes the invariant a schema guarantee, not just a convention.
@@ -256,6 +292,9 @@ _STORE_PRODUCT_ADDED_COLUMNS = {
     "terpenes_repaired": "BOOLEAN",
     "potency_implausible": "BOOLEAN",
     "cannabinoids_std": "JSONB",
+    "retained_since": "TIMESTAMPTZ",
+    # The kept store row's menu type at scrape time (medical | adult_use | NULL), 2026-10-06.
+    "menu_type": "TEXT",
 }
 
 # The percent-OR-mg potency CHECK, added in-place to a database created before the constraint
@@ -335,13 +374,62 @@ CREATE TABLE IF NOT EXISTS product_observations (
     terpenes_std  JSONB,
     terp_total    DOUBLE PRECISION,
     cannabinoids_std JSONB,
-    scraped_at    TIMESTAMPTZ NOT NULL
+    scraped_at    TIMESTAMPTZ NOT NULL,
+    CONSTRAINT product_observations_potency_unit_check
+        CHECK ((thc IS NULL OR thc_mg IS NULL) AND (cbd IS NULL OR cbd_mg IS NULL))
 )
+"""
+# The same percent-OR-mg CHECK `store_products` carries, for a database whose history table
+# predates it. ⚠ `NOT VALID` IS THE POINT. The history is append-only and large — 206,598,642 rows
+# when this was written — and a plain `ADD CONSTRAINT` validates every one of them while holding
+# ACCESS EXCLUSIVE, which stops the sweep's writes for as long as the scan takes. `NOT VALID`
+# takes the lock for an instant, enforces the rule on every row written from then on, and leaves
+# the existing rows unexamined; `ALTER TABLE … VALIDATE CONSTRAINT`, run separately and on purpose,
+# examines them afterwards under a lock that does not block writers. They were counted first
+# (2026-10-05): none violates it.
+_MIGRATE_PRODUCT_OBSERVATIONS_POTENCY_CHECK = """
+ALTER TABLE product_observations ADD CONSTRAINT product_observations_potency_unit_check
+    CHECK ((thc IS NULL OR thc_mg IS NULL) AND (cbd IS NULL OR cbd_mg IS NULL)) NOT VALID
 """
 # product_observations columns added after first release — applied by _migrate_product_observations.
 _PRODUCT_OBSERVATIONS_ADDED_COLUMNS = {
     "cannabinoids_std": "JSONB",
 }
+# One row per (platform, day): what the sweeps WROTE that day, counted once so the nightly canary
+# reads a few hundred rows instead of re-scanning 170M observations. The private `yield_ledger` script fills
+# it (idempotent upsert, re-computing recent days), `coverage_healthcheck._check_yield` reads it. The
+# columns are COUNTS, never rates, so a reader can re-derive any rate with its own denominator. It
+# exists because the registry keeps ONE overwritten `record_count` per target and no check ever
+# compared a sweep's yield to the sweep before it: SweedPOS terpenes sat at 0% for months, Dutchie's
+# minor cannabinoids were never requested, and WAIO went dark for three days, each behind a green
+# freshness check — a platform that keeps writing rows with fewer fields in them never went stale.
+_CREATE_YIELD_DAILY = """
+CREATE TABLE IF NOT EXISTS yield_daily (
+    platform      TEXT NOT NULL,
+    day           DATE NOT NULL,
+    rows          BIGINT NOT NULL,
+    stores        INTEGER NOT NULL,
+    priced        BIGINT NOT NULL,
+    potent        BIGINT NOT NULL,
+    terpenes      BIGINT NOT NULL,
+    cannabinoids  BIGINT NOT NULL,
+    computed_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (platform, day)
+)
+"""
+
+# A BRIN index on the observation timestamp: `product_observations` is append-only and written in
+# time order, so a day's rows sit in a contiguous run of blocks and BRIN summarises 172M rows in a few
+# MB. Without it, the yield ledger's one-day aggregate walked the ENTIRE (store_key,
+# scraped_at) btree — `scraped_at` is that index's second column — at ~7 minutes a day cold (measured
+# 2026-09-24); with it a day is a range scan. Built CONCURRENTLY on the production database by hand
+# before this DDL reached it, because `create_tables` runs at every sweep start and a plain CREATE
+# INDEX over 30 GB would have held the table's writers for the build.
+_CREATE_PRODUCT_OBSERVATIONS_SCRAPED_BRIN = """
+CREATE INDEX IF NOT EXISTS product_observations_scraped_brin
+    ON product_observations USING brin (scraped_at)
+"""
+
 _CREATE_PRODUCT_OBSERVATIONS_PRODUCT_INDEX = """
 CREATE INDEX IF NOT EXISTS product_observations_product ON product_observations (product_id, scraped_at)
 """
@@ -415,6 +503,36 @@ ON store_lifecycle_events (state, occurred_on)
 _CREATE_STORE_LIFECYCLE_EVENTS_LOCATION_INDEX = """
 CREATE INDEX IF NOT EXISTS store_lifecycle_events_location
 ON store_lifecycle_events (location_id)
+"""
+
+# WHAT WAS ATTEMPTED, beside what was seen (docs/store_history_design.md, "we record what was SEEN,
+# never what was ATTEMPTED"). `store_observations` cannot tell a store that left the operator's
+# list from an operator nobody captured that cycle: absence is the same byte either way, and on
+# 2026-08-03 that made 151 of 253 derived closures `unconfirmed` by construction. One row per
+# (cycle, source, operator) — `succeeded` (a rung yielded), `empty` (attempted, nothing yielded;
+# the prior rows still heartbeat), `failed` (the persist crashed, OR — the roster leg, since
+# 2026-10-04 — the source answered with a fragment we refused; nothing was written, and `error`
+# says which) — lets the
+# derivation read an absence under a `succeeded` attempt as a departure and an absence with no or a
+# failed attempt as our instrument. The roster leg writes one row per state per run with no
+# operator. Append-only; `jobs` held this and `prune-jobs` deletes it every sweep.
+_CREATE_STORE_CAPTURE_ATTEMPTS = """
+CREATE TABLE IF NOT EXISTS store_capture_attempts (
+    id            BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    state         TEXT   NOT NULL,
+    source        TEXT   NOT NULL,
+    operator      TEXT,
+    company_id    BIGINT,
+    outcome       TEXT   NOT NULL,
+    method        TEXT,
+    error         TEXT,
+    record_count  INTEGER,
+    attempted_at  TIMESTAMPTZ NOT NULL
+)
+"""
+_CREATE_STORE_CAPTURE_ATTEMPTS_INDEX = """
+CREATE INDEX IF NOT EXISTS store_capture_attempts_state
+ON store_capture_attempts (state, source, attempted_at)
 """
 
 # An INDEPENDENT observation of which menu platform a licensed store actually runs — the table that
@@ -515,10 +633,18 @@ SELECT
     {_CURRENCY_FROM_COUNTRY} AS currency,
     sp.obtention_std,     -- appended (same constraint); NOT renamed, so the natural-flower predicate
                           -- reads identically here and against store_products
-    sp.potency_implausible  -- appended (same constraint). Carried onto the view because the whole
+    sp.potency_implausible,  -- appended (same constraint). Carried onto the view because the whole
                           -- point of the flag is that an analysis can EXCLUDE the row, and most of
                           -- them read this view rather than store_products. Not renamed, so
                           -- `plausible_potency_where()` reads identically against either.
+    sp.retained_since,    -- appended (same constraint), 2026-10-06. A row kept by the empty-result
+                          -- guard is the store's LAST menu, not today's; until this column reached
+                          -- the view no analysis reading it could tell (12.7% of the table was
+                          -- unreachable or retained that day). `current_snapshot_where()` is the
+                          -- predicate; it reads identically against either.
+    sp.menu_type          -- appended (same constraint), 2026-10-06: medical | adult_use | NULL. A
+                          -- medical listing is a different catalogue at different prices; an
+                          -- analysis of what is sold at what price stratifies or excludes on it.
 FROM store_products sp
 LEFT JOIN state_programs prog ON prog.abbr = sp.state
 """
@@ -563,16 +689,16 @@ INSERT INTO store_products
    product_type_defaulted, obtention_std,
    strain_type, strain_type_std,
    price, size_g, thc, cbd, thc_mg, cbd_mg, terpenes, terpenes_std, terp_total, terpenes_repaired,
-   potency_implausible, cannabinoids_std, variants, scraped_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+   potency_implausible, cannabinoids_std, variants, menu_type, scraped_at)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _INSERT_COMPANY_STORE = """
 INSERT INTO company_stores
   (company_id, canonical_name, state, source, name, address, city,
    zip_code, phone, website, latitude, longitude, platform, external_id,
-   store_url, scraped_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+   store_url, menu_type, scraped_at)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 
@@ -580,14 +706,17 @@ def create_store_pos_observations(conn: DBConn) -> None:
     """Create just ``store_pos_observations`` (+ index). Idempotent; commits.
 
     Separate from :func:`create_reference_tables` on purpose. That function runs the whole migration
-    suite, including ``ALTER TABLE store_products ADD COLUMN …``, which needs an ACCESS EXCLUSIVE
-    lock — so calling it from a read-mostly instrument against a busy database queues behind every
-    live writer and deadlocks against them (observed 2026-08-01: the POS census deadlocked with a
-    running scrape, and a stalled ALTER had already wedged the lock queue for eleven hours). An
-    instrument that only appends its own rows should take only its own table's lock.
+    suite, and whenever a migration is actually PENDING it issues ``ALTER TABLE store_products ADD
+    COLUMN …``, which needs an ACCESS EXCLUSIVE lock — so a read-mostly instrument calling it
+    against a busy database can be the process that queues behind every live writer and deadlocks
+    against them (observed 2026-08-01: the POS census deadlocked with a running scrape, and a
+    stalled ALTER had already wedged the lock queue for eleven hours). Until 2026-10-04 the suite
+    asked for those locks on EVERY call, pending or not; it now reads the catalog first, which
+    removes the routine case and leaves this one. An instrument that only appends its own rows
+    should take only its own table's lock.
     """
     conn.execute(_CREATE_STORE_POS_OBSERVATIONS)
-    conn.execute(_CREATE_STORE_POS_OBSERVATIONS_SAMPLE_INDEX)
+    ensure_index(conn, _CREATE_STORE_POS_OBSERVATIONS_SAMPLE_INDEX)
     conn.commit()
 
 
@@ -608,30 +737,34 @@ def create_reference_tables(conn: DBConn) -> None:
     conn.execute(_CREATE_COMPANY_STORES)
     conn.execute(_CREATE_STATE_PROGRAMS)
     conn.execute(_CREATE_STORE_PRODUCTS)
-    conn.execute(_CREATE_STORE_PRODUCTS_STORE_INDEX)
-    conn.execute(_CREATE_STORE_PRODUCTS_STATE_INDEX)
-    conn.execute(_CREATE_COMPANY_STORES_STATE_INDEX)
+    ensure_index(conn, _CREATE_STORE_PRODUCTS_STORE_INDEX)
+    ensure_index(conn, _CREATE_STORE_PRODUCTS_STATE_INDEX)
+    ensure_index(conn, _CREATE_COMPANY_STORES_STATE_INDEX)
     conn.execute(_CREATE_PRODUCTS)
     conn.execute(_CREATE_PRODUCT_OBSERVATIONS)
-    conn.execute(_CREATE_PRODUCT_OBSERVATIONS_PRODUCT_INDEX)
-    conn.execute(_CREATE_PRODUCT_OBSERVATIONS_STORE_INDEX)
+    ensure_index(conn, _CREATE_PRODUCT_OBSERVATIONS_PRODUCT_INDEX)
+    ensure_index(conn, _CREATE_PRODUCT_OBSERVATIONS_STORE_INDEX)
+    ensure_index(conn, _CREATE_PRODUCT_OBSERVATIONS_SCRAPED_BRIN)
+    conn.execute(_CREATE_YIELD_DAILY)
     conn.execute(_CREATE_FX_RATES)
     conn.execute(_CREATE_STORE_LOCATIONS)
     conn.execute(_CREATE_STORE_OBSERVATIONS)
-    conn.execute(_CREATE_STORE_OBSERVATIONS_LOCATION_INDEX)
+    ensure_index(conn, _CREATE_STORE_OBSERVATIONS_LOCATION_INDEX)
     conn.execute(_CREATE_STORE_LIFECYCLE_EVENTS)
-    conn.execute(_CREATE_STORE_LIFECYCLE_EVENTS_STATE_INDEX)
-    conn.execute(_CREATE_STORE_LIFECYCLE_EVENTS_LOCATION_INDEX)
+    ensure_index(conn, _CREATE_STORE_LIFECYCLE_EVENTS_STATE_INDEX)
+    ensure_index(conn, _CREATE_STORE_LIFECYCLE_EVENTS_LOCATION_INDEX)
+    conn.execute(_CREATE_STORE_CAPTURE_ATTEMPTS)
+    ensure_index(conn, _CREATE_STORE_CAPTURE_ATTEMPTS_INDEX)
     conn.execute(_CREATE_STORE_POS_OBSERVATIONS)
-    conn.execute(_CREATE_STORE_POS_OBSERVATIONS_SAMPLE_INDEX)
+    ensure_index(conn, _CREATE_STORE_POS_OBSERVATIONS_SAMPLE_INDEX)
     _migrate_company_stores(conn)
     _migrate_state_programs(conn)
     _migrate_store_products(conn)
     _migrate_products(conn)
     _migrate_product_observations(conn)
     _migrate_dispensaries(conn)
-    conn.execute(_CREATE_PRODUCTS_NORMALIZED_VIEW)  # after the migration adds its columns
-    conn.execute(_CREATE_PRODUCT_OBSERVATIONS_FX_VIEW)  # depends on fx_rates + product_observations
+    ensure_view(conn, _CREATE_PRODUCTS_NORMALIZED_VIEW)  # after the migration adds its columns
+    ensure_view(conn, _CREATE_PRODUCT_OBSERVATIONS_FX_VIEW)  # depends on fx_rates + product_observations
     conn.commit()
 
 
@@ -654,7 +787,7 @@ def ensure_fx_rates(conn: DBConn) -> None:
     ``create_reference_tables`` also creates them. Commits.
     """
     conn.execute(_CREATE_FX_RATES)
-    conn.execute(_CREATE_PRODUCT_OBSERVATIONS_FX_VIEW)
+    ensure_view(conn, _CREATE_PRODUCT_OBSERVATIONS_FX_VIEW)
     conn.commit()
 
 
@@ -732,25 +865,13 @@ def latest_fx_rate(conn: DBConn, base: str, quote: str) -> float | None:
     return row[0] if row else None
 
 
-# dispensaries columns removed after first release — always-NULL dead columns never set by any
-# extractor or read back (audit L-19); dropped in-place from an older database.
-_DISPENSARY_DROPPED_COLUMNS = ("product_available", "open_date", "open_on")
-
-
-def _migrate_dispensaries(conn: DBConn) -> None:
-    """Drop the dead always-NULL columns from an older database (audit L-19)."""
-    for column in _DISPENSARY_DROPPED_COLUMNS:
-        # DDL with a hardcoded column name from an all-literal module constant (LiteralString).
-        conn.execute(f"ALTER TABLE dispensaries DROP COLUMN IF EXISTS {column}")
-
-
 def _migrate_product_observations(conn: DBConn) -> None:
-    """Add any product_observations columns missing from an older database."""
-    for column, col_type in _PRODUCT_OBSERVATIONS_ADDED_COLUMNS.items():
-        # DDL with hardcoded column/type from a module constant (see _migrate_company_stores).
-        conn.execute(  # ty: ignore[no-matching-overload]
-            f"ALTER TABLE product_observations ADD COLUMN IF NOT EXISTS {column} {col_type}"
-        )
+    """Add any product_observations columns missing from an older database, then the potency CHECK
+    (unvalidated — see `_MIGRATE_PRODUCT_OBSERVATIONS_POTENCY_CHECK`)."""
+    add_missing_columns(conn, "product_observations", _PRODUCT_OBSERVATIONS_ADDED_COLUMNS)
+    if constraint_definition(
+            conn, "product_observations", "product_observations_potency_unit_check") is None:
+        conn.execute(_MIGRATE_PRODUCT_OBSERVATIONS_POTENCY_CHECK)
 
 
 def _migrate_products(conn: DBConn) -> None:
@@ -758,40 +879,29 @@ def _migrate_products(conn: DBConn) -> None:
 
     The seam that did not exist until 2026-07-17. See `_PRODUCT_ADDED_COLUMNS`.
     """
-    for column, col_type in _PRODUCT_ADDED_COLUMNS.items():
-        # DDL with hardcoded column/type from a module constant (see _migrate_company_stores).
-        conn.execute(  # ty: ignore[no-matching-overload]
-            f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} {col_type}"
-        )
+    add_missing_columns(conn, "products", _PRODUCT_ADDED_COLUMNS)
 
 
 def _migrate_store_products(conn: DBConn) -> None:
     """Add any store_products columns missing from an older database, then the potency CHECK."""
-    for column, col_type in _STORE_PRODUCT_ADDED_COLUMNS.items():
-        # DDL with hardcoded column/type from a module constant (see _migrate_company_stores).
-        conn.execute(  # ty: ignore[no-matching-overload]
-            f"ALTER TABLE store_products ADD COLUMN IF NOT EXISTS {column} {col_type}"
-        )
-    conn.execute(_MIGRATE_STORE_PRODUCTS_POTENCY_CHECK)
+    add_missing_columns(conn, "store_products", _STORE_PRODUCT_ADDED_COLUMNS)
+    if constraint_definition(conn, "store_products", "store_products_potency_unit_check") is None:
+        conn.execute(_MIGRATE_STORE_PRODUCTS_POTENCY_CHECK)
 
 
 def _migrate_company_stores(conn: DBConn) -> None:
     """Add any company_stores columns missing from an older database."""
-    for column, col_type in _COMPANY_STORE_ADDED_COLUMNS.items():
-        # DDL with hardcoded column/type from a module constant — not a LiteralString
-        # to the stub, but no user input ever reaches it.
-        conn.execute(  # ty: ignore[no-matching-overload]
-            f"ALTER TABLE company_stores ADD COLUMN IF NOT EXISTS {column} {col_type}"
-        )
+    add_missing_columns(conn, "company_stores", _COMPANY_STORE_ADDED_COLUMNS)
+
+
+def _migrate_dispensaries(conn: DBConn) -> None:
+    """Add any dispensaries columns missing from an older database."""
+    add_missing_columns(conn, "dispensaries", _DISPENSARIES_ADDED_COLUMNS)
 
 
 def _migrate_state_programs(conn: DBConn) -> None:
     """Add any state_programs columns missing from an older database."""
-    for column, col_type in _STATE_PROGRAM_ADDED_COLUMNS.items():
-        # DDL with hardcoded column/type from a module constant (see above).
-        conn.execute(  # ty: ignore[no-matching-overload]
-            f"ALTER TABLE state_programs ADD COLUMN IF NOT EXISTS {column} {col_type}"
-        )
+    add_missing_columns(conn, "state_programs", _STATE_PROGRAM_ADDED_COLUMNS)
 
 
 def insert_dispensary(conn: DBConn, record: DispensaryRecord) -> None:
@@ -810,6 +920,8 @@ def insert_dispensary(conn: DBConn, record: DispensaryRecord) -> None:
             record.website,
             record.latitude,
             record.longitude,
+            record.licence_number,
+            record.licensed_since,
             now,
         ),
     )
@@ -854,6 +966,8 @@ def insert_company_store(conn: DBConn, record: CompanyStoreRecord) -> None:
             record.platform,
             record.external_id,
             record.store_url,
+            record.menu_type if record.menu_type is not None
+            else text.menu_type_of(record.name, record.store_url),
             now,
         ),
     )
@@ -879,6 +993,15 @@ def count_company_stores(conn: DBConn, company_id: int, abbr: str) -> int:
         (company_id, abbr),
     ).fetchone()
     return row[0] if row else 0
+
+
+def _stored_sources(conn: DBConn, company_id: int, abbr: str) -> set[str]:
+    """The discovery sources the stored rows came from (``''`` for a null source)."""
+    rows = conn.execute(
+        "SELECT DISTINCT coalesce(source, '') FROM company_stores WHERE company_id = %s AND state = %s",
+        (company_id, abbr),
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def _distinct_stored_stores(conn: DBConn, company_id: int, abbr: str) -> int:
@@ -912,29 +1035,56 @@ _AGGREGATOR_SOURCES = frozenset({"weedmaps_directory", "leafly_directory"})
 AGGREGATOR_PLATFORMS = frozenset({"weedmaps", "leafly"})
 
 
-def _distinct_stored_menu_stores(conn: DBConn, company_id: int, abbr: str) -> int:
-    """Stored DISTINCT physical stores carrying a NON-aggregator (real-menu-rung) handle."""
-    row = conn.execute(
+class HandleServed(Protocol):
+    """Does a Stage-3 menu rung route this handle? The overlay owns the routing table
+    (``rung_intel.routing.serving_rungs``); the core asks through this seam and never imports it."""
+
+    def __call__(
+        self, *, source: str | None, platform: str | None, external_id: str | None,
+        store_url: str | None, canonical_name: str,
+    ) -> bool: ...
+
+
+def _distinct_stored_menu_stores(
+    conn: DBConn, company_id: int, abbr: str, served: HandleServed | None = None,
+) -> int:
+    """Stored DISTINCT physical stores carrying a NON-aggregator (real-menu-rung) handle — and,
+    when ``served`` is given, one a rung actually routes."""
+    rows = conn.execute(
         # The aggregator sets travel as parameters so this query can never disagree with the
         # frozensets above (they were once inlined here as string literals — a second copy).
-        "SELECT COUNT(DISTINCT lower(coalesce(nullif(trim(address), ''), name, ''))) "
+        "SELECT lower(coalesce(nullif(trim(address), ''), name, '')), "
+        "source, platform, external_id, store_url, canonical_name "
         "FROM company_stores WHERE company_id = %s AND state = %s "
         "AND external_id IS NOT NULL AND external_id != '' "
         "AND NOT (coalesce(source, '') = ANY(%s)) "
         "AND NOT (coalesce(platform, '') = ANY(%s))",
         (company_id, abbr, sorted(_AGGREGATOR_SOURCES), sorted(AGGREGATOR_PLATFORMS)),
-    ).fetchone()
-    return row[0] if row else 0
+    ).fetchall()
+    return len({
+        key for key, source, platform, external_id, store_url, canonical_name in rows
+        if served is None or served(
+            source=source, platform=platform, external_id=external_id,
+            store_url=store_url, canonical_name=canonical_name or "",
+        )
+    })
 
 
-def _distinct_new_menu_stores(records: list[CompanyStoreRecord]) -> int:
-    """Distinct physical stores in a scrape result carrying a non-aggregator handle."""
+def _distinct_new_menu_stores(
+    records: list[CompanyStoreRecord], served: HandleServed | None = None,
+) -> int:
+    """Distinct physical stores in a scrape result carrying a non-aggregator handle (mirrors
+    ``_distinct_stored_menu_stores``, ``served`` included)."""
     return len({
         ((record.address or "").strip() or record.name or "").lower()
         for record in records
         if record.external_id
         and (record.source or "") not in _AGGREGATOR_SOURCES
         and (record.platform or "") not in AGGREGATOR_PLATFORMS
+        and (served is None or served(
+            source=record.source, platform=record.platform, external_id=record.external_id,
+            store_url=record.store_url, canonical_name=record.canonical_name,
+        ))
     })
 
 
@@ -953,6 +1103,7 @@ def replace_company_stores(
     company_id: int,
     abbr: str,
     records: list[CompanyStoreRecord],
+    served: HandleServed | None = None,
 ) -> tuple[int, bool]:
     """Guarded, quality-aware keep-the-best replace of one company's stores. Caller commits.
 
@@ -971,9 +1122,20 @@ def replace_company_stores(
     of them wins as long as it retains ≥ ``_MENU_UPGRADE_RETENTION`` of the stores (so 4 empty
     Leafly listings yield to 3 Jane handles, but a 15→1 collapse is still rejected), and a
     result with **fewer** never clobbers (no downgrading real menus to a bigger empty-aggregator
-    sweep). Only when both sides have the same menu-platform count does the distinct-count /
-    freshness / handle-upgrade logic below decide. Returns ``(resulting_count, kept_prior)`` —
-    ``kept_prior`` is True when better prior data was retained.
+    sweep) — unless it is the SAME non-aggregator source answering again with ≥
+    ``_HANDLE_UPGRADE_RETENTION`` of the distinct stores, which is that source recording a closure
+    or a store not yet online (Curaleaf's API, 2026-09-25). Only when both sides have the same
+    menu-platform count does the distinct-count / freshness / handle-upgrade logic below decide.
+    Returns ``(resulting_count, kept_prior)`` — ``kept_prior`` is True when better prior data was
+    retained.
+
+    ``served`` is the overlay's answer to "does a Stage-3 rung route this handle?"
+    (``routing.handle_served_predicate``). With it, a handle counts as menu-bearing only when
+    something can scrape it: a generic parser's ``custom`` slug (``next_data``'s
+    ``cannabis-in-mitchell``, a browser-captured ``md-fred-wedgewood-4606``) is a handle nothing
+    reads, and until 2026-09-25 it out-ranked the real platform handle that arrived later — four
+    Tendy and two Sweed operators kept their unroutable rows over routable ones. Without it (the
+    public core alone, tests) the non-aggregator rule stands by itself.
     """
     existing = count_company_stores(conn, company_id, abbr)
     if not records:
@@ -981,13 +1143,24 @@ def replace_company_stores(
 
     existing_distinct = _distinct_stored_stores(conn, company_id, abbr)
     new_distinct = _distinct_new_stores(records)
-    existing_menu = _distinct_stored_menu_stores(conn, company_id, abbr)
-    new_menu = _distinct_new_menu_stores(records)
+    existing_menu = _distinct_stored_menu_stores(conn, company_id, abbr, served)
+    new_menu = _distinct_new_menu_stores(records, served)
     if new_menu < existing_menu:
         # Never downgrade real-menu handles to fewer of them (or to aggregator-only rows),
         # even if the new set has more total stores — protects a Jane/Dutchie set from a
-        # transient low-yield re-scrape or a larger empty-aggregator sweep.
-        overwrite = False
+        # transient low-yield re-scrape or a larger empty-aggregator sweep. ONE exception: the
+        # SAME non-aggregator source answering again with nearly the same stores (≥
+        # `_HANDLE_UPGRADE_RETENTION` of the distinct count) and fewer handles among them is
+        # that source recording a closure or a store not yet online — Curaleaf's own API dropped
+        # Hartford CT and filed five stores PRERELEASE, and until 2026-09-25 no re-discovery could
+        # ever retire them, because a shrink from the one authoritative list read as a flaky scrape.
+        new_sources = {record.source or "" for record in records}
+        overwrite = (
+            new_sources == _stored_sources(conn, company_id, abbr)
+            and not (new_sources & _AGGREGATOR_SOURCES)
+            and not any((record.platform or "") in AGGREGATOR_PLATFORMS for record in records)
+            and new_distinct >= existing_distinct * _HANDLE_UPGRADE_RETENTION
+        )
     elif new_menu > existing_menu:
         # Gained real-menu handles (e.g. 4 empty Leafly listings → 3 Jane handles): accept
         # unless it would lose more than half the stores (a 15→1 collapse is still rejected).
@@ -1052,6 +1225,7 @@ def insert_store_product(conn: DBConn, record: StoreProductRecord) -> None:
             record.potency_implausible,
             Jsonb(record.cannabinoids_std) if record.cannabinoids_std is not None else None,
             Jsonb(record.variants) if record.variants is not None else None,
+            record.menu_type,
             now,
         ),
     )
@@ -1074,6 +1248,17 @@ def count_store_products(conn: DBConn, store_key: str) -> int:
 # ages past the window, so a store can never be wedged on stale data forever.
 _MENU_RETAIN_FRACTION = 0.5
 _MENU_RETAIN_MAX_AGE_HOURS = 48.0
+#: How long the empty-result guard keeps a snapshot before it stops being a menu. A transient
+#: failure is hours; a store that has returned no menu for a month is closed, delisted, moved to a
+#: platform we have not found, or walled off from every egress we have — and in all four cases its
+#: last menu is not its current one. ⚠ "No menu" includes a REFUSAL: Stage 3 passes ``[]`` when
+#: every rung was blocked or broken, so a store walled off for the ceiling loses its snapshot too.
+#: That is intended (the snapshot would be a month old either way, and the history keeps it); it is
+#: stated here because the drop's log line used to say "empty results" (the 2026-10-06 ultra review). Decided 2026-10-06 at
+#: 30 days (15x the 2-day cadence; the healthcheck's `snapshot_retained` fires at 5x) against a
+#: measurement of 104 stores still visited daily whose last menu was June–September, held as
+#: current. The history (`product_observations`) is untouched by the drop.
+_MENU_RETAIN_CEILING_DAYS = 30
 
 
 def _snapshot_age_hours(conn: DBConn, store_key: str) -> float | None:
@@ -1089,8 +1274,41 @@ def _snapshot_age_hours(conn: DBConn, store_key: str) -> float | None:
     return (datetime.datetime.now(datetime.UTC) - row[0]).total_seconds() / 3600.0
 
 
+def _retained_days(
+    conn: DBConn, store_key: str, now: datetime.datetime | None = None
+) -> float | None:
+    """Days since this store's snapshot was FIRST kept on an empty result, or None if it is not a
+    kept snapshot (or has no rows)."""
+    row = conn.execute(
+        "SELECT min(retained_since) FROM store_products WHERE store_key = %s", (store_key,)
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    since = row[0] if isinstance(row[0], datetime.datetime) else datetime.datetime.fromisoformat(str(row[0]))
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=datetime.UTC)
+    return ((now or datetime.datetime.now(datetime.UTC)) - since).total_seconds() / 86400.0
+
+
+def _mark_retained(conn: DBConn, store_key: str, now: datetime.datetime | None = None) -> None:
+    """Stamp a snapshot the guard KEPT rather than refreshed. Caller commits.
+
+    Only unstamped rows are written, so the stamp is the FIRST retention, not the latest attempt: the question a reader
+    asks is how long this menu has gone unrenewed, and overwriting it nightly would answer "since
+    yesterday" forever — a store failing for three months would look freshly kept every morning. It
+    is cleared implicitly: a real scrape DELETEs these rows and inserts new ones, which default NULL.
+    """
+    conn.execute(
+        # `retained_since IS NULL`: only the first retention writes. Without it every sweep rewrote
+        # ~287k already-stamped rows to their own value (the 2026-10-06 ultra review).
+        "UPDATE store_products SET retained_since = %s WHERE store_key = %s AND retained_since IS NULL",
+        (now or datetime.datetime.now(datetime.UTC), store_key),
+    )
+
+
 def replace_store_products(
-    conn: DBConn, store_key: str, records: list[StoreProductRecord]
+    conn: DBConn, store_key: str, records: list[StoreProductRecord],
+    *, now: datetime.datetime | None = None,
 ) -> int:
     """Replace one store's menu snapshot wholesale. Caller commits.
 
@@ -1104,9 +1322,32 @@ def replace_store_products(
       PARTIAL fetch and rejected — a 406-truncated fragment must not overwrite a full
       snapshot. Once the prior ages out of the window a genuine shrink still lands.
 
-    Returns the resulting product count (the kept prior count when a guard fires).
+    **Either guard STAMPS what it kept** (``retained_since``). Keeping is right — a transient failure
+    must not wipe a good menu — but keeping SILENTLY is what let a store fail 68 consecutive times
+    since June and still publish its June menu in September with nothing downstream able to tell.
+
+    **And the empty branch has a CEILING** (``_MENU_RETAIN_CEILING_DAYS``, 2026-10-06). This
+    docstring said the opposite from 2026-09-13 — "the core does not decide when a menu is too old",
+    the stamp was to be enough — and the stamp was not: nothing downstream read it, and 104 stores
+    still visited daily carried a June–September menu as current. A snapshot kept on empty results
+    for the ceiling is dropped on the next empty result; the drop is printed; the history is not
+    touched. A store that recovers after that gets a fresh snapshot the day it answers.
+
+    ``now`` is injectable for tests. Returns the resulting product count (the kept prior count when a
+    guard fires; 0 when the ceiling dropped the snapshot).
     """
     if not records:
+        days = _retained_days(conn, store_key, now)
+        if days is not None and days >= _MENU_RETAIN_CEILING_DAYS:
+            dropped = conn.execute(
+                "DELETE FROM store_products WHERE store_key = %s", (store_key,)
+            ).rowcount
+            print(
+                f"  store_menu: {store_key} dropped its {dropped}-product snapshot — no menu came back "
+                f"(empty or refused) for {days:.0f} d, past the {_MENU_RETAIN_CEILING_DAYS} d ceiling"
+            )
+            return 0
+        _mark_retained(conn, store_key, now)
         return count_store_products(conn, store_key)
     prior = count_store_products(conn, store_key)
     if prior and len(records) < prior * _MENU_RETAIN_FRACTION:
@@ -1117,6 +1358,7 @@ def replace_store_products(
                 f"(re-scrape yielded {len(records)} < {_MENU_RETAIN_FRACTION:.0%} of "
                 f"a {age_hours:.0f}h-old snapshot — likely a throttled partial)"
             )
+            _mark_retained(conn, store_key, now)
             return prior
     conn.execute("DELETE FROM store_products WHERE store_key = %s", (store_key,))
     for record in records:
@@ -1348,6 +1590,41 @@ def record_location_observations(
     return appended
 
 
+CAPTURE_OUTCOMES: frozenset[str] = frozenset({"succeeded", "empty", "failed"})
+
+
+def record_capture_attempt(
+    conn: DBConn, *, state: str, source: str, outcome: str, operator: str | None = None,
+    company_id: int | None = None, method: str | None = None, error: str | None = None,
+    record_count: int | None = None, now: datetime.datetime | None = None,
+) -> None:
+    """Append one capture attempt (see ``_CREATE_STORE_CAPTURE_ATTEMPTS``). Caller commits.
+
+    ``outcome`` is one of ``CAPTURE_OUTCOMES``; a value outside it is a programming error and is
+    refused rather than stored, because the derivation keys on the three words.
+    """
+    if outcome not in CAPTURE_OUTCOMES:
+        raise ValueError(f"capture outcome {outcome!r} is not one of {sorted(CAPTURE_OUTCOMES)}")
+    conn.execute(
+        "INSERT INTO store_capture_attempts (state, source, operator, company_id, outcome, method, "
+        "error, record_count, attempted_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (state, source, operator, company_id, outcome, method, error, record_count,
+         now or datetime.datetime.now(datetime.UTC)),
+    )
+
+
+def capture_attempts_for_state(
+    conn: DBConn, state: str,
+) -> list[tuple[str, str | None, str, datetime.date]]:
+    """Every ``(source, operator, outcome, attempted_on)`` recorded for a state, oldest first —
+    the derivation's input beside the observations."""
+    return list(conn.execute(
+        "SELECT source, operator, outcome, (attempted_at AT TIME ZONE 'UTC')::date "
+        "FROM store_capture_attempts WHERE state = %s ORDER BY attempted_at",
+        (state,),
+    ))
+
+
 def replace_lifecycle_events(
     conn: DBConn, state: str, events: list[LifecycleEventRecord],
 ) -> int:
@@ -1423,6 +1700,18 @@ _KEPT_HANDLE_ORDER = "ORDER BY platform, external_id, company_id"
 #   weedmaps scrapes 2026-06-18 .. 07-05 (pre-fix):  44.7% - 64.6% "Indica"   <- defaulted
 #   weedmaps scrape  2026-07-10        (post-fix):   28.0% "Indica"           <- matches Dutchie's 28.0%
 #   flower only, pre-fix:                            97.2% "Indica"           <- against a Hybrid-majority market
+#
+# ⚠ THAT 97.2% CONTRADICTS THIS FILE TWICE — lines 18-19 and 1483 below both say 98.2% for what
+# reads as the same quantity — AND IT IS NOT ADJUDICABLE FROM EVIDENCE. Recorded rather than
+# resolved, 2026-09-15, because picking a side would install a number nothing supports:
+#   * `store_products` cannot answer it: the contaminated rows were REPAIRED, and weedmaps natural
+#     flower reads 68.5% Indica today (198,082 of 289,229), which is neither figure.
+#   * `product_observations` cannot answer it either: it carries no `strain_type` column, so the
+#     append-only history did not preserve the field whose defaulting is the whole subject.
+# The GUARD does not depend on which is right — it is a date, deliberately, and the signature holds
+# under either — so the defect is a wrong number in the evidence block, not a wrong exclusion. Left
+# standing and labelled instead of quietly harmonised: this file's own subject is a defaulted value
+# read as an observation, and silently choosing 98.2% because it appears twice would be that.
 #
 # Two shipped analyses were computed over the contaminated pool and had to be RETRACTED (see
 # docs/analysis/indica_sativa_form.md). Gate every lineage analysis on this, not on `strain_type_std
@@ -1512,6 +1801,82 @@ def natural_flower_where(alias: LiteralString = "") -> LiteralString:
 
 PLAUSIBLE_POTENCY_WHERE: LiteralString = "potency_implausible IS NOT TRUE"
 
+#: A snapshot the store answered on its latest visit — not one the keep-the-best guard KEPT after an
+#: empty result. A kept snapshot is the store's last menu, up to `_MENU_RETAIN_CEILING_DAYS` old;
+#: "what is this store selling today" must exclude it, "what was its last menu" may keep it.
+CURRENT_SNAPSHOT_WHERE: LiteralString = "retained_since IS NULL"
+
+
+#: The jurisdictions whose only program is medical (`state_programs.programs`), as SQL. An undeclared
+#: menu there is priced on the medical list (`normalize.price_channel`).
+MEDICAL_ONLY_SUBQUERY: LiteralString = "(SELECT abbr FROM state_programs WHERE programs = 'medical')"
+
+
+def medical_only_states(conn: DBConn) -> frozenset[str]:
+    """Every jurisdiction running a medical program only — `state_programs`, the Stage-1 record."""
+    return frozenset(
+        row[0] for row in conn.execute(
+            "SELECT abbr FROM state_programs WHERE programs = 'medical'").fetchall()
+    )
+
+
+def is_medical_only(conn: DBConn, abbr: str) -> bool:
+    """Whether ``abbr`` runs a medical program only (`medical_only_states`)."""
+    row = conn.execute("SELECT programs FROM state_programs WHERE abbr = %s", (abbr,)).fetchone()
+    return bool(row) and row[0] == "medical"
+
+
+#: A variant's effective (current) shelf price in SQL over ``vv`` (a ``jsonb_array_elements``
+#: alias) and ``sp`` (its `store_products` row) — the SQL twin of `normalize.variant_pricing`: the
+#: lowest price field OF THE MENU'S OWN CHANNEL when the variant carries that channel's list (a
+#: medical menu, or an undeclared one in a medical-only state, reads ``*_med``; any other the
+#: ``*_rec`` list), else the lowest of every field.
+#: Two discount scripts each carried a copy that took the lowest of BOTH channels, while
+#: `original_price` has been stamped from the menu's own channel since #870 — so a rec menu with a
+#: cheaper medical list reported a markdown it does not have (the 2026-10-06 ultra review).
+EFFECTIVE_VARIANT_PRICE: LiteralString = (
+    "CASE "
+    "WHEN (sp.menu_type = 'medical' OR (sp.menu_type IS NULL AND sp.state IN "
+    + MEDICAL_ONLY_SUBQUERY + ")) "
+    "AND (vv ? 'price_med' OR vv ? 'special_price_med') THEN LEAST("
+    "COALESCE((vv->>'special_price_med')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'price_med')::float, 'Infinity'::float)) "
+    "WHEN NOT (sp.menu_type = 'medical' OR (sp.menu_type IS NULL AND sp.state IN "
+    + MEDICAL_ONLY_SUBQUERY + ")) "
+    "AND (vv ? 'price_rec' OR vv ? 'special_price_rec') "
+    "THEN LEAST("
+    "COALESCE((vv->>'special_price_rec')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'price_rec')::float, 'Infinity'::float)) "
+    "ELSE LEAST("
+    "COALESCE((vv->>'price')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'special_price_med')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'special_price_rec')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'price_med')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'price_rec')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'sale_price')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'discounted_price')::float, 'Infinity'::float), "
+    "COALESCE((vv->>'unit_price')::float, 'Infinity'::float)) "
+    "END"
+)
+
+
+def current_snapshot_where(alias: LiteralString = "") -> LiteralString:
+    """Exclude rows the empty-result guard retained instead of refreshed, aliasable.
+
+    A `retained_since` stamp means the store answered empty on every visit since that moment and the
+    guard kept what it had (`replace_store_products`); the rows are real, as published, and stale by
+    up to the 30-day ceiling. Measured 2026-10-06: 286,592 rows / 486 stores carried a stamp, 4.6%
+    of the table, and `products_normalized` did not expose it, so every analysis reading the view
+    counted a June menu as today's.
+
+    ⚠ NOT a derived boolean, deliberately. A `current` flag computed as `retained_since IS NULL` reads
+    TRUE for every row of a frozen vintage that predates the column (the 2026-07-17 cuts), which is
+    the defaulted-field-read-as-observation hazard; against such a vintage this predicate keeps every
+    row too, but the COLUMN is there to say why — `static_source` back-fills it NULL, and a reader
+    can see the vintage was never assessed rather than read a TRUE that was never measured.
+    """
+    return f"{alias}.{CURRENT_SNAPSHOT_WHERE}" if alias else CURRENT_SNAPSHOT_WHERE
+
 
 def plausible_potency_where(alias: LiteralString = "") -> LiteralString:
     """Exclude rows whose published THC is not a plausible label for their category, aliasable.
@@ -1594,7 +1959,7 @@ def get_menu_stores_for_state(conn: DBConn, abbr: str) -> list[tuple]:
     """Stores in a state that carry a Stage-3 menu handle, one row per store.
 
     Returns (company_id, canonical_name, source, platform, external_id, store_url,
-    name, address, city) — ``source`` (the Stage-2 discovery rung) says which
+    name, address, city, menu_type) — ``source`` (the Stage-2 discovery rung) says which
     platform the external_id belongs to, which is what menu routing keys on;
     ``platform`` is the recon hint; address/city let a rung re-resolve a dubious
     captured id against a platform directory. Only canonical rows (shared-brand
@@ -1605,7 +1970,7 @@ def get_menu_stores_for_state(conn: DBConn, abbr: str) -> list[tuple]:
     return conn.execute(
         "SELECT DISTINCT ON (platform, external_id) "
         "company_id, canonical_name, source, platform, external_id, store_url, name, "
-        "address, city "
+        "address, city, menu_type "
         "FROM company_stores "
         f"WHERE state = %s AND {_KEPT_HANDLE_WHERE} "
         f"{_KEPT_HANDLE_ORDER}",
@@ -1629,37 +1994,65 @@ def latest_snapshot_times(conn: DBConn, abbr: str) -> dict[str, datetime.datetim
     return dict(rows)
 
 
-def get_recon_companies_for_state(
+def get_companies_for_stage2(
     conn: DBConn, abbr: str
 ) -> list[tuple[int, str, str, str | None]]:
-    """Return (company_id, canonical_name, homepage_url, platform) for a state.
+    """Return (company_id, canonical_name, homepage_url, platform) for EVERY company in a state.
 
-    Every recon'd company is returned, with ``homepage_url`` coalesced to ``''`` when the
-    probe found no site. Companies with a homepage run the full own-site ladder; the
-    homeless ones (``homepage == ''``) still get the homepage-INDEPENDENT Dutchie geo-sweep
-    rung (it attributes by ``chain`` from the shared state pool), so a Dutchie operator is
-    discoverable without seeding its homepage — see ``_company_catalog``.
+    A company recon has probed carries what recon found; ``homepage_url`` is ``''`` when the probe
+    found no site. **A company recon has never probed is returned the same way** — homeless, with
+    no platform — so it still gets the homepage-INDEPENDENT directory rungs (the Dutchie sweep
+    attributes by ``chain``, Weedmaps and Leafly by slug, all from a shared state pool; see
+    ``_company_catalog``).
+
+    ⚠ THIS WAS A JOIN ON ``company_recon`` UNTIL 2026-10-05, named ``get_recon_companies_for_state``
+    and documented "every recon'd company is returned" — true, and it read as "every company".
+    Recon is run by hand, per state; nothing schedules it; and the bootstraps that create companies
+    never write a recon row. So a company created after its state's last recon was returned by
+    nothing and walked by nothing: 5,435 of 15,585 companies in 41 states that day, their 6,213
+    store rows unwritten since July, with no failure anywhere because a company that is not asked
+    about cannot fail. Recon decides what a company's homepage IS. It no longer decides whether
+    the company EXISTS.
     """
     return conn.execute(
-        "SELECT cr.company_id, cr.canonical_name, COALESCE(cr.homepage_url, ''), cr.platform "
-        "FROM company_recon cr JOIN companies c ON c.id = cr.company_id "
+        "SELECT c.id, COALESCE(cr.canonical_name, c.canonical_name), "
+        "       COALESCE(cr.homepage_url, ''), cr.platform "
+        "FROM companies c LEFT JOIN company_recon cr ON cr.company_id = c.id "
         "WHERE c.state = %s "
-        "ORDER BY cr.canonical_name",
+        "ORDER BY 2",
         (abbr,),
     ).fetchall()
 
 
 def get_company_stores_for_dedupe(conn: DBConn, abbr: str) -> list[tuple]:
     """Return (id, company_id, canonical_name, name, address, city, zip_code,
-    latitude, longitude, platform, external_id) rows — coordinates feed dedupe's
+    latitude, longitude, platform, external_id, menu_type) rows — coordinates feed dedupe's
     geo-fallback key; platform + external_id let it keep the richest-menu handle per
-    physical store (so a Dutchie/first-party store isn't demoted to its aggregator twin)."""
+    physical store (so a Dutchie/first-party store isn't demoted to its aggregator twin);
+    menu_type lets a rooftop keep its medical AND its adult-use listing."""
     return conn.execute(
         "SELECT id, company_id, canonical_name, name, address, city, zip_code, "
-        "latitude, longitude, platform, external_id FROM company_stores "
+        "latitude, longitude, platform, external_id, menu_type FROM company_stores "
         "WHERE state = %s ORDER BY id",
         (abbr,),
     ).fetchall()
+
+
+def handles_with_snapshots(conn: DBConn, abbr: str) -> frozenset[str]:
+    """Every ``platform:external_id`` handle in a state that holds a CURRENT menu snapshot — the
+    evidence dedupe's kept-row choice reads (`dedupe._menu_target_rank`), so a rooftop's surviving
+    handle is one Stage 3 is actually reading a menu from, not merely the older row.
+
+    A RETAINED snapshot does not count (the 2026-10-06 ultra review): a kept handle that keeps
+    answering empty holds one, and counting it made that handle outrank a live sibling that, never
+    kept, was never scraped — the ranking fed itself until the 30-day ceiling. Measured that day:
+    nine kept rows held only retained snapshots beside a folded same-platform handle."""
+    return frozenset(
+        row[0] for row in conn.execute(
+            "SELECT DISTINCT store_key FROM store_products "
+            "WHERE state = %s AND retained_since IS NULL", (abbr,)
+        ).fetchall()
+    )
 
 
 def clear_store_canonical_for_state(conn: DBConn, abbr: str) -> None:
@@ -1692,8 +2085,12 @@ def realign_store_products_company(conn: DBConn, abbr: str) -> int:
 
     Handle-scoped: re-attribution keys on ``(platform, external_id)``, so a snapshot whose OWN
     handle was the folded (non-kept) side of a cross-handle merge maps to no kept row and keeps its
-    prior company_id — a rare residual (one rooftop menu-scraped under two distinct handles, then
-    folded; the folded row still exists, so the snapshot is not an orphan the menu-prune would catch).
+    prior company_id (one rooftop menu-scraped under two distinct handles, then folded; the folded
+    row still exists, so the snapshot is not an orphan the menu-prune would catch). ⚠ This read "a
+    rare residual" until it was counted: 519 handles and 392,500 product rows on 2026-10-05 — a
+    chain's medical menu beside its adult-use one, a delivery zone, one rooftop's two aggregator
+    listings. Nothing refreshes those snapshots again; the health check reports them as
+    `snapshot_unreachable`, and the private menu-prune maintenance script retires them.
     """
     cur = conn.execute(
         "UPDATE store_products sp SET company_id = k.company_id "

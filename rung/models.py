@@ -18,6 +18,23 @@ class DispensaryRecord:
     website: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    #: The REGULATOR's own id for this store, verbatim, when the roster publishes one — Alberta's
+    #: `Authorization Number` (803780), Ontario's `LicenceNumber` (CRSA1161431).
+    #:
+    #: ⚠ IT IDENTIFIES THE STORE, NOT THE OPERATOR, and that was the hope. Measured 2026-09-16
+    #: against AGCO's open-data CSV: 98 "One Plant" rows carry 92 distinct licence numbers and 93
+    #: distinct file numbers, because a Cannabis Retail Store Authorization is issued per premises.
+    #: No Ontario source publishes an operator or licensee at all — all four AGCO map layers expose
+    #: the same 14 fields and none of them names a company. So this does NOT collapse an operator's
+    #: many company records. What it IS: a durable key for the STORE that survives a rename, a
+    #: reformatted address or a change of trade name, none of which name+address matching survives.
+    licence_number: str | None = None
+    #: ISO date the regulator's authorization first took effect, where the roster publishes one —
+    #: Alberta's `Initial Effective Date`. This is the store's OPENING as the regulator records it,
+    #: which is a fact we otherwise cannot have: `store_lifecycle_events` infers an opening from a
+    #: store's first appearance in OUR roster, and that is bounded by when we started scraping, not
+    #: by when the store opened. 100% filled on Alberta's 963 rows, earliest 2020.
+    licensed_since: str | None = None
 
 
 @dataclass
@@ -62,6 +79,10 @@ class CompanyStoreRecord:
     # dutchie_plus | sweedpos | unknown | the recon-detected platform | ...)
     external_id: str | None = None   # the store's id on that platform
     store_url: str | None = None     # per-store page / menu URL
+    # Which program's menu this listing is — `text.MENU_TYPE_MEDICAL` / `MENU_TYPE_ADULT_USE` — or
+    # None when the listing does not say. A store licensed for both lists TWO menus on its platform
+    # and they are two catalogues (2026-10-06); dedupe keeps one row per (rooftop, menu type).
+    menu_type: str | None = None
 
 
 @dataclass
@@ -110,7 +131,8 @@ class StoreProductRecord:
     # 96.35% of Flower rows say nothing, so a `Natural` here would be 903,819 manufactured
     # observations — the same shape as `product_type_defaulted` above. See `text.normalize_obtention`.
     obtention_std: str | None = None
-    price: float | None = None          # lowest current shelf price across variants
+    price: float | None = None          # lowest current shelf price across variants, on the
+    # menu's own program channel where a platform publishes two (normalize.price_channel)
     size_g: float | None = None         # representative weight in grams (normalize.enrich_record):
     # the smallest variant size — None for count-priced products (edibles sold "each"). Per-variant
     # size_g/price_per_g are stamped inside the `variants` JSONB.
@@ -145,9 +167,15 @@ class StoreProductRecord:
     # Hytiva/Cresco potency blocks, Weedmaps aggregates); None when none are published.
     cannabinoids_std: dict | None = None
     # Per-size detail as published: [{option, price, ...}] — rec/med split, promo
-    # prices etc. stay here, platform-shaped; `price` above is the cross-variant low.
+    # prices etc. stay here, platform-shaped; `price` above is the cross-variant low of the
+    # menu's own channel (the medical list on a medical listing, else the adult-use one).
     # normalize.enrich_variants also stamps each variant's size_g/price_per_g here.
     variants: list[dict] | None = None
+    # The kept store row's `menu_type` at scrape time (medical | adult_use | None): the menu a
+    # medical listing publishes is a different catalogue at different prices, and an analysis of
+    # "what is sold at what price" must be able to stratify or exclude it. Stamped by Stage 3's
+    # persist path, not by the mapper, which never sees the store row.
+    menu_type: str | None = None
 
 
 @dataclass(frozen=True)

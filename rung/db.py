@@ -1,10 +1,13 @@
 import datetime
+import hashlib
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, LiteralString
 
 import psycopg
+import psycopg.sql  # explicit: `import psycopg` alone does not guarantee the submodule
 
 if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ delegates (no runtime import,
     # so the engine stays cannabis-free); keeps LiteralString-typed constants like NATURAL_FLOWER_WHERE
@@ -17,7 +20,10 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
     # retracted were the ones the type system had stopped checking.
     from rung.reference_db import (  # noqa: F401
         CA_PROVINCES_SUBQUERY,
+        CURRENT_SNAPSHOT_WHERE,
+        EFFECTIVE_VARIANT_PRICE,
         GEOCODED_TABLES,
+        MEDICAL_ONLY_SUBQUERY,
         NATURAL_FLOWER_WHERE,
         NATURAL_FLOWER_WHERE_NORMALIZED,
         PLAUSIBLE_POTENCY_WHERE,
@@ -28,31 +34,37 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         US_TERRITORIES,
         append_store_observation,
         apply_geocode_cache,
+        capture_attempts_for_state,
         clear_store_canonical_for_state,
         count_company_stores,
         count_store_products,
         create_reference_tables,
         create_store_pos_observations,
         create_tables,
+        current_snapshot_where,
         delete_company_stores_for_company,
         delete_dispensaries_for_state,
         get_all_state_programs,
+        get_companies_for_stage2,
         get_company_store_rows,
         get_company_stores_for_dedupe,
         get_geocode_cache,
         get_menu_stores_for_state,
-        get_recon_companies_for_state,
         get_state_program,
+        handles_with_snapshots,
         insert_company_store,
         insert_dispensary,
         insert_store_product,
+        is_medical_only,
         latest_snapshot_times,
         latest_store_observations,
+        medical_only_states,
         natural_flower_where,
         plausible_potency_expr,
         plausible_potency_where,
         put_geocode_cache,
         realign_store_products_company,
+        record_capture_attempt,
         record_location_observations,
         record_observations,
         replace_company_stores,
@@ -278,11 +290,17 @@ CREATE TABLE IF NOT EXISTS token_buckets (
 # at the end of each of its sweeps. It is how the scrape-health dashboard shows the DISTRIBUTED side a
 # store-level view can't: is a fleet member alive, on current code, and are its proxy exits healthy? A
 # stalled VPS cron or a box left on stale code shows here as a heartbeat that stopped advancing. Public
-# infra (like `token_buckets`); the emitter is `scripts/emit_heartbeat.py`. Keyed by host, so a machine
-# has exactly one current row (history is not the point — liveness is).
+# infra (like `token_buckets`); the emitter is `scripts/emit_heartbeat.py`. Keyed by (host, ROLE), so
+# each JOB on a machine has its own current row (history is not the point — liveness is).
+#
+# ⚠ It was keyed by host alone until 2026-08-30, and that erased a whole job. The DigitalOcean box
+# runs TWO crons — daily sweedpos and a MONTHLY aggregator pass — and the daily one's upsert
+# overwrote the monthly one's row, `role` column included. So the aggregator job was unobservable
+# from this table by construction: its liveness existed only in /root/menu-vps.log on the box. A
+# fleet table keyed by machine cannot describe a fleet where a machine has more than one job.
 _CREATE_INFRA_HEARTBEAT = """
 CREATE TABLE IF NOT EXISTS infra_heartbeat (
-    host             TEXT PRIMARY KEY,
+    host             TEXT NOT NULL,
     role             TEXT NOT NULL,
     git_sha          TEXT,
     proxy_tier       TEXT,
@@ -293,7 +311,8 @@ CREATE TABLE IF NOT EXISTS infra_heartbeat (
     last_status      TEXT,
     rows_written     INTEGER,
     note             TEXT,
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (host, role)
 )
 """
 
@@ -313,7 +332,7 @@ def record_heartbeat(
     rows_written: int | None = None,
     note: str | None = None,
 ) -> None:
-    """Upsert one fleet member's heartbeat (one row per ``host``). Caller commits.
+    """Upsert one fleet member's heartbeat (one row per ``(host, role)``). Caller commits.
 
     Called at the end of a machine's sweep (`scripts/emit_heartbeat.py`); ``last_run_at`` defaults to
     ``now()`` when None so a bare heartbeat still stamps liveness."""
@@ -322,8 +341,8 @@ def record_heartbeat(
         "(host, role, git_sha, proxy_tier, pool_total, pool_healthy, pool_quarantined, "
         " last_run_at, last_status, rows_written, note, updated_at) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, now()), %s, %s, %s, now()) "
-        "ON CONFLICT (host) DO UPDATE SET "
-        "  role = excluded.role, git_sha = excluded.git_sha, proxy_tier = excluded.proxy_tier, "
+        "ON CONFLICT (host, role) DO UPDATE SET "
+        "  git_sha = excluded.git_sha, proxy_tier = excluded.proxy_tier, "
         "  pool_total = excluded.pool_total, pool_healthy = excluded.pool_healthy, "
         "  pool_quarantined = excluded.pool_quarantined, last_run_at = excluded.last_run_at, "
         "  last_status = excluded.last_status, rows_written = excluded.rows_written, "
@@ -344,6 +363,35 @@ def get_heartbeats(conn: DBConn) -> list[tuple]:
     return conn.execute(
         f"SELECT {', '.join(HEARTBEAT_COLUMNS)} FROM infra_heartbeat ORDER BY updated_at DESC"
     ).fetchall()
+
+def without_parallel_workers(conn: DBConn) -> None:
+    """Run this session's queries with no parallel workers. For WHOLE-CORPUS analytical scans.
+
+    Postgres allocates a dynamic shared memory segment per parallel worker, and on Linux those live
+    in ``/dev/shm`` — which Docker caps at **64 MB** by default and cannot be resized on a running
+    container. A big scan over `product_observations` (42 GB) asks for more than that and dies with
+    ``could not resize shared memory segment … No space left on device``, which reads like a full
+    disk and is not one: measured 2026-09-15, the same database wrote a 100k-row temp table
+    immediately afterwards.
+
+    ⚠ **THIS COSTS ESSENTIALLY NOTHING ON THE QUERIES IT IS FOR, WHICH IS THE ONLY REASON TO DO IT
+    RATHER THAN RAISE THE LIMIT.** Measured on a 7-day aggregate over `product_observations`, with
+    the plans checked rather than assumed — the default plan really is `Gather Merge` over a
+    `Parallel Seq Scan`, and the forced one really is serial:
+
+        parallel (default 2)   18.0 s
+        serial (0)             17.6 s
+
+    A sequential scan of a table that size is bound by I/O, not by CPU, so the workers were buying
+    ~2%. Do NOT reach for this on the pipeline's own queries, which are indexed, short, and where
+    parallelism does pay.
+
+    The real fix is ``--shm-size=1g`` when the Postgres container is next recreated; this is the
+    part that can be done from inside a session, and it is per-session deliberately so nothing else
+    in the fleet changes behaviour.
+    """
+    conn.execute("SET max_parallel_workers_per_gather = 0")
+
 
 def get_connection(*, prefer_readonly: bool = False) -> DBConn:
     """Open and return a connection to the dispensaries data source.
@@ -448,18 +496,116 @@ def create_engine_tables(conn: DBConn) -> None:
     """
     conn.execute(_CREATE_ACCESS_METHODS)
     conn.execute(_CREATE_JOBS)
-    conn.execute(_CREATE_JOBS_LIVE_UNIQUE)
-    conn.execute(_CREATE_JOBS_PENDING_CLAIM)
+    ensure_index(conn, _CREATE_JOBS_LIVE_UNIQUE)
+    ensure_index(conn, _CREATE_JOBS_PENDING_CLAIM)
     _migrate_jobs(conn)
     _migrate_access_methods(conn)
     conn.execute(_CREATE_TOKEN_BUCKETS)
     conn.execute(_CREATE_INFRA_HEARTBEAT)
+    _migrate_infra_heartbeat(conn)
     conn.execute(_CREATE_PROXIES)
-    conn.execute(_CREATE_PROXIES_CLAIM_INDEX)
+    ensure_index(conn, _CREATE_PROXIES_CLAIM_INDEX)
     conn.execute(_CREATE_PROXY_TIERS)
     conn.execute(_CREATE_ATTESTATIONS)
-    conn.execute(_CREATE_ATTESTATIONS_LOOKUP)
+    ensure_index(conn, _CREATE_ATTESTATIONS_LOOKUP)
     conn.commit()
+
+
+# --- start-up DDL that asks for no lock when there is nothing to do ---------------------------------
+#
+# ⚠ `IF NOT EXISTS` IS NOT "NO LOCK". Postgres takes the statement's lock FIRST and looks second:
+# `ALTER TABLE … ADD COLUMN IF NOT EXISTS` waits for ACCESS EXCLUSIVE on a table whose column is
+# already there, `CREATE INDEX IF NOT EXISTS` for SHARE on a table whose index exists, and
+# `CREATE OR REPLACE VIEW` for ACCESS EXCLUSIVE on a view it will not change. Every command runs
+# this suite at start-up, in ONE transaction, so each process start queued for the strongest lock
+# on every table behind whatever a live worker held, while holding the ones it had already been
+# granted — a lock-order inversion against any writer mid-transaction. Measured 2026-10-04 on a
+# two-box fleet sharing one database: 36 commands deadlocked at start-up, seven states skipped
+# outright by one monthly run, and two workers' stores rolled back mid-run.
+#
+# So each helper below READS THE CATALOG and issues DDL only when the object is actually missing —
+# the rule `_migrate_infra_heartbeat` already followed. A catalog read takes no lock on the table.
+# `tests/test_db.py` holds a writer on every table and a reader on every view and requires the
+# whole suite to pass through; a new statement that locks unconditionally fails it.
+
+_INDEX_NAME_RE = re.compile(r"\bINDEX\s+IF\s+NOT\s+EXISTS\s+(\w+)", re.IGNORECASE)
+_VIEW_NAME_RE = re.compile(r"\bCREATE\s+OR\s+REPLACE\s+VIEW\s+(\w+)", re.IGNORECASE)
+_QUOTED_RE = re.compile(r"'([^']*)'")
+
+
+def _relation_exists(conn: DBConn, name: str) -> bool:
+    """Whether ``name`` resolves on the caller's ``search_path`` (so a test schema sees its own)."""
+    row = conn.execute("SELECT to_regclass(%s::text) IS NOT NULL", (name,)).fetchone()
+    return row is not None and bool(row[0])
+
+
+def table_columns(conn: DBConn, table: str) -> set[str]:
+    """The live column names of ``table``; empty when the table does not exist."""
+    rows = conn.execute(
+        "SELECT attname FROM pg_attribute "
+        "WHERE attrelid = to_regclass(%s::text) AND attnum > 0 AND NOT attisdropped",
+        (table,),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def add_missing_columns(conn: DBConn, table: LiteralString, columns: dict[str, str]) -> None:
+    """``ALTER TABLE … ADD COLUMN`` for each of ``columns`` the table lacks — and nothing otherwise."""
+    have = table_columns(conn, table)
+    for column, col_type in columns.items():
+        if column in have:
+            continue
+        # DDL with a hardcoded table and a column/type from an all-literal module constant — not a
+        # LiteralString to the stub, but no caller input ever reaches it.
+        conn.execute(  # ty: ignore[no-matching-overload]
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
+        )
+
+
+def ensure_index(conn: DBConn, ddl: LiteralString) -> None:
+    """Run a ``CREATE [UNIQUE] INDEX IF NOT EXISTS <name> …`` only when ``<name>`` is absent."""
+    named = _INDEX_NAME_RE.search(ddl)
+    if named is None:
+        raise ValueError(f"not a CREATE INDEX IF NOT EXISTS statement: {ddl.strip()[:60]!r}")
+    if not _relation_exists(conn, named.group(1)):
+        conn.execute(ddl)
+
+
+def ensure_view(conn: DBConn, ddl: LiteralString) -> None:
+    """Run a ``CREATE OR REPLACE VIEW <name> …`` only when the view is absent or its DDL changed.
+
+    A view's stored definition is Postgres's re-rendering of the query, not the text that made it,
+    so the two cannot be compared. The view's COMMENT therefore carries a digest of the DDL that
+    last created it: it lives on the object and travels with a dump, and a view dropped and
+    recreated by hand loses it and is rebuilt. (One replaced IN PLACE by hand keeps the stamp and
+    is not noticed — the digest witnesses this module's DDL, not the catalog's.)
+    """
+    named = _VIEW_NAME_RE.search(ddl)
+    if named is None:
+        raise ValueError(f"not a CREATE OR REPLACE VIEW statement: {ddl.strip()[:60]!r}")
+    name = named.group(1)
+    stamp = "ddl sha256:" + hashlib.sha256(ddl.encode("utf-8")).hexdigest()
+    current = conn.execute(
+        "SELECT obj_description(to_regclass(%s::text), 'pg_class')", (name,)
+    ).fetchone()
+    if current is not None and current[0] == stamp:
+        return
+    conn.execute(ddl)
+    conn.execute(
+        psycopg.sql.SQL("COMMENT ON VIEW {} IS {}").format(
+            psycopg.sql.Identifier(name), psycopg.sql.Literal(stamp)
+        )
+    )
+
+
+def constraint_definition(conn: DBConn, table: str, name: str) -> str | None:
+    """Postgres's rendering of constraint ``name`` on ``table``, or None when it is not there."""
+    row = conn.execute(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conrelid = to_regclass(%s::text) AND conname = %s",
+        (table, name),
+    ).fetchone()
+    return row[0] if row is not None else None
 
 
 def _migrate_access_methods(conn: DBConn) -> None:
@@ -469,6 +615,9 @@ def _migrate_access_methods(conn: DBConn) -> None:
     validates existing rows when the constraint is added, so a database carrying some other status
     fails loudly here rather than silently accepting it forever.
     """
+    current = constraint_definition(conn, "access_methods", "access_methods_status_check")
+    if current is not None and set(_QUOTED_RE.findall(current)) == ACCESS_STATUSES:
+        return  # already the current vocabulary: no ALTER, so no ACCESS EXCLUSIVE and no table scan
     conn.execute(
         "ALTER TABLE access_methods DROP CONSTRAINT IF EXISTS access_methods_status_check"
     )
@@ -478,13 +627,45 @@ def _migrate_access_methods(conn: DBConn) -> None:
     )
 
 
+def _migrate_infra_heartbeat(conn: DBConn) -> None:
+    """Repoint a pre-2026-08-30 database's primary key from ``(host)`` to ``(host, role)``.
+
+    The old key allowed a machine exactly one row, so a box running two jobs had the second one's
+    heartbeat silently overwrite the first — including the ``role`` column, which made the loss
+    invisible rather than merely lossy. See the comment on :data:`_CREATE_INFRA_HEARTBEAT`.
+
+    Guarded on the CURRENT key width, not on a version marker, so it is a catalog read on every call
+    but an ``ALTER TABLE`` (which takes ACCESS EXCLUSIVE) exactly once. ``to_regclass`` resolves
+    through ``search_path``, so this migrates the schema the caller is actually using — the test
+    suite's throwaway schemas included — rather than whichever ``infra_heartbeat`` it finds first.
+
+    No row can be lost: ``(host)`` was UNIQUE, so ``(host, role)`` is unique over the same rows.
+    """
+    row = conn.execute(
+        "SELECT i.indnatts FROM pg_index i "
+        "WHERE i.indrelid = to_regclass('infra_heartbeat') AND i.indisprimary"
+    ).fetchone()
+    if row is None or row[0] == 2:   # no table/PK yet (fresh CREATE already has it), or already composite
+        return
+    name = conn.execute(
+        "SELECT conname FROM pg_constraint "
+        "WHERE conrelid = to_regclass('infra_heartbeat') AND contype = 'p'"
+    ).fetchone()
+    if name is None:
+        return
+    # The constraint name comes from the catalog, not from caller input; quote it as an identifier
+    # anyway so a non-default name (a restored dump can carry one) cannot break the statement.
+    conn.execute(
+        psycopg.sql.SQL("ALTER TABLE infra_heartbeat DROP CONSTRAINT {}").format(
+            psycopg.sql.Identifier(name[0])
+        )
+    )
+    conn.execute("ALTER TABLE infra_heartbeat ADD PRIMARY KEY (host, role)")
+
+
 def _migrate_jobs(conn: DBConn) -> None:
     """Add any jobs columns missing from an older database (the lease/heartbeat columns)."""
-    for column, col_type in _JOBS_ADDED_COLUMNS.items():
-        # DDL with hardcoded column/type from a module constant (see _migrate_company_stores).
-        conn.execute(  # ty: ignore[no-matching-overload]
-            f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {column} {col_type}"
-        )
+    add_missing_columns(conn, "jobs", _JOBS_ADDED_COLUMNS)
 
 
 _UPSERT_ACCESS_METHOD = """

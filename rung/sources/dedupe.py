@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from rung import db
 from rung.models import CompanyStoreRecord
+from rung.text import MENU_TYPE_ADULT_USE, MENU_TYPE_MEDICAL
 
 # A unit/suite designator + its identifier. The word keywords are bounded on BOTH sides
 # (``\bste\b``) so a unit abbreviation can't swallow a street name that merely starts with
@@ -108,15 +109,41 @@ def ambiguous_handles(rows: Iterable[tuple]) -> set[str]:
     (An address-less twin keys to '' and does not count against it — that duplicate is exactly what the
     handle is there to catch.)
     """
-    seen: dict[str, set[str]] = defaultdict(set)
+    # ⚠ A MISSING ZIP IS MISSING EVIDENCE, NOT A SECOND ROOFTOP — AND DROPPING THE ZIP ENTIRELY IS
+    # NOT THE FIX. `address_key` is street|zip, so one rooftop captured twice (zip present once,
+    # absent once) yields two keys and the handle is refused, killing the only key that could have
+    # merged that pair — `custom:899`, this docstring's own example, is refused exactly that way.
+    # But simply keying on the street reinstates the defect this function exists for: `custom:9` at
+    # `100 Main St|16001` (Butler) and `100 Main St|16501` (Erie) are DIFFERENT rooftops sharing
+    # street text, and collapsing them un-refuses the handle that chained 75 unrelated Ontario
+    # operators into one cluster. (That regression was shipped on 2026-09-15 and caught by review;
+    # the anti-vacuity test in place used differing STREET text, so it could not see it.)
+    #
+    # So: count rooftops per street. A street with no zip anywhere, or exactly one, is ONE rooftop —
+    # the zip-less row folds into it. A street carrying two or more distinct zips is that many.
+    zips_by_street: dict[str, set[str]] = defaultdict(set)
+    streets: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         (_id, _company_id, _canonical, _name, address, _city, zip_code,
-         _lat, _lng, platform, external_id) = row
+         _lat, _lng, platform, external_id, _menu_type) = row
         handle = identity_handle(platform, external_id)
         akey = address_key(address, zip_code)
-        if handle and akey:
-            seen[handle].add(akey)
-    return {handle for handle, addresses in seen.items() if len(addresses) > 1}
+        if not (handle and akey):
+            continue
+        street, _, zip_part = akey.partition("|")
+        streets[handle].add(street)
+        if zip_part:
+            zips_by_street[f"{handle}\x00{street}"].add(zip_part)
+
+    ambiguous: set[str] = set()
+    for handle, handle_streets in streets.items():
+        rooftops = sum(
+            max(1, len(zips_by_street.get(f"{handle}\x00{street}", ())))
+            for street in handle_streets
+        )
+        if rooftops > 1:
+            ambiguous.add(handle)
+    return ambiguous
 
 
 def address_key(address: str | None, zip_code: str | None) -> str:
@@ -181,7 +208,10 @@ def location_key(
 # store's nearest same-operator cross-platform neighbour is either < ~100 m (the same rooftop) or km+
 # away (a genuinely distinct store of the chain) — a clean valley — so this radius collapses the
 # drift duplicates without merging distinct stores. Safe only WITHIN one operator: a cross-company
-# 110 m merge wrongly fuses neighbouring competitors (see geo_key), but within one operator it can't.
+# 110 m merge wrongly fuses neighbouring competitors (see geo_key), but within one operator that
+# pairing cannot — though the union is over KEYS, so the transitive closure can still reach another
+# operator IF two operators share an address key. Measured 2026-09-15: 0 of 15,209 do. See the
+# same-operator merge below for why that is recorded rather than redesigned.
 _SAME_OP_MERGE_M = 100.0
 
 
@@ -205,7 +235,29 @@ def physical_key(record: CompanyStoreRecord) -> str:
     street = address_key(record.address, record.zip_code)
     if street:
         return street
-    return f"{record.platform}:{record.external_id}"
+    handle = identity_handle(record.platform, record.external_id)
+    if handle:
+        return handle
+    # ⚠ NO LOCATOR AND NO HANDLE MUST NOT COLLAPSE INTO ONE STORE. This returned the f-string
+    # `f"{record.platform}:{record.external_id}"`, which renders `'None:None'` when both halves are
+    # absent — so EVERY coord-less, address-less, handle-less row in a pool shared one key and the
+    # bootstrap merged them into a single store, silently, while this docstring promised the exact
+    # opposite ("so a coord/address-less row is never silently merged with another"). `dutchie:None`
+    # and `None:55` collided the same way. `identity_handle` already refuses a half-formed handle by
+    # returning ''; the f-string bypassed it.
+    #
+    # With no locator there is no evidence of identity, so the key must be UNIQUE rather than shared.
+    # Name+city+state is the strongest deterministic identity such a row carries; two rows agreeing
+    # on all three while carrying no coordinate, no street and no handle are indistinguishable by
+    # construction, and merging those is the one merge this fallback still permits.
+    identity = "|".join((record.name or "", record.city or "", record.state or "")).lower()
+    if identity.strip("|"):
+        return "\x00unkeyed:" + identity
+    # Nothing at all to key on — not even a name. Two such rows share no evidence whatsoever, so
+    # they must not share a key either; `id()` is unique within the pass, which is the only scope
+    # this function is used in (`bootstrap` builds one dict per run). Returning a constant here was
+    # the narrower survivor of the same collapse this fallback was written to end.
+    return f"\x00unkeyed:{id(record):x}"
 
 
 class _UnionFind[T]:
@@ -259,14 +311,49 @@ _PLATFORM_MENU_RANK = {
 _UNKNOWN_MENU_RANK = 5  # custom / unrecognized — beats an aggregator, loses to known-rich
 
 
-def _menu_target_rank(row: tuple) -> tuple[int, int]:
+#: Row index of `menu_type` in `db.get_company_stores_for_dedupe` rows.
+_MENU_TYPE = 11
+_DECLARED_MENU_TYPES = frozenset({MENU_TYPE_MEDICAL, MENU_TYPE_ADULT_USE})
+
+
+def _menu_partitions(grp: list[tuple]) -> list[list[tuple]]:
+    """Split one rooftop's rows into the menus it publishes: one partition per declared menu type
+    when BOTH are present, else the whole group as one.
+
+    A medical listing and an adult-use listing of one store are two catalogues (measured
+    2026-10-06: 24–63% of product names in common two days apart) and each keeps a row. An
+    UNDECLARED row at such a rooftop — a Weedmaps or Leafly twin, a name that says neither — joins
+    the adult-use partition: the aggregators list a store's adult-use menu, and a medical listing is
+    the one that says so. A rooftop with one declared type or none folds as it always did, so a
+    single-program store's aggregator twin still collapses into its first-party row.
+    """
+    declared = {row[_MENU_TYPE] for row in grp if row[_MENU_TYPE] in _DECLARED_MENU_TYPES}
+    if len(declared) < 2:
+        return [grp]
+    medical = [row for row in grp if row[_MENU_TYPE] == MENU_TYPE_MEDICAL]
+    adult = [row for row in grp if row[_MENU_TYPE] != MENU_TYPE_MEDICAL]
+    return [medical, adult]
+
+
+def _menu_target_rank(row: tuple, with_menu: frozenset[str] = frozenset()) -> tuple[int, int, int]:
     """Sort key for choosing a physical store's surviving (menu-scrape) row: handle-bearing
-    rows first, then richest menu platform. ``row`` carries platform at index 9, the menu
-    handle (external_id) at index 10 (see ``db.get_company_stores_for_dedupe``)."""
+    rows first, then richest menu platform, then — within a platform — the handle that has
+    actually yielded a menu. ``row`` carries platform at index 9, the menu handle (external_id)
+    at index 10 (see ``db.get_company_stores_for_dedupe``); ``with_menu`` is the state's set of
+    ``platform:external_id`` handles holding a snapshot (``db.handles_with_snapshots``).
+
+    The third term exists because the tie between two handles of ONE platform at one rooftop
+    used to fall to the lower row id — the older row — and that picked a Leafly MED listing with
+    no menu over the REC listing holding 1,475 products, and a Dutchie "(Delivery)" variant over
+    the storefront's 456 (measured 2026-10-06: eight rooftops whose kept handle had nothing while
+    the folded one held the store's only menu). Evidence of a menu beats seniority; a kept
+    handle that is scraped daily stays kept, since its snapshot is the fresh one.
+    """
     platform = (row[9] or "").strip().lower()
     external_id = (row[10] or "").strip()
     has_handle = 0 if (platform and external_id) else 1
-    return has_handle, _PLATFORM_MENU_RANK.get(platform, _UNKNOWN_MENU_RANK)
+    has_menu = 0 if f"{platform}:{external_id}" in with_menu else 1
+    return has_handle, _PLATFORM_MENU_RANK.get(platform, _UNKNOWN_MENU_RANK), has_menu
 
 
 def pick_canonical(
@@ -288,7 +375,9 @@ def pick_canonical(
 
 @dataclass
 class DedupeReport:
-    distinct_stores: int = 0          # physical stores after dedupe
+    distinct_stores: int = 0          # kept rows after dedupe — menu-scrape targets, one per
+                                      # (rooftop, menu type); rooftops = distinct_stores - second_menus
+    second_menus: int = 0             # rooftops that kept a second row for their other program's menu
     duplicate_rows: int = 0           # rows marked as shared-brand duplicates
     located_from_sibling: int = 0     # kept rows that inherited a folded sibling's coordinates
     realigned_products: int = 0       # menu snapshots re-pointed at their handle's kept company
@@ -298,6 +387,7 @@ class DedupeReport:
 def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
     """Mark shared-brand duplicate stores in a state. Commits; returns a report."""
     rows = db.get_company_stores_for_dedupe(conn, state)
+    with_menu = db.handles_with_snapshots(conn, state)
     # Handles that name more than one rooftop are not identities — refuse them as merge keys BEFORE
     # the union-find runs, or one bogus id chains every operator that happens to reuse the number.
     bogus = ambiguous_handles(rows)
@@ -315,7 +405,7 @@ def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
     row_keys: list[tuple[tuple, list[str]]] = []
     for row in rows:
         (_id, company_id, canonical_name, name, address, _city, zip_code, lat, lng,
-         platform, external_id) = row
+         platform, external_id, _menu_type) = row
         names[company_id] = canonical_name
         store_names[company_id].append(name or "")
         handle = identity_handle(platform, external_id)
@@ -331,7 +421,21 @@ def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
     # Same-operator coarse-geo merge: union the key sets of any two rows of ONE operator
     # (same canonical_name) whose coordinates fall within _SAME_OP_MERGE_M — the cross-platform
     # geocode-drift duplicates the tight geo_key misses. O(k²) within each operator's stores, which
-    # are few; restricted to same operator so co-located DIFFERENT operators never merge.
+    # are few; restricted to same operator so co-located DIFFERENT operators are never merged BY
+    # THIS RULE.
+    #
+    # ⚠ THAT RESTRICTION GOVERNS WHICH PAIRS ARE UNIONED, NOT THE TRANSITIVE CLOSURE, and this
+    # comment used to claim the stronger thing ("co-located DIFFERENT operators never merge"). The
+    # union is over KEYS in one shared `_UnionFind`, so if two operators ever share an address key,
+    # a same-operator merge next door reaches them both: A(op1)—B(op1) unioned by distance, B(op1)
+    # and C(op2) sharing a street key, and all three land in one cluster.
+    #
+    # MEASURED 2026-09-15 AND NOT FIXED, DELIBERATELY: **0 of 15,209** live address keys are shared
+    # by two operators, so the closure has nothing to travel through and there is no live instance.
+    # Changing the merge to a per-operator union structure would alter dedup semantics fleet-wide to
+    # close a hazard nothing is exploiting — the wrong trade against a rule this file calls the
+    # cross-platform geocode-drift fix. The claim is corrected instead, and the detection is one
+    # query: group `company_stores` by `address_key` and look for a key with two `canonical_name`s.
     op_points: dict[str, list[tuple[float, float, list[str]]]] = defaultdict(list)
     for row, keys in row_keys:
         if keys and row[7] is not None and row[8] is not None:
@@ -353,72 +457,81 @@ def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
     for company_id in names:
         union.find(company_id)
     for grp in groups.values():
-        company_ids = [r[1] for r in grp]
-        for other in company_ids[1:]:
-            union.union(company_ids[0], other)
+            company_ids = [r[1] for r in grp]
+            for other in company_ids[1:]:
+                union.union(company_ids[0], other)
 
     clusters: dict[int, set[int]] = defaultdict(set)
     for company_id in names:
-        clusters[union.find(company_id)].add(company_id)
+            clusters[union.find(company_id)].add(company_id)
     canonical_of: dict[int, int] = {}
     report = DedupeReport()
     for members in clusters.values():
-        canonical = pick_canonical(members, names, store_names)
-        for company_id in members:
-            canonical_of[company_id] = canonical
-        if len(members) > 1:
-            report.clusters.append(
-                (names[canonical], sorted(names[c] for c in members if c != canonical))
-            )
+            canonical = pick_canonical(members, names, store_names)
+            for company_id in members:
+                canonical_of[company_id] = canonical
+            if len(members) > 1:
+                report.clusters.append(
+                    (names[canonical], sorted(names[c] for c in members if c != canonical))
+                )
 
     db.clear_store_canonical_for_state(conn, state)
-    kept_rows: list[tuple[int, str, int]] = []  # (store_id, city_lower, operator_id)
-    for grp in groups.values():
+    # (store_id, city_lower, operator_id, rooftop) — a rooftop keeps one row per menu type, so the
+    # alias pin below counts ROOFTOPS, not rows.
+    kept_rows: list[tuple[int, str, int, str]] = []
+    for rooftop, grp in groups.items():
         # Collapse every extra row at this physical address — cross-company alias
         # (Delta 9 → Sunnyside) or intra-company duplicate (same store scraped twice).
-        # Keep one row per physical store. Prefer the richest-menu HANDLE (so a Dutchie /
-        # first-party store isn't demoted to its Weedmaps/Leafly twin at the same rooftop),
-        # then the canonical company, then a stable id; the rest collapse into the operator.
+        # Keep one row per physical store AND MENU TYPE: a store licensed for both programs lists
+        # a medical and an adult-use menu, and they are two catalogues (`_menu_partitions`), so
+        # each keeps a row. Within a partition prefer the richest-menu HANDLE (so a Dutchie /
+        # first-party store isn't demoted to its Weedmaps/Leafly twin at the same rooftop), then
+        # the handle holding a menu, then the canonical company, then a stable id; the rest
+        # collapse into the operator.
         canonical = canonical_of[grp[0][1]]
         operator_count = len(store_names.get(canonical, []))
-        kept = min(grp, key=lambda r: (*_menu_target_rank(r), 0 if r[1] == canonical else 1, r[0]))
-        for row in grp:
-            if row[0] != kept[0]:
-                db.set_store_canonical(conn, row[0], canonical)
-                report.duplicate_rows += 1
+        parts = _menu_partitions(grp)
+        report.second_menus += len(parts) - 1
+        for part in parts:
+            kept = min(part, key=lambda r: (*_menu_target_rank(r, with_menu), 0 if r[1] == canonical else 1, r[0]))
+            for row in part:
+                if row[0] != kept[0]:
+                    db.set_store_canonical(conn, row[0], canonical)
+                    report.duplicate_rows += 1
 
-        # If the kept row won the slot without coordinates (an address-less handle duplicate)
-        # but a folded sibling carries them, copy the sibling's location onto the kept row so the
-        # surviving store still plots — coords always; address/zip only to fill a blank.
-        if kept[7] is None or kept[8] is None:
-            donor = next((r for r in grp if r[7] is not None and r[8] is not None), None)
-            if donor is not None:
-                db.set_store_location(
-                    conn, kept[0], donor[7], donor[8], kept[4] or donor[4], kept[6] or donor[6]
-                )
-                report.located_from_sibling += 1
+            # If the kept row won the slot without coordinates (an address-less handle duplicate)
+            # but a folded sibling carries them, copy the sibling's location onto the kept row so the
+            # surviving store still plots — coords always; address/zip only to fill a blank.
+            if kept[7] is None or kept[8] is None:
+                donor = next((r for r in grp if r[7] is not None and r[8] is not None), None)
+                if donor is not None:
+                    db.set_store_location(
+                        conn, kept[0], donor[7], donor[8], kept[4] or donor[4], kept[6] or donor[6]
+                    )
+                    report.located_from_sibling += 1
 
-        # Storefront brand for this physical location. A SUBSET alias (lists fewer
-        # stores than the operator, e.g. Keystone ReLeaf's 3) brands the addresses it
-        # lists; otherwise use the canonical OPERATOR's name (stable regardless of which
-        # platform row won the kept slot — see the richest-handle pick above). Redirect
-        # aliases (which scraped the whole list) are pinned below.
-        company_ids = {r[1] for r in grp}
-        subset = [
-            c for c in company_ids
-            if c != canonical and 0 < len(store_names.get(c, [])) < operator_count
-        ]
-        if subset:
-            storefront = names[min(subset, key=lambda c: len(store_names.get(c, [])))]
-        else:
-            storefront = names.get(canonical, "")
-        db.set_store_storefront(conn, kept[0], storefront)
-        kept_rows.append((kept[0], (kept[5] or "").lower(), canonical))
+            # Storefront brand for this physical location. A SUBSET alias (lists fewer
+            # stores than the operator, e.g. Keystone ReLeaf's 3) brands the addresses it
+            # lists; otherwise use the canonical OPERATOR's name (stable regardless of which
+            # platform row won the kept slot — see the richest-handle pick above). Redirect
+            # aliases (which scraped the whole list) are pinned below.
+            company_ids = {r[1] for r in grp}
+            subset = [
+                c for c in company_ids
+                if c != canonical and 0 < len(store_names.get(c, [])) < operator_count
+            ]
+            if subset:
+                storefront = names[min(subset, key=lambda c: len(store_names.get(c, [])))]
+            else:
+                storefront = names.get(canonical, "")
+            db.set_store_storefront(conn, kept[0], storefront)
+            kept_rows.append((kept[0], (kept[5] or "").lower(), canonical, rooftop))
 
     # Redirect-alias override: a single-location alias that scraped the operator's
     # whole list (Harvest of Whitehall → all of Trulieve) gets pinned to the one kept
-    # store whose CITY appears in the alias name. Only applied when exactly one kept store
-    # matches (an ambiguous or absent city leaves the default storefront in place).
+    # store whose CITY appears in the alias name. Only applied when exactly one ROOFTOP
+    # matches (an ambiguous or absent city leaves the default storefront in place); a rooftop
+    # keeping a medical and an adult-use row is one store, and both rows take the name.
     for members in clusters.values():
         if len(members) <= 1:
             continue
@@ -432,8 +545,9 @@ def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
                 kr for kr in kept_rows
                 if kr[2] == operator_id and _city_in_name(kr[1], alias_name)
             ]
-            if len(matched) == 1:
-                db.set_store_storefront(conn, matched[0][0], alias_name)
+            if len({kr[3] for kr in matched}) == 1:
+                for kr in matched:
+                    db.set_store_storefront(conn, kr[0], alias_name)
 
     conn.commit()
 
@@ -454,7 +568,9 @@ def run_dedupe(conn: db.DBConn, state: str) -> DedupeReport:
 
 def print_dedupe_report(report: DedupeReport, state: str) -> None:
     print(
-        f"{state}: {report.distinct_stores} distinct physical stores; "
+        f"{state}: {report.distinct_stores - report.second_menus} distinct physical stores, "
+        f"{report.distinct_stores} kept rows ({report.second_menus} rooftops keep a medical AND an "
+        f"adult-use menu); "
         f"{report.duplicate_rows} shared-brand duplicate rows marked; "
         f"{report.located_from_sibling} kept rows located from a sibling; "
         f"{report.realigned_products} menu snapshots realigned to their kept company."

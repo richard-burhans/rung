@@ -1,10 +1,13 @@
 """Tests for the shared text helpers (used by recon.py and seed_companies.py)."""
 
+import pytest
+
 from rung.text import (
     category_overridden,
     dominant_terpene,
     extract_brand,
     is_placeholder_name,
+    menu_type_of,
     normalize_brand,
     normalize_category,
     normalize_obtention,
@@ -13,6 +16,7 @@ from rung.text import (
     product_type_defaulted,
     strip_legal_entity,
     terpene_floats,
+    terpene_fold_residue,
 )
 
 
@@ -577,3 +581,105 @@ def test_normalize_obtention_infused_wins_when_a_name_says_both():
     # so the ordering is pinned here to make the choice deliberate rather than incidental. If a future
     # analysis ever splits on the two values, THAT is when this needs evidence rather than a convention.
     assert normalize_obtention("Distillate Syringe", "Flower") == "Infused"
+
+
+# ── the terpene fold's substring collisions ───────────────────────────────────────────────────────
+#
+# `normalize_terpene` matches by SUBSTRING, which is right for `Beta Myrcene` and wrong for a name
+# that merely CONTAINS a panel terpene. Two such collisions are live in the corpus and were found
+# months apart by accident — the second by an adversarial agent asked about something else entirely.
+# `terpene_fold_residue` is the detector that makes them findable on purpose.
+
+@pytest.mark.parametrize(("raw", "canonical"), [
+    ("Beta Myrcene", "Myrcene"),        # the fold's intended case
+    ("b_myrcene", "Myrcene"),           # delimited single-letter prefix
+    ("Alpha Pinene", "Pinene"),
+    ("limonene", "Limonene"),           # ⚠ an undelimited [abdlyn] strip eats the leading `l`
+    ("linalool", "Linalool"),           # ⚠ … and here
+    ("bisabolol", "Bisabolol"),         # ⚠ … and here. The first detector reported all three.
+])
+def test_a_plain_variant_leaves_no_residue(raw: str, canonical: str) -> None:
+    assert terpene_fold_residue(raw, canonical) == "", (
+        f"`{raw}` is a plain variant of {canonical} and must not be reported as a collision")
+
+
+@pytest.mark.parametrize(("raw", "canonical", "residue"), [
+    ("Caryophyllene Oxide", "Caryophyllene", "caryophylleneoxide"),
+    ("caryophyllene_oxide", "Caryophyllene", "caryophylleneoxide"),
+    ("Terpinene", "Pinene", "terpinene"),
+    ("y-Terpinene", "Pinene", "terpinene"),
+    ("AlphaTerpineneValue", "Pinene", "terpinene"),
+])
+def test_a_distinct_compound_absorbed_by_the_fold_is_reported(raw: str, canonical: str,
+                                                              residue: str) -> None:
+    """The two live collisions, by name, so neither can be silently 'fixed' by widening the stripper.
+
+    `Caryophyllene Oxide` is an oxidation product summed into the parent terpene (620,511 entries);
+    `terpinene` contains `pinene` and gamma-terpinene is a distinct monoterpene (130,398 entries,
+    7.9% of all Pinene entries). Measured over the corpus 2026-08-22 — and `store_products` is
+    replaced wholesale by every sweep, so both counts GROW: 642,846 and 135,062 on 2026-09-14. The
+    collisions are the claim; the counts are a dated snapshot of how much they absorb.
+    """
+    assert terpene_fold_residue(raw, canonical) == residue
+
+
+def test_the_detector_reports_rather_than_judges() -> None:
+    """`Ocimene-1`/`Ocimene-2` are ISOMERS of one compound, so summing them is CORRECT.
+
+    They still produce a residue, and that is the design: the detector surfaces what the fold
+    absorbed and leaves the chemistry to a human. A boolean claiming to know would have to encode
+    which absorbed names are the same compound, which is exactly the judgement it cannot make.
+    """
+    assert terpene_fold_residue("Ocimene-1", "Ocimene") == "ocimene1"
+
+
+# ── menu_type_of: which program's menu a listing is ───────────────────────────────────────────────
+
+
+def test_menu_type_reads_the_listing_name_in_the_forms_the_platforms_use() -> None:
+    """Measured spellings from 2026-10-06's 145 same-platform pairs."""
+    assert menu_type_of("NETA Brookline - MED") == "medical"
+    assert menu_type_of("NETA Brookline - REC") == "adult_use"
+    assert menu_type_of("Eastern Green Dispensary (MED)") == "medical"
+    assert menu_type_of("Zen Leaf Elkridge (Rec)") == "adult_use"
+    assert menu_type_of("RISE Dispensaries Joppa - Medical") == "medical"
+    assert menu_type_of("RISE Dispensaries Joppa - Adult Use") == "adult_use"
+    assert menu_type_of("Hatch - Addison (MED)") == "medical"
+    assert menu_type_of("Liberty (Somerville REC)") == "adult_use"
+    assert menu_type_of("Affinity Dispensary Med") == "medical"
+    assert menu_type_of("Curaleaf - Hanover 21+") == "adult_use"
+
+
+def test_menu_type_is_none_when_the_listing_does_not_say_or_says_both() -> None:
+    """None is "not declared", never a default: most listings name neither program."""
+    assert menu_type_of("Sunnyside* - Aberdeen, OH") is None
+    assert menu_type_of("Trulieve - Macon") is None
+    assert menu_type_of("Dispensary - MED/REC") is None          # both: ambiguous
+    assert menu_type_of("Medford Dispensary") is None             # a city, not a program
+    assert menu_type_of(None) is None and menu_type_of("") is None
+
+
+def test_a_program_word_inside_the_brand_declares_nothing() -> None:
+    """The 2026-10-06 ultra review, against the live table: five Missouri "Nature Med - <city>"
+    stores (an adult-use state) and MI "Med + Leaf | Hartford" were stamped MEDICAL and priced on
+    Dutchie's medical list, because the word anywhere in the name counted. Only a bracket, the text
+    after a separator, or a separator-less name's final word declares a program."""
+    assert menu_type_of("Nature Med - Paducah") is None
+    assert menu_type_of("Med + Leaf | Hartford") is None
+    assert menu_type_of("MMJ America") is None
+    assert menu_type_of("Au Sable") is None
+    assert menu_type_of("Rec Room") is None
+    assert menu_type_of("Mike's Medical Dispensary") is None     # describes the business, not a menu
+    # …while the brand word no longer masks a real declaration after it.
+    assert menu_type_of("Nature Med - Adult Use") == "adult_use"
+    assert menu_type_of("Three Rivers Dispensary Denver MED") == "medical"
+    assert menu_type_of("The Heirloom Collective- Adult Use") == "adult_use"   # no space before the dash
+    assert menu_type_of("DENCO Medical & Recreational") is None                # both, joined
+
+
+def test_menu_type_reads_janes_menu_path_before_the_name() -> None:
+    assert menu_type_of("RISE Carlisle", "https://risecannabis.com/dispensaries/pennsylvania/carlisle/1547/medical-menu/") == "medical"
+    assert menu_type_of("RISE Carlisle", "https://risecannabis.com/.../1547/recreational-menu/") == "adult_use"
+    assert menu_type_of("RISE Carlisle", "https://risecannabis.com/.../1547/adult-use-menu/") == "adult_use"
+    # The path wins over a name that disagrees: the path is the platform's own routing.
+    assert menu_type_of("RISE Carlisle (MED)", "https://x/1547/recreational-menu/") == "adult_use"

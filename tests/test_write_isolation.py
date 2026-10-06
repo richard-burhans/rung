@@ -29,8 +29,21 @@ DB_PATH = PUBLIC_DIR / "db.py"  # engine persistence (access_methods writes) —
 REF_PATH = PUBLIC_DIR / "reference_db.py"  # reference-app persistence (company_stores/state_programs
 # writes moved here in genericization B1/B3) — the other sanctioned write home
 
-# A write (INSERT/UPDATE — never SELECT) targeting the access_methods registry table.
-_ACCESS_METHODS_WRITE = re.compile(r"\b(?:insert\s+into|update)\s+access_methods\b", re.I)
+# A write (INSERT/UPDATE/DELETE — never SELECT) targeting the access_methods registry table.
+# DELETE joined on 2026-10-04 (audit P-41b): the pattern could not see one, so a package module
+# could have erased the registry's learned state with this test green.
+_ACCESS_METHODS_WRITE = re.compile(r"\b(?:insert\s+into|update|delete\s+from)\s+access_methods\b", re.I)
+
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+#: The maintenance scripts that delete `access_methods` rows on purpose — or, for
+#: `repair_jane_hint.py`, replace one row's remembered hint, which no attempt can do because an
+#: attempt that succeeds re-stores the hint it was handed — each with its own tests
+#: (`test_state_bringup.py`, `test_prune_orphan_targets.py`, `test_repair_jane_hint.py`).
+#: Everything else under `scripts/` is held to the same single-writer contract as the packages. An
+#: entry that no longer writes the table fails too, so the exemption dies when the write moves
+#: into `db.py`.
+SCRIPTS_THAT_WRITE_ACCESS_METHODS = frozenset(
+    {"state_bringup.py", "prune_orphan_targets.py", "repair_jane_hint.py"})
 # The SET clause of an ``UPDATE company_stores …`` (captured up to WHERE / RETURNING / end-of-string),
 # so a column named only in a WHERE filter (a read) is not mistaken for a write.
 _COMPANY_STORES_SET = re.compile(
@@ -123,6 +136,36 @@ def test_protected_columns_and_access_methods_are_written_only_in_db() -> None:
         "written ONLY via the db.py / reference_db.py helpers (single-writer contract, "
         f"docs/stage_contracts.md): direct write(s) at {offenders}"
     )
+
+
+def test_scripts_write_access_methods_only_where_allowlisted() -> None:
+    """The single-writer scan covered the two packages and never `scripts/`, where the only code
+    that deletes registry rows actually lives (audit P-41b). Two scripts do it deliberately; a
+    third would be a one-off erasing learned state — which method won for a target, and how many
+    attempts it took — with nothing asking why."""
+    if not SCRIPTS_DIR.is_dir():
+        return  # the public build ships no scripts/; the package scan above is the whole contract
+    writers = {
+        path.name
+        for path in sorted(SCRIPTS_DIR.glob("*.py"))
+        for sql, _ in _sql_literals(ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        if _ACCESS_METHODS_WRITE.search(sql)
+    }
+    unlisted = sorted(writers - SCRIPTS_THAT_WRITE_ACCESS_METHODS)
+    assert not unlisted, (
+        f"{unlisted} write the access_methods table directly. Route the write through a `db.py` "
+        "helper, or — for a deliberate, tested maintenance script — name it in "
+        "SCRIPTS_THAT_WRITE_ACCESS_METHODS.")
+    stale = sorted(SCRIPTS_THAT_WRITE_ACCESS_METHODS - writers)
+    assert not stale, f"{stale} no longer write access_methods — drop them from the allowlist"
+
+
+def test_the_access_methods_pattern_sees_a_delete() -> None:
+    """ANTI-VACUITY for the widened pattern: reads are not writes, and a DELETE is one."""
+    assert _writes_protected_target("DELETE FROM access_methods WHERE method = %s")
+    assert _writes_protected_target("delete  from\n access_methods")
+    assert not _writes_protected_target("SELECT status FROM access_methods WHERE method = %s")
+    assert not _writes_protected_target("DELETE FROM access_methods_archive")
 
 
 def test_state_program_list_columns_written_only_by_set_state_list() -> None:

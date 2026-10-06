@@ -3,6 +3,7 @@
 
 import datetime
 
+import pytest
 from conftest import pg_conn
 
 from rung import db, text
@@ -69,9 +70,9 @@ def test_product_fingerprint_is_dose_aware_for_mg_products() -> None:
 
 def test_record_observations_separates_edibles_by_dose() -> None:
     conn = _conn()
-    ten = _flower(name="Camino", brand="Kiva", size_g=None, thc_mg=10.0,
+    ten = _flower(name="Camino", brand="Kiva", size_g=None, thc=None, thc_mg=10.0,
                   category_std="Edible", product_type_std="Gummies")
-    hundred = _flower(name="Camino", brand="Kiva", size_g=None, thc_mg=100.0,
+    hundred = _flower(name="Camino", brand="Kiva", size_g=None, thc=None, thc_mg=100.0,
                       category_std="Edible", product_type_std="Gummies")
     assert db.record_observations(conn, "dutchie:s1", [ten, hundred], now=_DAY1) == 2
     # two distinct master products despite identical name/brand/type — the dose disambiguates
@@ -154,7 +155,7 @@ def test_record_observations_batched_write_keeps_the_per_row_post_state() -> Non
     batch = [
         _flower(),
         _flower(name="OG Kush", thc=30.0),
-        _flower(name="Camino", brand="Kiva", size_g=None, thc_mg=10.0,
+        _flower(name="Camino", brand="Kiva", size_g=None, thc=None, thc_mg=10.0,
                 category_std="Edible", product_type_std="Gummies"),
     ]
     assert db.record_observations(conn, "dutchie:s1", batch, now=_DAY1) == 3
@@ -169,3 +170,46 @@ def test_record_observations_batched_write_keeps_the_per_row_post_state() -> Non
     assert [row[0] for row in after] == [row[0] for row in before]  # first_seen kept
     assert all(b[1] > a[1] for a, b in zip(before, after, strict=True))  # last_seen bumped on re-sight
     assert _obs_count(conn) == 4
+
+
+# ── The history table carries the same percent-OR-mg rule as the snapshot (audit P-41h) ──────
+
+
+def _observe(conn: db.DBConn, **potency: float) -> None:
+    cols = ", ".join(potency)
+    vals = ", ".join(str(v) for v in potency.values())
+    conn.execute(
+        f"INSERT INTO product_observations (product_id, store_key, state, scraped_at, {cols}) "  # ty: ignore[invalid-argument-type]
+        f"VALUES (1, 'dutchie:s1', 'CA', '2026-01-01T00:00:00Z', {vals})")
+
+
+def test_an_observation_with_both_a_percent_and_an_mg_dose_is_rejected() -> None:
+    import psycopg
+
+    conn = _conn()
+    _observe(conn, thc=21.5, cbd_mg=10.0)                 # different cannabinoids: allowed
+    conn.commit()
+    for pair in ({"thc": 21.5, "thc_mg": 100.0}, {"cbd": 2.0, "cbd_mg": 10.0}):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            _observe(conn, **pair)
+        conn.rollback()
+
+
+def test_an_older_history_table_gets_the_rule_without_its_existing_rows_being_scanned() -> None:
+    """`NOT VALID`: the constraint arrives for new rows at once and leaves the old ones unexamined —
+    on the live table that is 206.6 M rows a plain ADD CONSTRAINT would scan under ACCESS EXCLUSIVE."""
+    import psycopg
+
+    conn = _conn()
+    conn.execute("ALTER TABLE product_observations DROP CONSTRAINT product_observations_potency_unit_check")
+    _observe(conn, thc=21.5, thc_mg=100.0)                # a row the rule forbids, already in the history
+    conn.commit()
+
+    db.create_tables(conn)                                 # the migration must not trip over that row
+
+    assert db.one(conn, "SELECT convalidated FROM pg_constraint WHERE conname = "
+                        "'product_observations_potency_unit_check' "
+                        "AND conrelid = to_regclass('product_observations')")[0] is False
+    assert _obs_count(conn) == 1                           # the old row was neither scanned out nor rejected
+    with pytest.raises(psycopg.errors.CheckViolation):     # …and the rule already guards new writes
+        _observe(conn, cbd=2.0, cbd_mg=10.0)

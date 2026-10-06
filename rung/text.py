@@ -587,16 +587,61 @@ TERPENE_COLUMNS = (
 _TERPENE_KEYS = tuple((canon, canon.lower()) for canon in TERPENE_COLUMNS)
 
 
-def normalize_terpene(raw: str | None) -> str | None:
-    """Canonical terpene name for a raw label, or None if blank / not a tracked terpene.
+#: Nomenclature prefixes that mark a LEGITIMATE variant of the same compound: alpha-/beta-pinene are
+#: one terpene, `b_myrcene` is myrcene. Single letters count only when DELIMITED -- an undelimited
+#: `[abdlyn]` class eats the first letter of `limonene`, `linalool` and `bisabolol` and reports three
+#: clean names as collisions, which is what the first version of this detector did.
+_VARIANT_WORD = re.compile(r"^((alpha|beta|gamma|delta|epsilon|cis|trans)[\s\-_]*)+", re.IGNORECASE)
+_VARIANT_LETTER = re.compile(r"^[abdlyn][\s\-_]+", re.IGNORECASE)
+_VALUE_TAIL = re.compile(r"(value|percent|pct)$", re.IGNORECASE)
+
+
+def terpene_fold_residue(raw: str, canonical: str) -> str:
+    """What is LEFT of a raw terpene name after stripping variant prefixes — `""` when it is a clean
+    variant of `canonical`, and the leftover chemistry when the fold absorbed a DIFFERENT compound.
+
+    **WHY THIS EXISTS.** :func:`normalize_terpene` matches by substring, which is right for
+    `Beta Myrcene` and wrong for anything whose name merely CONTAINS a panel terpene. Measured over
+    the corpus 2026-08-22, two such collisions are real and one is not:
+
+      * `Caryophyllene Oxide` -> Caryophyllene, 620,511 entries (642,846 on 2026-09-14). A distinct
+        oxidation product, SUMMED into the parent terpene.
+      * `Terpinene` -> Pinene, 130,398 entries (135,062 on 2026-09-14), because "terpinene"
+        contains "pinene".
+        Gamma-terpinene is a distinct monoterpene. Found by an adversarial agent that had been
+        asked to refute something else entirely.
+      * `Ocimene-1` / `Ocimene-2` -> Ocimene, 214 entries. Isomers of ONE compound, so summing
+        them is correct — which is why this returns a residue for a HUMAN to judge rather than a
+        boolean claiming to know.
+    """
+    stripped, previous = raw, None
+    while previous != stripped:
+        previous = stripped
+        stripped = _VARIANT_LETTER.sub("", _VARIANT_WORD.sub("", stripped))
+    key = _category_key(_VALUE_TAIL.sub("", stripped))
+    return "" if key == canonical.lower() else key
+
+
+def normalize_terpene(raw: str | None, panel: tuple[str, ...] | None = None) -> str | None:
+    """Canonical terpene name for a raw label, or None if blank / not in the panel.
 
     Folds casing + alpha/beta prefixes (`b_myrcene`/`Beta Myrcene` -> Myrcene; alpha+beta
-    pinene -> Pinene). Returns one of TERPENE_COLUMNS, or None (rarer terpenes aren't columned).
+    pinene -> Pinene). Returns one of `panel`, or None.
+
+    `panel` defaults to :data:`TERPENE_COLUMNS`, which is what the live pipeline normalizes against
+    and MUST stay the default -- changing it re-derives `terpenes_std` for every stored row and moves
+    numbers a published paper already quotes. It is a parameter so a DEPOSIT BUILD can fold the same
+    raw payloads against a different panel and the two can be compared, without a second copy of this
+    substring algorithm existing anywhere. Measured 2026-08-22: the default panel drops 61 of the 119
+    raw names the corpus carries -- ~2.0M entries, including `Eucalyptol` (118k natural-flower rows)
+    and `Nerolidol` (116k), both MORE common than `Ocimene` (88k) and `Guaiol` (64k), which are in it.
+    Whether widening it changes any conclusion is an experiment, and this parameter is how it is run.
     """
     if not raw:
         return None
+    keys = _TERPENE_KEYS if panel is None else tuple((c, c.lower()) for c in panel)
     key = _category_key(raw)
-    for canonical, needle in _TERPENE_KEYS:
+    for canonical, needle in keys:
         if needle in key:
             return canonical
     return None
@@ -789,3 +834,68 @@ def geocode_query(address: str | None, city: str | None,
     if locality:
         parts.append(locality)
     return ", ".join(parts)
+
+
+# ── menu type: which program's menu a listing is ───────────────────────────────────────────────────
+# A store licensed for both programs lists TWO menus on its platform — a medical one and an adult-use
+# one — and they are two catalogues, not one menu with two prices: measured 2026-10-06 on 23 pairs
+# snapshotted two days apart, the two listings shared 24–63% of product names. Until that day dedupe
+# folded one into the other (whichever row was older) and nothing recorded which survived, so a
+# Massachusetts medical menu sat beside other stores' adult-use menus in every price analysis.
+# The listing NAME is where the platforms say it ("NETA Brookline - MED", "Zen Leaf Elkridge (Rec)",
+# "RISE Dispensaries Joppa - Adult Use"); Jane also says it in the menu path (`/medical-menu`).
+MENU_TYPE_MEDICAL = "medical"
+MENU_TYPE_ADULT_USE = "adult_use"
+_MEDICAL_RE = re.compile(r"(?<![a-z])(?:med|medical|mmj)(?![a-z])", re.I)
+_ADULT_USE_RE = re.compile(r"(?<![a-z])(?:rec|recreational|adult[\s-]?use|au|21\+)(?![a-z])", re.I)
+_JANE_PATH_RE = re.compile(r"/(medical|recreational|adult-use)-menu", re.I)
+# WHERE in a name a program word is a DECLARATION rather than part of the brand. A listing declares
+# its menu in a bracket ("Zen Leaf Elkridge (Rec)"), after a separator ("NETA Brookline - MED",
+# "The Heirloom Collective- Adult Use") or as the name's final word ("Gynsyng REC"). Anywhere else
+# the word is the business's name: "Nature Med - Paducah" is a Missouri adult-use store and
+# "Med + Leaf", "MMJ America", "Au Sable", "Rec Room" are brands — until 2026-10-06 every one of them
+# was stamped a program and priced on that program's list (the 2026-10-06 ultra review).
+_DECL_BRACKET_RE = re.compile(r"[(\[]([^)\]]*)[)\]]")
+_DECL_SEPARATOR_RE = re.compile(r"\s?(?:-|–|—|\|)\s|:\s")
+_DECL_JOINERS = frozenset({"&", "/", "+", "and"})
+
+
+def _declaration_text(name: str) -> str:
+    """The parts of a listing name that can declare a program: its bracketed groups, then either
+    everything after its first separator or, when it has none, its final word (with the word
+    before that when the two are joined — "DENCO Medical & Recreational" names both programs)."""
+    parts = [m.group(1) for m in _DECL_BRACKET_RE.finditer(name)]
+    separator = _DECL_SEPARATOR_RE.search(name)
+    if separator:
+        # The part before a separator is the brand ("Nature Med - Paducah"); only after it declares.
+        parts.append(name[separator.end():])
+        return " ".join(parts)
+    head = _DECL_BRACKET_RE.sub(" ", name).split()
+    if head:
+        parts.append(head[-1])
+        if len(head) >= 3 and head[-2].lower() in _DECL_JOINERS:
+            parts.append(head[-3])
+    return " ".join(parts)
+
+
+def menu_type_of(name: str | None, store_url: str | None = None) -> str | None:
+    """``"medical"``, ``"adult_use"``, or None when the listing does not say (or says both).
+
+    None is "not declared", never a default: a listing that names neither program is most often a
+    single-program store, and nothing here guesses which. A name carrying both words
+    ("Dispensary - MED/REC") is ambiguous and also None. Only a name's declaration positions are
+    read (:func:`_declaration_text`); a program word inside the brand ("Nature Med - Paducah",
+    "Mike's Medical Dispensary") declares nothing.
+    """
+    for candidate in (store_url or "", name or ""):
+        if not candidate:
+            continue
+        path = _JANE_PATH_RE.search(candidate)
+        if path:
+            return MENU_TYPE_MEDICAL if path.group(1).lower() == "medical" else MENU_TYPE_ADULT_USE
+    text = _declaration_text(name or "")
+    medical = bool(_MEDICAL_RE.search(text))
+    adult = bool(_ADULT_USE_RE.search(text))
+    if medical == adult:
+        return None
+    return MENU_TYPE_MEDICAL if medical else MENU_TYPE_ADULT_USE

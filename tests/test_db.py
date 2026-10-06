@@ -8,7 +8,7 @@ import datetime
 
 import psycopg
 import pytest
-from conftest import _TEST_URL, pg_conn
+from conftest import _TEST_URL, pg_conn, pg_conn_sharing
 
 from rung import db, seed_companies
 from rung.models import (
@@ -70,6 +70,94 @@ def test_create_tables_builds_the_partial_pending_claim_index() -> None:
     ).fetchone()
     assert row is not None                              # the index exists
     assert "status" in row[0] and "'pending'" in row[0]  # …and it is the partial (pending-only) one
+
+
+# ── start-up DDL and the locks it must not ask for ────────────────────────────────────────
+
+def _hold_every_relation(conn: db.DBConn) -> None:
+    """Leave ``conn`` mid-transaction as a writer on every table and a reader on every view."""
+    relations = conn.execute(
+        "SELECT relname, relkind FROM pg_class "
+        "WHERE relnamespace = current_schema()::regnamespace AND relkind IN ('r', 'v')"
+    ).fetchall()
+    assert len(relations) > 10  # the schema is really there; an empty list would prove nothing
+    for name, kind in relations:
+        mode = "ROW EXCLUSIVE" if kind == "r" else "ACCESS SHARE"
+        conn.execute(
+            psycopg.sql.SQL("LOCK TABLE {} IN {} MODE").format(
+                psycopg.sql.Identifier(name), psycopg.sql.SQL(mode)
+            )
+        )
+
+
+def test_create_tables_on_a_current_schema_asks_for_no_lock_a_live_worker_holds() -> None:
+    """Every command runs `create_tables` at start-up, beside workers that are mid-transaction.
+
+    `IF NOT EXISTS` takes its lock before it looks, so the suite used to queue for ACCESS EXCLUSIVE
+    on every table at every process start — 36 start-up deadlocks in one fleet's sweep logs and
+    seven states skipped on 2026-10-01. With nothing to migrate it must now pass straight through a
+    writer on every table and a reader on every view; `lock_timeout` turns any wait into a failure.
+    """
+    conn = _conn()
+    conn.commit()
+    _hold_every_relation(conn)
+    starting = pg_conn_sharing(conn)
+    starting.execute("SET lock_timeout = '2s'")
+
+    db.create_tables(starting)  # psycopg.errors.LockNotAvailable if any statement had to wait
+
+    conn.rollback()
+
+
+def test_create_tables_still_migrates_what_an_older_database_lacks() -> None:
+    """The guards read the catalog, so a column, index, view or constraint that is MISSING is added."""
+    conn = _conn()
+    conn.execute("DROP VIEW products_normalized")
+    conn.execute("ALTER TABLE store_products DROP CONSTRAINT store_products_potency_unit_check")
+    conn.execute("ALTER TABLE store_products DROP COLUMN retained_since")
+    conn.execute("ALTER TABLE jobs DROP COLUMN lease_until")
+    conn.execute("DROP INDEX jobs_pending_claim")
+    conn.execute("ALTER TABLE access_methods DROP CONSTRAINT access_methods_status_check")
+    conn.execute("ALTER TABLE access_methods ADD CONSTRAINT access_methods_status_check "
+                 "CHECK (status IN ('ok', 'failed'))")  # an older, narrower vocabulary
+    conn.commit()
+
+    db.create_tables(conn)
+
+    assert "retained_since" in db.table_columns(conn, "store_products")
+    assert "lease_until" in db.table_columns(conn, "jobs")
+    assert db.constraint_definition(
+        conn, "store_products", "store_products_potency_unit_check") is not None
+    status_check = db.constraint_definition(conn, "access_methods", "access_methods_status_check")
+    assert status_check is not None and "'broken'" in status_check
+    assert db.one(conn, "SELECT to_regclass('jobs_pending_claim') IS NOT NULL")[0] is True
+    assert "cannabinoids_std" in db.table_columns(conn, "products_normalized")  # the view is back
+
+
+def test_ensure_view_replaces_a_view_only_when_its_ddl_changed() -> None:
+    conn = pg_conn()
+    conn.execute("CREATE TABLE t (a INTEGER, b INTEGER)")
+    db.ensure_view(conn, "CREATE OR REPLACE VIEW v AS SELECT a FROM t")
+    conn.commit()
+    assert db.table_columns(conn, "v") == {"a"}
+
+    db.ensure_view(conn, "CREATE OR REPLACE VIEW v AS SELECT a, b FROM t")  # the DDL moved
+    conn.commit()
+    assert db.table_columns(conn, "v") == {"a", "b"}
+
+    conn.execute("LOCK TABLE v IN ACCESS SHARE MODE")  # a reader, mid-transaction
+    other = pg_conn_sharing(conn)
+    other.execute("SET lock_timeout = '2s'")
+    db.ensure_view(other, "CREATE OR REPLACE VIEW v AS SELECT a, b FROM t")  # unchanged: no wait
+    conn.rollback()
+
+
+def test_ensure_index_and_ensure_view_refuse_ddl_they_cannot_name() -> None:
+    conn = pg_conn()
+    with pytest.raises(ValueError, match="CREATE INDEX IF NOT EXISTS"):
+        db.ensure_index(conn, "CREATE INDEX nameless ON t (a)")
+    with pytest.raises(ValueError, match="CREATE OR REPLACE VIEW"):
+        db.ensure_view(conn, "CREATE VIEW v AS SELECT 1")
 
 
 # ── snapshot freshness ────────────────────────────────────────────────────────
@@ -150,9 +238,12 @@ def test_latest_snapshot_times_max_is_chronological_not_lexical() -> None:
 
 # ── recon companies for a state ───────────────────────────────────────────────
 
-def test_get_recon_companies_coalesces_homeless_homepage() -> None:
+def test_stage2_companies_are_every_company_of_the_state_reconned_or_not() -> None:
+    """Company 4 has no recon row at all — created after the state's last recon, like 5,435 real
+    ones on 2026-10-05. It is returned as a homeless company, not left out."""
     conn = _conn()
-    for cid, name, state in [(1, "Curaleaf", "PA"), (2, "RISE", "PA"), (3, "Other", "NJ")]:
+    for cid, name, state in [(1, "Curaleaf", "PA"), (2, "RISE", "PA"), (3, "Other", "NJ"),
+                             (4, "Pool Brand", "PA")]:
         conn.execute("INSERT INTO companies (id, canonical_name, state, created_at) "
                      "VALUES (%s, %s, %s, 'now')", (cid, name, state))
     db.upsert_recon(conn, CompanyReconRecord(
@@ -162,10 +253,11 @@ def test_get_recon_companies_coalesces_homeless_homepage() -> None:
     db.upsert_recon(conn, CompanyReconRecord(
         company_id=3, canonical_name="Other", homepage_url="https://nj.test"))
     conn.commit()
-    rows = db.get_recon_companies_for_state(conn, "PA")
+    rows = db.get_companies_for_stage2(conn, "PA")
     assert rows == [
         (1, "Curaleaf", "https://curaleaf.test", "sweedpos"),
-        (2, "RISE", "", None),   # homeless: homepage coalesced to '', not NULL
+        (4, "Pool Brand", "", None),   # never reconned: homeless, and still walked
+        (2, "RISE", "", None),         # reconned homeless: homepage coalesced to '', not NULL
     ]   # NJ company excluded; ordered by canonical_name
 
 
@@ -437,8 +529,28 @@ def test_products_normalized_views_stay_in_sync() -> None:
     # inspects imports, not SQL). Pin the output NAME + normalized source EXPRESSION of every column equal.
     from rung import reference_db, static_source
 
-    assert (_view_output_columns(reference_db._CREATE_PRODUCTS_NORMALIZED_VIEW)
-            == _view_output_columns(static_source._PRODUCTS_NORMALIZED_VIEW_SQL))
+    pg = _view_output_columns(reference_db._CREATE_PRODUCTS_NORMALIZED_VIEW)
+    duck = _view_output_columns(static_source._PRODUCTS_NORMALIZED_VIEW_SQL)
+
+    # The output NAMES and their ORDER must still match exactly — that is the whole guarantee, and
+    # nothing below relaxes it.
+    assert [name for name, _ in pg] == [name for name, _ in duck], (
+        "the two views no longer publish the same columns in the same order")
+
+    # ⚠ ONE EXPRESSION IS ALLOWED TO DIFFER, AND ONLY ONE (2026-08-22). `price_per_g` is DERIVED in
+    # Postgres and READ FROM A STORED COLUMN in DuckDB, deliberately: computing it in both dialects
+    # gave different answers on 0.2155% of rows (5,642 of 2,617,648 on the 2026-08-17 internal cut,
+    # `4.015` landing on 4.01 under binary float and 4.02 under exact decimal), so
+    # `build_clean_d1._PROJECTION` materializes it once in Postgres and this view stops recomputing.
+    # The exemption is BY NAME so that any OTHER expression drifting apart still fails here — which
+    # is the divergence this test exists to catch.
+    DERIVED_ONE_SIDE_ONLY = {"price_per_g"}
+    for (pg_name, pg_expr), (_duck_name, duck_expr) in zip(pg, duck, strict=True):
+        if pg_name in DERIVED_ONE_SIDE_ONLY:
+            continue
+        assert pg_expr == duck_expr, (
+            f"`{pg_name}` is computed differently in the two views. Only {sorted(DERIVED_ONE_SIDE_ONLY)} "
+            "may differ, and only because the deposit stores the answer instead of recomputing it")
 
 
 def test_country_subqueries_partition_state_programs() -> None:
@@ -595,3 +707,92 @@ def test_get_connection_prefer_readonly_consults_database_url_ro_first(monkeypat
     with pytest.raises(psycopg.OperationalError):
         db.get_connection(prefer_readonly=True)   # no RO configured → ordinary resolution
     assert seen == ["postgresql://ro", "postgresql://rw", "postgresql://rw"]
+
+
+# ── Whole-corpus scans run without parallel workers ──────────────────────────────────────────────
+#
+# Postgres puts a dynamic shared memory segment per parallel worker in /dev/shm, which Docker caps at
+# 64 MB and cannot resize on a running container. A scan over the 42 GB `product_observations` asks
+# for more and dies with "could not resize shared memory segment … No space left on device" — which
+# reads like a full disk and is not one. Measured 2026-09-15: parallel 18.0 s, serial 17.6 s, with
+# both plans checked, because a seq scan that size is bound by I/O rather than CPU.
+
+
+def test_without_parallel_workers_disables_them_for_this_session_only() -> None:
+    conn = pg_conn()
+    before = conn.execute("SHOW max_parallel_workers_per_gather").fetchone()[0]
+    db.without_parallel_workers(conn)
+    after = conn.execute("SHOW max_parallel_workers_per_gather").fetchone()[0]
+    assert after == "0"
+    assert before != "0", "the default must not already be 0, or this test proves nothing"
+
+    # SESSION-scoped: a second connection is untouched, which is the whole point of doing it here
+    # rather than with ALTER SYSTEM.
+    other = pg_conn()
+    assert other.execute("SHOW max_parallel_workers_per_gather").fetchone()[0] == before
+
+
+def test_replace_counts_a_handle_as_menu_bearing_only_when_the_caller_says_a_rung_serves_it() -> None:
+    """A generic parser's `custom` slug (next_data's `cannabis-in-mitchell`) is a handle nothing
+    reads; with the overlay's `served` oracle it no longer out-ranks the platform handle that
+    arrives later (four Tendy and two Sweed operators, 2026-09-25)."""
+    conn = _conn()
+    db.insert_company_store(conn, _store(name="High Hopes", platform="custom", external_id="cannabis-in-mitchell",
+                                         address="1 Main St"))
+    db.insert_company_store(conn, _store(name="High Hopes", platform="weedmaps", external_id="high-hopes",
+                                         address="1 Main Street"))
+    conn.commit()
+    new = [_store(name="High Hopes Cannabis", platform="tendy", external_id="ddfbed4a", address="1 Main St")]
+
+    def served(*, source, platform, external_id, store_url, canonical_name):
+        return platform == "tendy"
+
+    # Without the oracle: 1 == 1 menu-bearing → distinct count decides (1 < 2) → prior kept.
+    n, kept = db.replace_company_stores(conn, 1, "PA", new)
+    assert kept is True and n == 2
+    # With it: the stored slug is unroutable (0), the Tendy handle is served (1) → upgrade.
+    n, kept = db.replace_company_stores(conn, 1, "PA", new, served=served)
+    conn.commit()
+    assert kept is False and n == 1
+    assert conn.execute("SELECT platform FROM company_stores WHERE company_id=1").fetchall() == [("tendy",)]
+
+
+def _api(name, handle=None, address=None):  # a row from an operator's own complete store API
+    return _store(name=name, platform="sweedpos" if handle else None, external_id=handle,
+                  address=address or f"{name} St")
+
+
+def test_replace_lets_the_same_source_retire_a_store_it_no_longer_lists() -> None:
+    """Curaleaf's API dropped Hartford and filed Meriden PRERELEASE (no handle); the re-discovery
+    holds 4 of the 5 stores and 3 of the 5 handles. That is the one authoritative list recording a
+    closure, not a flaky scrape — accepted because it is the SAME source at ≥0.8 distinct retention."""
+    conn = _conn()
+    for name in ("Hartford", "Meriden", "Stamford", "Groton", "Manchester"):
+        db.insert_company_store(conn, _api(name, handle=f"LMR-{name}"))
+    conn.commit()
+    new = [_api("Meriden"), _api("Stamford", "LMR-Stamford"), _api("Groton", "LMR-Groton"), _api("Manchester", "LMR-Manchester")]
+    n, kept = db.replace_company_stores(conn, 1, "PA", new)
+    conn.commit()
+    assert kept is False and n == 4
+    names = {r[0] for r in conn.execute("SELECT name FROM company_stores WHERE company_id=1").fetchall()}
+    assert names == {"Meriden", "Stamford", "Groton", "Manchester"}
+
+
+def test_replace_still_refuses_a_shrink_from_another_source_or_below_retention() -> None:
+    conn = _conn()
+    for name in ("A", "B", "C", "D", "E"):
+        db.insert_company_store(conn, _api(name, handle=f"H-{name}"))
+    conn.commit()
+    # a different source (a generic parser) with fewer handles: refused, whatever the count
+    other = [CompanyStoreRecord(company_id=1, canonical_name="Acme", state="PA", source="jsonld", name=n,
+                                platform="sweedpos", external_id=f"H-{n}", address=f"{n} St") for n in ("A", "B", "C", "D")]
+    n, kept = db.replace_company_stores(conn, 1, "PA", other)
+    assert kept is True and n == 5
+    # the same source, but a 5 → 3 collapse (0.6 < 0.8): refused
+    n, kept = db.replace_company_stores(conn, 1, "PA", [_api(n, handle=f"H-{n}") for n in ("A", "B", "C")])
+    assert kept is True and n == 5
+    # the same source, aggregator rows: the aggregator rule stands (never a menu downgrade)
+    agg = [CompanyStoreRecord(company_id=1, canonical_name="Acme", state="PA", source="weedmaps_directory", name=n,
+                              platform="weedmaps", external_id=n, address=f"{n} St") for n in ("A", "B", "C", "D", "E")]
+    n, kept = db.replace_company_stores(conn, 1, "PA", agg)
+    assert kept is True and n == 5

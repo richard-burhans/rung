@@ -150,17 +150,46 @@ _SALE_TO_REGULAR = {
 }
 
 
-def _variant_pricing(variant: dict) -> tuple[float | None, float | None]:
+#: The price-list keys of each program channel on a variant (Dutchie's shape; other platforms carry a
+#: single `price`). A menu of one program shows ITS list; the other is for the other card.
+_CHANNEL_KEYS = {
+    "med": ("price_med", "special_price_med"),
+    "rec": ("price_rec", "special_price_rec"),
+}
+
+
+def price_channel(menu_type: str | None, *, medical_only: bool = False) -> str:
+    """The price channel a menu's shelf price comes from: ``"med"`` for a medical listing, or for an
+    undeclared one in a ``medical_only`` jurisdiction; ``"rec"`` otherwise.
+
+    An undeclared listing elsewhere reads as adult-use. In a medical-only state that was wrong: this
+    docstring assumed such a store "publishes only a medical list", and measured 2026-10-06 it does
+    not — Dutchie fills both lists there, and they differed on 24,151 Florida variants alone, so
+    every patient-facing shelf price in AR/FL/MS/OK/PA/UT/WV was read off the adult-use list nobody
+    there can buy from (the 2026-10-06 ultra review). The stored ``menu_type`` stays NULL — the law
+    decides the channel, the listing still declared nothing."""
+    if menu_type == "medical" or (menu_type is None and medical_only):
+        return "med"
+    return "rec"
+
+
+def variant_pricing(variant: dict, channel: str | None = None) -> tuple[float | None, float | None]:
     """(effective current price, pre-discount original or None) across a variant's price fields.
 
-    Effective = the lowest price field (the shelf price). Original is recovered when that lowest is a
-    SALE field undercutting its own channel's regular (`_SALE_TO_REGULAR`) — Dutchie
-    `special_price_{med,rec}`, Jane `discounted_price` — or when the variant already carries an
-    explicit higher `original_price` (Weedmaps/Hytiva). Unifies discount capture across platforms.
+    Effective = the lowest price field OF THE MENU'S OWN CHANNEL when ``channel`` is given and the
+    variant carries that channel's keys (`_CHANNEL_KEYS`); else the lowest of every price field.
+    Until 2026-10-06 it was always the latter, so on a Dutchie listing carrying both lists the
+    shelf price was the CHEAPER program's — the medical price for 54% of Oregon's rows. Original is
+    recovered when the winner is a SALE field undercutting its own channel's regular
+    (`_SALE_TO_REGULAR`) — Dutchie `special_price_{med,rec}`, Jane `discounted_price` — or when the
+    variant already carries an explicit higher `original_price` (Weedmaps/Hytiva).
     """
+    keys: tuple[str, ...] = _VARIANT_PRICE_KEYS
+    if channel in _CHANNEL_KEYS and any(variant.get(key) is not None for key in _CHANNEL_KEYS[channel]):
+        keys = _CHANNEL_KEYS[channel]
     priced = {
         key: float(value)
-        for key in _VARIANT_PRICE_KEYS
+        for key in keys
         if isinstance(value := variant.get(key), (int, float)) and not isinstance(value, bool)
     }
     if not priced:
@@ -172,7 +201,12 @@ def _variant_pricing(variant: dict) -> tuple[float | None, float | None]:
     if regular is not None and regular > effective:
         original = regular
     # Weedmaps/Hytiva stamp the regular directly (not in `_VARIANT_PRICE_KEYS`, so read it here) —
-    # it records a strike-through but can never itself be the effective price.
+    # it records a strike-through but can never itself be the effective price. ⚠ NOT on a variant
+    # carrying per-channel lists: no platform sends `original_price` beside them, so one there is
+    # OUR earlier stamp — and read back, a stamp made on another channel (an all-channel run before
+    # #870) reported a markdown that does not exist (the 2026-10-06 ultra review).
+    if any(key in variant for keys in _CHANNEL_KEYS.values() for key in keys):
+        return effective, original
     raw_original = variant.get("original_price")
     explicit = (
         float(raw_original)
@@ -182,11 +216,6 @@ def _variant_pricing(variant: dict) -> tuple[float | None, float | None]:
     if explicit is not None and explicit > effective:
         original = max(original, explicit) if original is not None else explicit
     return effective, original
-
-
-def _variant_price(variant: dict) -> float | None:
-    """Lowest current price across a variant's known price fields (None if it has none)."""
-    return _variant_pricing(variant)[0]
 
 
 # Categories sold by weight, where grams and price-per-gram are meaningful. Everything else
@@ -201,7 +230,9 @@ _WEIGHT_CATEGORIES = frozenset({"Flower", "Pre-Roll", "Vape", "Concentrate"})
 _MIN_SELLABLE_GRAMS = 0.05
 
 
-def enrich_variants(variants: object, category: str | None = None) -> float | None:
+def enrich_variants(
+    variants: object, category: str | None = None, channel: str | None = None
+) -> float | None:
     """Stamp ``size_g`` + ``price_per_g`` onto each variant in place; return the representative
     top-level size_g (the smallest variant weight, the most granular sellable unit).
 
@@ -224,7 +255,7 @@ def enrich_variants(variants: object, category: str | None = None) -> float | No
         # on sale — recovered from per-platform price fields (Dutchie special_price_*, Jane
         # discounted_price, …). Done for ALL variants (discounts aren't weight-only) and idempotent:
         # cleared when there's no discount so a re-run/backfill can't leave a stale stamp.
-        price, original = _variant_pricing(item)
+        price, original = variant_pricing(item, channel)
         if original is not None:
             item["original_price"] = round(original, 2)
         else:
@@ -296,13 +327,20 @@ def _repair_total(totals: dict[str, float]) -> dict[str, float]:
     return totals
 
 
-def _fold_terpenes(terpenes: object) -> dict[str, float]:
+def _fold_terpenes(terpenes: object, panel: tuple[str, ...] | None = None) -> dict[str, float]:
     """Fold a raw terpene list to canonical ``{Name: percent}`` BEFORE any repair.
 
     Names collapse via ``text.normalize_terpene`` (so ``b_myrcene``/``Beta Myrcene`` → Myrcene and
     α-/β-pinene sum into one Pinene), values convert to percent, and duplicates of one canonical
     terpene are summed. Entries with no numeric value and untracked terpenes are dropped. Shared by
     ``normalize_terpenes`` and ``terpenes_repaired`` so the two cannot drift (the fold is defined once).
+
+    ``panel`` selects WHICH canonical names are tracked, defaulting to the live pipeline's
+    :data:`text.TERPENE_COLUMNS`. It exists so a deposit build can fold the same raw payloads against
+    a second, wider panel and get columns processed IDENTICALLY to the published ones -- same
+    summing, same percent conversion, same drops -- differing only in which names survive. Deriving
+    the extra terpenes by a separate route would make any difference between the two sets
+    uninterpretable: it could be the panel, or it could be the arithmetic.
     """
     if not isinstance(terpenes, list):
         return {}
@@ -310,7 +348,7 @@ def _fold_terpenes(terpenes: object) -> dict[str, float]:
     for terpene in terpenes:
         if not isinstance(terpene, dict):
             continue
-        canonical = normalize_terpene(name_of(terpene.get("name")))
+        canonical = normalize_terpene(name_of(terpene.get("name")), panel)
         if canonical is None:
             continue
         percent = _terpene_percent(terpene.get("value"), terpene.get("unit"))
@@ -320,7 +358,7 @@ def _fold_terpenes(terpenes: object) -> dict[str, float]:
     return totals
 
 
-def normalize_terpenes(terpenes: object) -> tuple[dict[str, float] | None, float | None]:
+def normalize_terpenes(terpenes: object, panel: tuple[str, ...] | None = None) -> tuple[dict[str, float] | None, float | None]:
     """Fold a raw terpene list to canonical ``({Name: percent}, total)``.
 
     Names collapse via ``text.normalize_terpene`` (so ``b_myrcene``/``Beta Myrcene`` → Myrcene
@@ -331,7 +369,7 @@ def normalize_terpenes(terpenes: object) -> tuple[dict[str, float] | None, float
     quantifiable remains. ``total`` is the sum of the canonical percents (consistent with dict).
     ``terpenes_repaired`` reports whether the repair below actually altered the values.
     """
-    totals = _fold_terpenes(terpenes)
+    totals = _fold_terpenes(terpenes, panel)
     if not totals:
         return None, None
     totals = _repair_total(totals)  # drop a lone spike / rescale an mg/g-misscaled row
@@ -432,11 +470,14 @@ def potency_implausible(category_std: object, thc: object, cbd: object) -> bool:
 
 # ── stamp onto a record ─────────────────────────────────────────────────────────
 
-def enrich_record(record: StoreProductRecord) -> None:
+def enrich_record(record: StoreProductRecord, *, medical_only: bool = False) -> None:
     """Stamp the normalized fields (``size_g``, ``terpenes_std``, ``terp_total``,
     ``terpenes_repaired``, ``potency_implausible``, and the per-variant ``size_g``/``price_per_g``)
-    onto a record from its own raw fields. Idempotent."""
-    record.size_g = enrich_variants(record.variants, record.category_std)
+    onto a record from its own raw fields. Idempotent. ``medical_only`` is the jurisdiction's
+    program (`price_channel`)."""
+    record.size_g = enrich_variants(
+        record.variants, record.category_std,
+        price_channel(record.menu_type, medical_only=medical_only))
     record.terpenes_std, record.terp_total = normalize_terpenes(record.terpenes)
     record.terpenes_repaired = terpenes_repaired(record.terpenes)
     record.potency_implausible = potency_implausible(record.category_std, record.thc, record.cbd)

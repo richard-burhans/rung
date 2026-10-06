@@ -33,7 +33,7 @@ import contextlib
 import os
 import socket
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import LiteralString
 
@@ -417,6 +417,32 @@ def reap_expired(conn: db.DBConn, task_type: str) -> int:
     """
     cur = conn.execute(_REAP_EXPIRED, (task_type,))
     return cur.rowcount
+
+
+def retire_orphans(
+    conn: db.DBConn, task_type: str, live_keys: Collection[str], *, target_prefix: str, error: str,
+) -> list[str]:
+    """Fail every PENDING job under ``target_prefix`` whose target is not in ``live_keys``. Caller commits.
+
+    A job outlives its target when the run that enqueued it dies before draining and the target is
+    removed before the next run (a store folded into another, a handle a re-scrape dropped). A
+    consumer that claims by TARGET (`make_claimer` with ``targeted_keys``) names only what it can
+    serve, so nothing ever claims such a job: it stays ``pending`` for good, `prune_completed`
+    leaves live rows alone, and the queue reports a stalled run that no re-run can clear. Ten of
+    them sat 33 days that way (2026-09-01 → 2026-10-04).
+
+    ``live_keys`` must be EVERY target the caller's scope still holds, not the subset this run
+    serves — a narrower set would fail another worker's legitimate job. Only ``pending`` rows are
+    touched: a ``claimed`` job belongs to a live worker that resolves it itself. The rows end
+    ``failed`` with ``error``, so the reason is kept until the prune window. Returns the retired keys.
+    """
+    cur = conn.execute(
+        "UPDATE jobs SET status = 'failed', error = %s, finished_at = now() "
+        "WHERE task_type = %s AND status = 'pending' AND target_key LIKE %s "
+        "AND NOT (target_key = ANY(%s)) RETURNING target_key",
+        (error, task_type, target_prefix + "%", list(live_keys)),
+    )
+    return sorted(row[0] for row in cur.fetchall())
 
 
 def prune_completed(conn: db.DBConn, *, older_than_hours: int = 168) -> int:

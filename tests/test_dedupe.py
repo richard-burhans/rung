@@ -2,7 +2,7 @@
 
 from conftest import pg_conn
 
-from rung import db
+from rung import db, reference_db
 from rung.models import CompanyStoreRecord
 from rung.sources import dedupe
 
@@ -219,8 +219,8 @@ def test_pick_canonical_prefers_brand_in_store_names() -> None:
 
 def _conn_with_companies() -> db.DBConn:
     conn = pg_conn()
-    conn.execute(db._CREATE_COMPANY_STORES)
-    conn.execute(db._CREATE_STORE_PRODUCTS)  # run_dedupe realigns snapshots onto kept rows
+    conn.execute(reference_db._CREATE_COMPANY_STORES)
+    conn.execute(reference_db._CREATE_STORE_PRODUCTS)  # run_dedupe realigns snapshots onto kept rows
     conn.execute(
         "CREATE TABLE companies (id INTEGER PRIMARY KEY, canonical_name TEXT, state TEXT)"
     )
@@ -457,6 +457,31 @@ def test_redirect_alias_pins_to_city_named_store() -> None:
     assert storefronts["Reading"] != "Harvest of Whitehall"     # not the Whitehall alias
 
 
+def test_redirect_alias_pins_both_menus_of_a_two_menu_rooftop() -> None:
+    """A rooftop keeping a medical AND an adult-use row is ONE store for the alias pin. Until the
+    2026-10-06 ultra review the pin required exactly one matching kept ROW, so the two-menu rooftop
+    matched twice and was silently skipped (NJ "Brute's Roots-Paulsboro" lost its alias name)."""
+    conn = _conn_with_companies()
+    for cid, cname in [(1, "Trulieve"), (2, "Harvest of Whitehall")]:
+        for menu in ("medical", "adult_use"):
+            db.insert_company_store(conn, CompanyStoreRecord(
+                company_id=cid, canonical_name=cname, state="PA", source="x",
+                name="Store", address="100 A St", city="Whitehall", zip_code="18052",
+                menu_type=menu))
+        db.insert_company_store(conn, CompanyStoreRecord(
+            company_id=cid, canonical_name=cname, state="PA", source="x",
+            name="Store", address="200 B St", city="Reading", zip_code="19601"))
+    conn.commit()
+    dedupe.run_dedupe(conn, "PA")
+    kept = conn.execute(
+        "SELECT city, menu_type, storefront_name FROM company_stores "
+        "WHERE canonical_company_id IS NULL ORDER BY city, menu_type").fetchall()
+    whitehall = [row for row in kept if row[0] == "Whitehall"]
+    assert len(whitehall) == 2                                       # both menus kept
+    assert {row[2] for row in whitehall} == {"Harvest of Whitehall"}  # and both pinned
+    assert all(row[2] != "Harvest of Whitehall" for row in kept if row[0] == "Reading")
+
+
 def test_index_like_handle_is_refused_as_an_identity() -> None:
     """A handle that names TWO rooftops is not an identity — it must not merge unrelated operators.
 
@@ -470,14 +495,147 @@ def test_index_like_handle_is_refused_as_an_identity() -> None:
     """
     from rung.sources.dedupe import ambiguous_handles
 
-    # (id, company_id, canonical_name, name, address, city, zip, lat, lng, platform, external_id)
+    # (id, company_id, canonical_name, name, address, city, zip, lat, lng, platform, external_id, menu_type)
     rows = [
-        (1, 1, "Alpha", "Alpha A", "100 Main St", "Erie", "16501", None, None, "custom", "9"),
-        (2, 2, "Beta", "Beta B", "200 Oak Ave", "Erie", "16502", None, None, "custom", "9"),
+        (1, 1, "Alpha", "Alpha A", "100 Main St", "Erie", "16501", None, None, "custom", "9", None),
+        (2, 2, "Beta", "Beta B", "200 Oak Ave", "Erie", "16502", None, None, "custom", "9", None),
         # a REAL handle: one rooftop, plus an address-less twin (the case the handle exists to catch)
-        (3, 3, "Cresco", "Sunnyside", "300 Elm St", "Erie", "16503", None, None, "custom", "899"),
-        (4, 3, "Cresco", "Sunnyside", None, None, None, None, None, "custom", "899"),
+        (3, 3, "Cresco", "Sunnyside", "300 Elm St", "Erie", "16503", None, None, "custom", "899", None),
+        (4, 3, "Cresco", "Sunnyside", None, None, None, None, None, "custom", "899", None),
     ]
     bogus = ambiguous_handles(rows)
     assert bogus == {"custom:9"}, "an index-like handle at two addresses must be refused"
     assert "custom:899" not in bogus, "a real handle at one rooftop (+ address-less twin) must survive"
+
+
+def test_a_row_with_no_locator_and_no_handle_never_merges_with_another() -> None:
+    """`physical_key`'s docstring promises "a coord/address-less row is never silently merged with
+    another", and its fallback was `f"{platform}:{external_id}"` — which renders `'None:None'` when
+    both halves are absent. Every such row in a bootstrap pool therefore shared ONE key and the pools
+    collapsed them into a single store, silently, while the docstring said the opposite.
+    `identity_handle` already refuses a half-formed handle by returning ''; the f-string bypassed it.
+    """
+    from types import SimpleNamespace
+
+    def rec(**kw):
+        base = {"platform": None, "external_id": None, "latitude": None, "longitude": None,
+                "address": None, "city": None, "state": "PA", "name": "X", "zip_code": None}
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    assert dedupe.physical_key(rec(name="Alpha")) != dedupe.physical_key(rec(name="Beta"))
+    # a HALF handle is not a handle — `dutchie:None` collided the same way
+    assert dedupe.physical_key(rec(platform="dutchie", name="G")) != dedupe.physical_key(rec(platform="dutchie", name="D"))
+    assert dedupe.physical_key(rec(external_id="55", name="G")) != dedupe.physical_key(rec(external_id="55", name="D"))
+    # …and a COMPLETE handle is still the key, which is the behaviour worth keeping
+    assert dedupe.physical_key(rec(platform="dutchie", external_id="55")) == "dutchie:55"
+    # two rows identical in every field they DO carry stay merged: that is the one merge left
+    assert dedupe.physical_key(rec(name="Same", city="Erie")) == dedupe.physical_key(rec(name="Same", city="Erie"))
+
+
+def test_a_missing_zip_does_not_make_a_real_handle_look_ambiguous() -> None:
+    """`address_key` is street|zip, so ONE rooftop captured twice — zip present once, missing once —
+    yielded TWO keys and the handle was refused as a merge key, killing the only key that could have
+    merged that very pair. `custom:899`, the docstring's own example of "a perfectly real Cresco
+    handle", is refused exactly this way. A missing zip is MISSING EVIDENCE, not a second rooftop.
+    """
+    rows = [
+        (1, 1, "Cresco", "A", "100 Main St", "Butler", "16001", None, None, "custom", "899", None),
+        (2, 1, "Cresco", "A", "100 Main St", "Butler", None, None, None, "custom", "899", None),
+    ]
+    assert dedupe.ambiguous_handles(rows) == set()
+
+
+def test_a_handle_at_two_real_rooftops_is_still_refused() -> None:
+    """ANTI-VACUITY. The narrowing must not disarm the check: Ontario had `custom:9` shared by 14-15
+    unrelated operators because every JS locator numbers its own stores from zero, and unioning on
+    those chained 75 operators into one cluster.
+
+    ⚠ THE SECOND CASE IS THE ONE THE FIRST VERSION OF THIS TEST MISSED. It used differing STREET
+    text, so a narrowing that discarded the zip outright passed it while re-opening the defect: two
+    DIFFERENT rooftops sharing street text in different cities (`100 Main St` in Butler 16001 and in
+    Erie 16501) collapsed to one key and the handle was no longer refused. Caught by review, not by
+    this file.
+    """
+    different_streets = [
+        (1, 1, "X", "A", "100 Main St", "Butler", "16001", None, None, "custom", "9", None),
+        (2, 2, "Y", "B", "900 River Rd", "Erie", "16501", None, None, "custom", "9", None),
+    ]
+    assert dedupe.ambiguous_handles(different_streets) == {"custom:9"}
+
+    same_street_different_zip = [
+        (1, 1, "X", "A", "100 Main St", "Butler", "16001", None, None, "custom", "9", None),
+        (2, 2, "Y", "B", "100 Main St", "Erie", "16501", None, None, "custom", "9", None),
+    ]
+    assert dedupe.ambiguous_handles(same_street_different_zip) == {"custom:9"}
+
+
+def test_run_dedupe_keeps_the_handle_that_holds_a_menu_within_one_platform() -> None:
+    """Hatch Addison on 2026-10-06: two Leafly listings at one rooftop, the MED one older and
+    empty, the REC one holding 1,475 products. The older row used to win the tie, so the only menu
+    the store had sat on a folded handle no sweep would ever refresh. Evidence beats seniority."""
+    from rung.models import StoreProductRecord
+
+    conn = _conn_with_companies()
+    for ext, name in (("hatch-addison-med", "Hatch - Addison (MED)"), ("hatch-addison-rec", "Hatch - Addison")):
+        db.insert_company_store(conn, CompanyStoreRecord(
+            company_id=1, canonical_name="Hatch", state="PA", source="leafly_directory",
+            name=name, address="100 Main St", zip_code="17011",
+            latitude=40.2, longitude=-76.9, platform="leafly", external_id=ext))
+    db.create_tables(conn)
+    db.insert_store_product(conn, StoreProductRecord(
+        company_id=1, state="PA", store_key="leafly:hatch-addison-rec", platform="leafly",
+        external_id="hatch-addison-rec", source="leafly_menu", name="Gummies"))
+    conn.commit()
+    report = dedupe.run_dedupe(conn, "PA")
+    assert report.distinct_stores == 1
+    kept = conn.execute(
+        "SELECT external_id FROM company_stores WHERE canonical_company_id IS NULL").fetchall()
+    assert kept == [("hatch-addison-rec",)]   # the handle with the menu, not the older row
+
+    # Same platform, neither handle has a menu: the older row still wins, as before.
+    conn2 = _conn_with_companies()
+    for ext in ("older", "newer"):
+        db.insert_company_store(conn2, CompanyStoreRecord(
+            company_id=1, canonical_name="Hatch", state="PA", source="leafly_directory",
+            name=ext, address="100 Main St", zip_code="17011",
+            latitude=40.2, longitude=-76.9, platform="leafly", external_id=ext))
+    db.create_tables(conn2)
+    conn2.commit()
+    dedupe.run_dedupe(conn2, "PA")
+    assert conn2.execute(
+        "SELECT external_id FROM company_stores WHERE canonical_company_id IS NULL").fetchall() == [("older",)]
+
+
+def test_run_dedupe_keeps_a_rooftops_medical_and_adult_use_listings_both() -> None:
+    """A store licensed for both programs lists two menus on its platform, and they are two
+    catalogues (24–63% of names in common, measured 2026-10-06). Until that day the older row won
+    and the other menu was never scraped again. Now each menu type keeps a row — and an UNDECLARED
+    twin (the Weedmaps listing) still folds, into the adult-use side."""
+    conn = _conn_with_companies()
+    for ext, name, platform in (("d-med", "NETA Brookline - MED", "dutchie"),
+                                ("d-rec", "NETA Brookline - REC", "dutchie"),
+                                ("neta-brookline", "NETA Brookline", "weedmaps")):
+        db.insert_company_store(conn, CompanyStoreRecord(
+            company_id=1, canonical_name="NETA", state="PA", source="x",
+            name=name, address="100 Main St", zip_code="17011",
+            latitude=40.2, longitude=-76.9, platform=platform, external_id=ext))
+    conn.commit()
+    report = dedupe.run_dedupe(conn, "PA")
+    assert report.distinct_stores == 2 and report.second_menus == 1   # one rooftop, two menus kept
+    assert report.duplicate_rows == 1           # the aggregator twin folded
+    kept = sorted(conn.execute(
+        "SELECT external_id, menu_type FROM company_stores WHERE canonical_company_id IS NULL").fetchall())
+    assert kept == [("d-med", "medical"), ("d-rec", "adult_use")]
+
+    # A rooftop with ONE declared type still folds everything into one row, as before.
+    conn2 = _conn_with_companies()
+    for ext, name, platform in (("d-rec", "Store - REC", "dutchie"), ("twin", "Store", "weedmaps")):
+        db.insert_company_store(conn2, CompanyStoreRecord(
+            company_id=1, canonical_name="Store", state="PA", source="x",
+            name=name, address="100 Main St", zip_code="17011",
+            latitude=40.2, longitude=-76.9, platform=platform, external_id=ext))
+    conn2.commit()
+    dedupe.run_dedupe(conn2, "PA")
+    assert conn2.execute(
+        "SELECT external_id FROM company_stores WHERE canonical_company_id IS NULL").fetchall() == [("d-rec",)]

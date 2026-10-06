@@ -1,11 +1,13 @@
 """Tests for the Stage-3 store_products snapshot persistence: wholesale replace,
 the empty-result guard, and the menu-target query over company_stores."""
 
+import datetime
+
 import psycopg
 import pytest
 from conftest import pg_conn
 
-from rung import db
+from rung import db, reference_db
 from rung.models import CompanyStoreRecord, StoreProductRecord
 
 
@@ -80,7 +82,7 @@ def test_partial_rescrape_lands_once_prior_is_stale() -> None:
     # shrink lands so a store can't be wedged on stale data forever.
     conn = _conn()
     db.replace_store_products(conn, "sweedpos:42", [_product(f"P{i}") for i in range(10)])
-    _age_snapshot(conn, "sweedpos:42", db._MENU_RETAIN_MAX_AGE_HOURS + 1)
+    _age_snapshot(conn, "sweedpos:42", reference_db._MENU_RETAIN_MAX_AGE_HOURS + 1)
     conn.commit()
     assert db.replace_store_products(conn, "sweedpos:42", [_product("real shrink")]) == 1
     assert db.count_store_products(conn, "sweedpos:42") == 1
@@ -220,6 +222,158 @@ def test_menu_stores_query_filters_and_dedupes_handles() -> None:
     rows = db.get_menu_stores_for_state(conn, "PA")
     assert len(rows) == 1
     (company_id, _name, source, platform, external_id, _store_url, _store_name,
-     address, _city) = rows[0]
+     address, _city, _menu_type) = rows[0]
     assert (company_id, source, platform, external_id) == (1, "next_data", "sweedpos", "42")
     assert address == "1 Main St"
+
+
+# ── `retained_since`: a KEPT snapshot must say so ────────────────────────────────────────────────
+#
+# Keeping is right (a transient failure must not wipe a good menu); keeping SILENTLY is what let a
+# Dutchie store fail 68 consecutive times since June and still publish its June menu in September,
+# with `store_products` carrying no way for any reader to tell.
+
+
+def _retained(conn: db.DBConn, store_key: str) -> list:
+    return [
+        row[0] for row in conn.execute(
+            "SELECT retained_since FROM store_products WHERE store_key = %s", (store_key,)
+        ).fetchall()
+    ]
+
+
+def test_a_real_scrape_leaves_the_snapshot_unstamped() -> None:
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A"), _product("B")])
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") == [None, None]
+
+
+def test_an_empty_result_stamps_the_snapshot_it_kept() -> None:
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A"), _product("B")])
+    conn.commit()
+    kept = datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC)
+    assert db.replace_store_products(conn, "sweedpos:42", [], now=kept) == 2
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") == [kept, kept]
+
+
+def test_the_stamp_is_the_FIRST_retention_not_the_latest_attempt() -> None:
+    """A store failing for three months must not look freshly kept every morning.
+
+    `COALESCE` is what makes the column answer "how long has this gone unrenewed" rather than
+    "when did we last try", which is already in `access_methods` and is a different question.
+    """
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A")])
+    conn.commit()
+    june = datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC)
+    for day in range(3):
+        db.replace_store_products(
+            conn, "sweedpos:42", [], now=june + datetime.timedelta(days=day))
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") == [june]
+
+
+def test_a_successful_rescrape_clears_the_stamp() -> None:
+    """Implicitly — the replace DELETEs the kept rows and the new ones default NULL."""
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A")])
+    db.replace_store_products(conn, "sweedpos:42", [], now=datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC))
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") != [None]
+
+    db.replace_store_products(conn, "sweedpos:42", [_product("Fresh")])
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") == [None]
+
+
+def test_a_snapshot_kept_on_empty_results_past_the_ceiling_is_dropped() -> None:
+    """The stamp alone was not enough: nothing read it, and 104 stores visited daily carried a
+    June–September menu as current on 2026-10-06. At the ceiling the empty result wins."""
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A"), _product("B")])
+    conn.commit()
+    june = datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC)
+    # Day 0 and day 29: kept, stamped once.
+    assert db.replace_store_products(conn, "sweedpos:42", [], now=june) == 2
+    assert db.replace_store_products(
+        conn, "sweedpos:42", [], now=june + datetime.timedelta(days=29)) == 2
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") == [june, june]
+    # Day 30: the ceiling. The snapshot goes; the return says so.
+    assert db.replace_store_products(
+        conn, "sweedpos:42", [], now=june + datetime.timedelta(days=30)) == 0
+    conn.commit()
+    assert db.count_store_products(conn, "sweedpos:42") == 0
+    # A further empty result on a store with no snapshot is a no-op, not an error.
+    assert db.replace_store_products(
+        conn, "sweedpos:42", [], now=june + datetime.timedelta(days=31)) == 0
+    # And a store that answers again gets a fresh, unstamped snapshot the day it does.
+    assert db.replace_store_products(conn, "sweedpos:42", [_product("Back")]) == 1
+    conn.commit()
+    assert _retained(conn, "sweedpos:42") == [None]
+
+
+def test_the_ceiling_counts_from_the_first_retention_not_the_snapshot_age() -> None:
+    """A menu scraped in June and first kept in September is 0 days retained in September: the
+    clock is "how long has this store answered empty", which is what `retained_since` holds."""
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A")])
+    conn.commit()
+    sept = datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
+    assert db.replace_store_products(conn, "sweedpos:42", [], now=sept) == 1
+    assert db.replace_store_products(
+        conn, "sweedpos:42", [], now=sept + datetime.timedelta(days=29, hours=23)) == 1
+    assert db.replace_store_products(
+        conn, "sweedpos:42", [], now=sept + datetime.timedelta(days=30)) == 0
+
+
+def test_the_partial_fetch_guard_also_stamps_what_it_kept() -> None:
+    """The throttled-partial branch keeps a snapshot too, and was equally silent about it."""
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product(f"P{i}") for i in range(10)])
+    conn.commit()
+    kept = datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC)
+    # 1 record against a fresh prior of 10 is under _MENU_RETAIN_FRACTION — read as a 406 fragment.
+    assert db.replace_store_products(conn, "sweedpos:42", [_product("fragment")], now=kept) == 10
+    conn.commit()
+    assert set(_retained(conn, "sweedpos:42")) == {kept}
+
+
+def test_stamping_one_store_does_not_touch_another() -> None:
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("A")])
+    other = _product("Other", store_key="jane:7", platform="jane", external_id="7")
+    db.replace_store_products(conn, "jane:7", [other])
+    conn.commit()
+    db.replace_store_products(conn, "sweedpos:42", [], now=datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC))
+    conn.commit()
+    assert _retained(conn, "jane:7") == [None]
+
+
+def test_the_view_exposes_the_retention_stamp_and_the_guard_excludes_a_kept_snapshot() -> None:
+    """Until 2026-10-06 `products_normalized` carried no `retained_since`, so an analysis reading the
+    view counted a June menu kept on empty results as today's. The view now says, and
+    `current_snapshot_where()` reads identically against the view and the table."""
+    from rung import reference_db
+
+    conn = _conn()
+    conn.execute(reference_db._CREATE_PRODUCTS_NORMALIZED_VIEW)
+    db.replace_store_products(conn, "sweedpos:42", [_product("A"), _product("B")])
+    conn.commit()
+    assert conn.execute(
+        f"SELECT count(*) FROM products_normalized WHERE {reference_db.current_snapshot_where()}"
+    ).fetchone()[0] == 2
+    db.replace_store_products(conn, "sweedpos:42", [], now=datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC))
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM products_normalized").fetchone()[0] == 2
+    assert conn.execute(
+        f"SELECT count(*) FROM products_normalized WHERE {reference_db.current_snapshot_where('products_normalized')}"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        f"SELECT count(*) FROM store_products sp WHERE {reference_db.current_snapshot_where('sp')}"
+    ).fetchone()[0] == 0
+    stamps = {r[0] for r in conn.execute("SELECT retained_since FROM products_normalized").fetchall()}
+    assert stamps == {datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC)}
