@@ -43,7 +43,10 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 #: entry that no longer writes the table fails too, so the exemption dies when the write moves
 #: into `db.py`.
 SCRIPTS_THAT_WRITE_ACCESS_METHODS = frozenset(
-    {"state_bringup.py", "prune_orphan_targets.py", "repair_jane_hint.py"})
+    {"state_bringup.py", "prune_orphan_targets.py", "repair_jane_hint.py",
+     # moves a merged-away company's `company_stores` rows onto its survivor's key and drops the
+     # twin's where the survivor already holds that method (a tested maintenance script, 2026-10-07)
+     "merge_duplicate_companies.py"})
 # The SET clause of an ``UPDATE company_stores …`` (captured up to WHERE / RETURNING / end-of-string),
 # so a column named only in a WHERE filter (a read) is not mistaken for a write.
 _COMPANY_STORES_SET = re.compile(
