@@ -142,3 +142,20 @@ Rise Holdings: https://risecannabis.com
 I.N.S.A.: https://insa.com/ma/
 INSA: https://insa.com/oh/
 Fluent: https://getfluent.com
+
+# ── Homepages the 2026-10-09 recon forecast would have erased (`recon_would_drop_homepage`). Each
+#    company holds a live homepage that neither an exact key nor today's roster yields; each site
+#    was fetched on 2026-10-09 and names the store's own town. Scoped, because the names are generic.
+#    NY Green Leaf: the roster publishes this site under "Green Leaf Wellness Co. LLC", which folds
+#    to `greenleafwellnessco` while the company folds to `greenleafwellness` — `extract_brand`
+#    strips one legal suffix, not two. Higher Limits (ON) is NOT keyed: it closed 2026-09-27.
+Green Leaf Wellness Co.:
+  "NY": https://greenleafwellnesscompany.com
+Design:
+  "NJ": https://design710.com
+TAKE OFF:
+  "ON": https://takeoffcannabis.com
+The 420 Store:
+  "ON": https://the420store.ca
+Spot:
+  "ON": https://spot420.ca
