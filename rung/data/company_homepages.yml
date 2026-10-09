@@ -64,7 +64,9 @@ Terrapin Care Station: null
 Trulieve: https://trulieve.com
 Verilife: https://verilife.com
 Vytal Options: null
-Zen Leaf: https://zenleafdispensaries.com
+Zen Leaf:
+  default: https://zenleafdispensaries.com
+  OK: null
 
 # ── Illinois operators (multi-state expansion, seeded 2026-06-16). The IDFPR license
 #    PDF roster carries no websites, so recon can't derive homepages — seed the major
@@ -72,17 +74,14 @@ Zen Leaf: https://zenleafdispensaries.com
 #    spellings. Curaleaf / RISE / Verilife / Zen Leaf already covered by the national
 #    entries above. Homepages live-probed before seeding (all return 200).
 "Sunnyside*": https://www.sunnyside.shop/
-ZenLeaf: https://zenleafdispensaries.com
 Ascend:
   default: https://www.letsascend.com
   CO: null
   OR: null
 Ivy Hall: https://www.ivyhalldispensary.com
-NuEra: https://nuera.com
 nuEra: https://nuera.com
 Terrabis: https://terrabis.co
 Windy City: https://windycitycannabis.com
-EarthMed: https://www.earthmed.com
 Earthmed: https://www.earthmed.com
 High Profile: https://highprofilecannabis.com
 Revolution: https://revolutioncannabis.com
