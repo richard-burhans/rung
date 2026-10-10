@@ -468,6 +468,17 @@ def test_a_co_dot_behind_another_suffix_is_still_seen() -> None:
     assert strip_legal_entity("Bar Co LLC") == "Bar Co"
 
 
+def test_a_connector_left_dangling_by_the_strips_is_trimmed_from_the_display_name() -> None:
+    """"Ninny Goat & Co." stripped to "Ninny Goat &", and a merge renamed the operator to it
+    (2026-10-10). Display only: the key already ignores punctuation, so it must not move."""
+    assert extract_brand("Ninny Goat & Co.") == "Ninny Goat"
+    assert extract_brand("Flamingo + Cannabis") == "Flamingo"
+    assert normalize_brand(extract_brand("Ninny Goat & Co.")) == normalize_brand("Ninny Goat &")
+    # ANTI-VACUITY: a connector that is part of the name, with no space before it, stays.
+    assert extract_brand("Cannabis 21+") == "Cannabis 21+"
+    assert extract_brand("PharmaCanna+") == "PharmaCanna+"
+
+
 def test_strip_legal_entity_never_eats_the_whole_name() -> None:
     """A name that IS the suffix keeps it — an empty brand folds every unrelated name into one phantom."""
     assert strip_legal_entity("Holdings LLC") == "Holdings"

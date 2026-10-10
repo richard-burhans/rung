@@ -747,6 +747,9 @@ def _keeps_a_brand(stripped: str) -> bool:
     return any(ch.isalpha() for ch in stripped)
 
 
+_DANGLING_CONNECTOR_RE = re.compile(r"(?:\s+[&+/,-]+)+\s*$")
+
+
 def extract_brand(name: str, city: str | None = None) -> str:
     """Extract the company brand from a full dispensary name.
 
@@ -814,7 +817,12 @@ def extract_brand(name: str, city: str | None = None) -> str:
         restripped = _TRAILING_GENERIC_RE.sub("", folded).strip()
         if _keeps_a_brand(restripped):
             folded = restripped
-    return folded
+    # A connector the strips left dangling ("Ninny Goat & Co." -> "Ninny Goat &"). Display only: the
+    # brand KEY (`normalize_brand`) already drops punctuation, so no company re-keys. Only a connector
+    # SEPARATED by a space dangles — "Cannabis 21+" and "PharmaCanna+" carry theirs as part of the name.
+    # A trailing WORD "and" is not trimmed, because letters are part of the key ("smokahontasand").
+    trimmed = _DANGLING_CONNECTOR_RE.sub("", folded)
+    return trimmed if _keeps_a_brand(trimmed) else folded
 
 
 def geocode_query(address: str | None, city: str | None,

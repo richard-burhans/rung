@@ -25,6 +25,9 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   stripped too. The first pass trimmed the period along with the suffix, leaving a bare "Co" the
   pattern does not match, so "Green Leaf Wellness Co. LLC" and "Green Leaf Wellness Co." keyed as two
   operators. A "Co" with no period is still not treated as a suffix.
+- **Brand display names** (`rung.text.extract_brand`): a connector the strips leave dangling after a
+  space is trimmed — "Ninny Goat & Co." reads "Ninny Goat", not "Ninny Goat &". The brand key ignores
+  punctuation, so no operator's key changes; a connector that is part of a name ("Cannabis 21+") stays.
 
 ### Fixed — 2026-10-06 (a whole-tree review)
 
