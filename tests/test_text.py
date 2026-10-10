@@ -455,6 +455,19 @@ def test_strip_legal_entity_is_repeated_because_names_stack_them() -> None:
     assert strip_legal_entity("Aurora Cannabis Enterprises Inc.") == "Aurora Cannabis"
 
 
+def test_a_co_dot_behind_another_suffix_is_still_seen() -> None:
+    """The first pass used to trim the period too, so "Co. LLC" left a bare "Co" the pattern (which
+    wants "Co.") never matched: NY's roster row "Green Leaf Wellness Co. LLC" keyed
+    `greenleafwellnessco` while the operator's own "Green Leaf Wellness Co." keyed
+    `greenleafwellness` — one store, two keys (2026-10-09)."""
+    assert strip_legal_entity("Green Leaf Wellness Co. LLC") == "Green Leaf Wellness"
+    assert normalize_brand(extract_brand("Green Leaf Wellness Co. LLC", "Colonie")) == \
+        normalize_brand(extract_brand("Green Leaf Wellness Co."))
+    assert strip_legal_entity("Groove Cannabis Co. Inc.") == "Groove Cannabis"
+    # A "Co" with no period was never a suffix here, and still is not.
+    assert strip_legal_entity("Bar Co LLC") == "Bar Co"
+
+
 def test_strip_legal_entity_never_eats_the_whole_name() -> None:
     """A name that IS the suffix keeps it — an empty brand folds every unrelated name into one phantom."""
     assert strip_legal_entity("Holdings LLC") == "Holdings"

@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-10
+
+- **Brand folding** (`rung.text.strip_legal_entity`): a "Co." behind another legal suffix is now
+  stripped too. The first pass trimmed the period along with the suffix, leaving a bare "Co" the
+  pattern does not match, so "Green Leaf Wellness Co. LLC" and "Green Leaf Wellness Co." keyed as two
+  operators. A "Co" with no period is still not treated as a suffix.
+
 ### Fixed — 2026-10-06 (a whole-tree review)
 
 - **Sizes** (`rung.normalize`): a leading-dot decimal (`.5g`), a fraction of a gram or pound

@@ -92,10 +92,15 @@ def strip_legal_entity(name: str) -> str:
     * one that leaves a **bare generic** — BC's *"Cannabis Co."* would strip to *"Cannabis"* and
       collide with *"Cannabis 247"*, merging two unrelated licensees into one phantom operator. The
       suffix is only noise when a real brand survives it.
+
+    A strip keeps its periods. Trimming them too turned "Co. LLC" into "Co" after the first pass, which
+    the suffix pattern ("co." with its dot) no longer saw: "Green Leaf Wellness Co. LLC" folded to
+    `greenleafwellnessco` while the operator's own "Green Leaf Wellness Co." folded to
+    `greenleafwellness` — two keys for one store (2026-10-09).
     """
     current = name.strip()
     while True:
-        stripped = _LEGAL_ENTITY_RE.sub("", current).strip(" ,.")
+        stripped = _LEGAL_ENTITY_RE.sub("", current).strip(" ,")
         if stripped == current or not _keeps_a_brand(stripped) or _is_bare_generic(stripped):
             return current
         current = stripped
