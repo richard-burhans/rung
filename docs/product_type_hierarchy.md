@@ -59,7 +59,7 @@ later.
 | Dutchie | 46% | none (`type` only) | name-derive |
 | Weedmaps | 36% | `edge_category` + `ancestors` (hierarchy) | ground truth + capture later |
 | Leafly | 10% | `productCategory` (top only) | name-derive |
-| Jane | 2% | `root_subtype` / `kind_subtype` | ground truth |
+| Jane | 2% | `root_subtype` / `kind_subtype` | ground truth — **carried since 2026-10-11** as the form hint the product-type and obtention rules read beside `kind` (a "Ground Flower" sub-type is `Ground`, read, not `Bud`, defaulted) |
 | Trulieve / SweedPOS / Cresco | ~5% | `subcategory` / `kind_subtype` / `sub_category` | capture later |
 
 ## Empirical sizing (name keywords over all ~5.5M rows)
