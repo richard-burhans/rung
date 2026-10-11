@@ -329,6 +329,7 @@ through the core's `db.py` or return records):
 | `curaleaf.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `fluent.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `canna_cabana.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `valuebuds.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `delta9.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `storerocket.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `shopify.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
@@ -517,7 +518,7 @@ overlay (its proprietary stages then resolve to registry stubs).
      `cost_tier` label was removed,
      audit M2). A homepage-less ("homeless") company gets a catalog of *only* the three
      directory rungs, since the homepage-based rungs would no-op anyway. **Rank 0 is the
-   first-party handle band** (2026-09-25): `hifyre_stores`, `tymber_stores` (2026-10-11), `breadstack_locations`,
+   first-party handle band** (2026-09-25): `hifyre_stores`, `tymber_stores` and `valuebuds_locations` (both 2026-10-11), `breadstack_locations`,
    `flowhub_stores`, `treez_stores`, `tendy_locations` and `menu_apps` run BEFORE `next_data`,
    because a generic parser reading a platform storefront returns the location slug as a
    `custom` handle nothing routes, and that row used to win. **The engine stops at the first rung
