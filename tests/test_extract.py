@@ -7,6 +7,8 @@ recent hardening changed and is easy to silently regress.
 import asyncio
 import re as _re
 
+import pytest
+
 from rung.sources.extract import (
     _ARCGIS_PAGE_SIZE,
     _ARCGIS_SERVICE_RE,
@@ -983,6 +985,29 @@ def test_nh_dhhs_pairs_each_tab_label_with_its_panel_of_addresses() -> None:
     assert all(r.state == "NH" and r.source == "nh_dhhs" for r in records)
     assert records[0].phone == "(603) 262-5035" and records[0].website == "https://graniteleaf.com/"
     assert records[4].phone is None and records[4].website == "https://nh.temescalwellness.com/"
+
+
+def test_nh_dhhs_fetch_that_is_refused_or_empty_is_a_failure_not_an_empty_roster() -> None:
+    """The roster run records `failed` with a reason only if the handler raises; returning [] on a
+    403 or a challenge page reads as "the state lists nothing" and keeps the prior rows silently."""
+    from rung.sources.extract import ExtractionFailed, _extract_nh_dhhs
+
+    class _Response:
+        def __init__(self, status: int, text: str, url: str) -> None:
+            self.status_code, self.text, self.url = status, text, url
+
+    class _Session:
+        def __init__(self, response: _Response) -> None:
+            self._response = response
+
+        async def get(self, url: str, **kwargs) -> _Response:
+            return self._response
+
+    with pytest.raises(ExtractionFailed, match="HTTP 403"):
+        asyncio.run(_extract_nh_dhhs("https://x", _Session(_Response(403, "", "https://x"))))
+    with pytest.raises(ExtractionFailed, match="no ATC Locations section"):
+        asyncio.run(_extract_nh_dhhs("https://x", _Session(_Response(200, "<html>challenge</html>", "https://x/verify"))))
+    assert len(asyncio.run(_extract_nh_dhhs("https://x", _Session(_Response(200, _NH_HTML, "https://x"))))) == 7
 
 
 def test_nh_dhhs_is_empty_without_the_atc_section() -> None:

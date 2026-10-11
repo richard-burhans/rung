@@ -1754,14 +1754,22 @@ def _nh_dhhs_records(document: str) -> list[DispensaryRecord]:
 
 
 async def _extract_nh_dhhs(url: str, session) -> list[DispensaryRecord]:
-    """New Hampshire DHHS's ATC page (tabbed operator panels; `_nh_dhhs_records`)."""
-    try:
-        response = await session.get(url, timeout=60, allow_redirects=True)
-    except Exception:
-        return []
+    """New Hampshire DHHS's ATC page (tabbed operator panels; `_nh_dhhs_records`).
+
+    A fetch that fails or is refused RAISES, so `extract_records` records the attempt as `failed`
+    with the reason. The first host run (2026-10-11) read 0 rows and printed method `none`, because
+    this handler returned [] on whatever the site answered — indistinguishable from a page that
+    lists nothing, and the prior rows were kept with no word of why.
+    """
+    response = await session.get(url, timeout=60, allow_redirects=True)
     if response.status_code >= 400:
-        return []
-    return _nh_dhhs_records(response.text or "")
+        raise ExtractionFailed(f"HTTP {response.status_code} from {response.url}")
+    records = _nh_dhhs_records(response.text or "")
+    if not records:
+        raise ExtractionFailed(
+            f"HTTP {response.status_code}, {len(response.text or ''):,} bytes, landed on {response.url}: "
+            "no ATC Locations section — a challenge page, a redirect, or the page changed shape")
+    return records
 
 
 async def _extract_bc_lcrb(url: str, session) -> list[DispensaryRecord]:
@@ -1965,7 +1973,7 @@ async def extract_records(list_url: str, list_type: ListType | str) -> list[Disp
             # hear (`PartialRoster`); anything else is this one state's failure (`ExtractionFailed`).
             try:
                 return await handler(list_url, session)
-            except PartialRoster:
+            except (PartialRoster, ExtractionFailed):
                 raise
             except Exception as exc:
                 raise ExtractionFailed(
