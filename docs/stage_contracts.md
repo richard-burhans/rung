@@ -97,11 +97,24 @@ and not their contents.
 - **In:** `companies.id/canonical_name/state`; `dispensaries.name/**city**/website` (homepage
   derivation, indexed PER STATE on both the `--state` and the bare path — the bare path pooled every
   roster into one vote until 2026-10-05, so a company could derive another state's site);
-  `company_homepages.yml` overrides, exact-name and scoped per state (`recon.override_for`).
+  `company_homepages.yml` overrides, exact-name and scoped per state (`recon.override_for`);
+  and, since 2026-10-11, `company_stores.website` on the rows the aggregator directory rungs
+  wrote (`recon.LISTING_SOURCES`: `leafly_directory`, `weedmaps_directory`) — the website the
+  operator's OWN listing declares, read by `recon.listing_websites` per company, folded rows
+  included, asked only where the override and the roster say nothing, with aggregator/social
+  roots dropped (`homepage_discovery.domain_excluded`). It exists because 38 of 45 rosters
+  publish no website: on 2026-10-11 `company_recon` held `no_url` for 11,613 of 12,970
+  companies, and 3,973 operators behind 5,312 no-menu aggregator handles had no homepage while
+  the Leafly detail Stage 2 fetches for each of them carries `website` (measured on 60 no-menu
+  handles per state: WA 47, CA 48, OK 31 usable; the probe that measures it is named in the
+  Leafly recipe). ⚠ The Weedmaps DIRECTORY listing carries no `website` (only the per-slug detail does), so
+  Weedmaps rows contribute nothing until the Stage-2 runner fetches the detail for new stores —
+  open work. The listing vote is still a vote: the probe that follows must reach the site, and
+  `_probe_one` records what it found.
 - **Out:** `company_recon` full-row upsert per company (`db.upsert_recon`, reference_db.py). Failure is a
   row with `error` set; success has `error IS NULL` + `platform`/`confidence`.
 - **Re-run:** re-probes and overwrites — **every row of the state, including the ones it can no
-  longer derive.** A company whose homepage the override file or the roster no longer yields is
+  longer derive.** A company whose homepage the override file, the roster or its own listings no longer yields is
   rewritten `no_url`, and Stage 2 then walks it homeless, so a Jane/SweedPOS winner that read the
   homepage is no longer offered. `coverage_healthcheck`'s `recon_would_drop_homepage` and
   `recon_would_change_homepage` forecast exactly that set — erased, and re-pointed — from

@@ -86,7 +86,7 @@ def looks_like_cannabis(text: str, program_term: str | None = None) -> bool:
     return re.search(rf"\b(?:{pattern})\b", text.lower()) is not None
 
 # Domains a real operator homepage is never on: directories/aggregators, social/review,
-# and search/maps/wiki/jobs noise. Matched by `_domain_excluded` against the (www-stripped)
+# and search/maps/wiki/jobs noise. Matched by `domain_excluded` against the (www-stripped)
 # netloc, LABEL-ANCHORED — see that function for the three entry shapes.
 _EXCLUDED_DOMAINS = (
     # aggregators / menu directories
@@ -146,8 +146,12 @@ def build_discovery_queries(
     return queries
 
 
-def _domain_excluded(netloc: str) -> bool:
+def domain_excluded(netloc: str) -> bool:
     """Whether a (www-stripped, lowercased) netloc is on an excluded domain — LABEL-ANCHORED.
+
+    Public because recon's listing vote asks the same question of a website an aggregator
+    listing declares: a Leafly page whose "website" is the store's own Weedmaps or Instagram
+    page names no homepage, and must not become one.
 
     A bare substring test here dropped real operators: ``"x.com" in "medrx.com"`` is True, so any
     legitimate domain merely ENDING in an excluded name (medrx.com, and Rx-suffixed names are common
@@ -181,7 +185,7 @@ def _candidate_domains(hrefs: list[str]) -> list[str]:
         if not href or not href.startswith("http"):
             continue
         netloc = urlparse(href).netloc.lower().removeprefix("www.")
-        if not netloc or _domain_excluded(netloc):
+        if not netloc or domain_excluded(netloc):
             continue
         page = urlparse(href)._replace(fragment="").geturl()
         if page not in seen:

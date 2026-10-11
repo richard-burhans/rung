@@ -19,6 +19,14 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Changed — 2026-10-11
+
+- **Homepage discovery** (`rung.sources.homepage_discovery.domain_excluded`): the aggregator /
+  social / search-noise domain filter is public. A consumer that reads the website an operator's own
+  directory listing declares needs the same question answered — a listing whose "website" is its
+  Instagram or its Weedmaps page names no homepage — and the filter is label-anchored on purpose
+  (`medrx.com` is not `x.com`). Behaviour unchanged.
+
 ### Fixed — 2026-10-10
 
 - **Brand folding** (`rung.text.strip_legal_entity`): a "Co." behind another legal suffix is now
