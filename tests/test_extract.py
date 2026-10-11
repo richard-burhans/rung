@@ -674,6 +674,50 @@ def test_kml_parses_point_coordinates():
     assert by_name["No Coords Store"].latitude is None       # no <Point> → no coords
     assert by_name["Null Island"].latitude is None            # 0,0 placeholder dropped
 
+#: Two placemarks of Georgia's commission map, as the live KML export wrote them on 2026-10-11
+#: (19 placemarks in all, every one addressed this way).
+_GA_KML = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b'<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Folder><name>Dispensaries</name>'
+    b"<Placemark><name>Trulieve Macon</name><description><![CDATA[Trulieve Medical Cannabis "
+    b"Dispensary of Macon<br>3556 Riverside Drive<br>Suite A<br>Macon, Georgia 31210<br>"
+    b"Dispensing License DISP0001]]></description>"
+    b"<Point><coordinates>-83.7069644,32.8975623,0</coordinates></Point></Placemark>"
+    b"<Placemark><name>Botanical Sciences Chamblee</name><description><![CDATA[Georgia Dispensary "
+    b"1, LLC dba<br>Botanical Sciences<br>3927 Buford Hwy NE<br>Atlanta, Georgia 30345<br>"
+    b"Dispensing License DISP0007]]></description>"
+    b"<Point><coordinates>-84.2601544,33.8579104,0</coordinates></Point></Placemark>"
+    b"</Folder></Document></kml>"
+)
+
+
+def test_kml_reads_the_address_out_of_a_google_my_maps_description():
+    """Georgia's commission publishes its dispensaries as a Google My Maps embed whose description is
+    <br>-separated lines: legal name, street, (suite), "City, Georgia ZIP", licence. The street is the
+    street line (not the suite), the city and ZIP come off the city line, and a spelled-out state is
+    left for the roster run to stamp."""
+    records = _extract_kml(_GA_KML)
+    assert len(records) == 2
+    by_name = {r.name: r for r in records}
+    macon = by_name["Trulieve Macon"]
+    assert (macon.address, macon.city, macon.state, macon.zip_code) == (
+        "3556 Riverside Drive", "Macon", None, "31210")
+    assert macon.latitude == 32.8975623
+    chamblee = by_name["Botanical Sciences Chamblee"]
+    assert (chamblee.address, chamblee.city, chamblee.zip_code) == ("3927 Buford Hwy NE", "Atlanta", "30345")
+
+
+def test_kml_description_address_parses_the_lines_it_is_given():
+    from rung.sources.extract import _kml_description_address as parse
+
+    assert parse("Acme LLC<br>12 Main St<br>Suite 4<br>Springfield, IL 62701<br>Licence 7") == (
+        "12 Main St", "Springfield", "IL", "62701")
+    assert parse("12 Main St<br/>Springfield, Illinois 62701") == ("12 Main St", "Springfield", None, "62701")
+    assert parse("Springfield, IL 62701") is None             # a city line with no street before it
+    assert parse("just a note about hours") is None
+    assert parse("") is None
+
+
 def _ca_lic(**over):
     base = {
         "licenseStatus": "Active", "licenseType": "Commercial -  Retailer",

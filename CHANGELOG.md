@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-11
 
+- **KML rosters** (`rung.sources.extract`): the `kml` list type reads a street, city and ZIP out of
+  a Google My Maps placemark description — the `<br>`-separated lines a regulator's map typically
+  writes (legal name, street, suite, "City, State ZIP", licence) — so such rows pair by address,
+  not only by coordinates. Georgia's commission map is the first roster to use it, and Georgia
+  moves from `cbd_only` to `medical` in `data/states.yml`: a low-THC programme with licensed
+  storefront dispensaries is a roster to compare against.
 - **Homepage discovery** (`rung.sources.homepage_discovery.domain_excluded`): the aggregator /
   social / search-noise domain filter is public. A consumer that reads the website an operator's own
   directory listing declares needs the same question answered — a listing whose "website" is its

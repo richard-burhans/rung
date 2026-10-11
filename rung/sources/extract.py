@@ -37,6 +37,7 @@ from selectolax.parser import HTMLParser
 from rung import db
 from rung.addresses import (
     PHONE_RE as _PHONE_RE,
+    STREET_LINE_RE,
     STREET_RE as _STREET_RE,
     ZIP_RE as _ZIP_RE,
     clean as _clean,
@@ -924,9 +925,15 @@ def _extract_kml(content: bytes) -> list[DispensaryRecord]:
                     data[field] = _clean(val.text if val is not None else None)
         address = data.get("address")
         if not address:
-            desc = _clean(placemark.findtext(f"{_KML_NS}description"))
-            if desc and _STREET_RE.search(desc):
-                address = desc
+            desc = placemark.findtext(f"{_KML_NS}description") or ""
+            parsed = _kml_description_address(desc)
+            if parsed:
+                address, city, state, zip_code = parsed
+                data.setdefault("city", city)
+                data.setdefault("state", state)
+                data.setdefault("zip_code", zip_code)
+            elif (cleaned := _clean(desc)) and _STREET_RE.search(cleaned):
+                address = cleaned
         latitude, longitude = _kml_point(placemark)
         records.append(
             DispensaryRecord(
@@ -937,6 +944,47 @@ def _extract_kml(content: bytes) -> list[DispensaryRecord]:
             )
         )
     return records
+
+
+#: A "City, State ZIP" line as a Google My Maps description writes it — the state spelled out
+#: ("Macon, Georgia 31210") or abbreviated ("Macon, GA 31210"). The spelled-out form is kept as
+#: written; a two-letter one is the abbreviation.
+_KML_CITY_LINE_RE = re.compile(
+    r"^(?P<city>[A-Za-z .'-]{2,40}),\s*(?P<state>[A-Za-z .]{2,30}?)\s+(?P<zip>\d{5}(?:-\d{4})?)$"
+)
+_KML_SUITE_RE = re.compile(r"^(?:suite|ste\.?|unit|#)\s*\S+$", re.IGNORECASE)
+
+
+def _kml_description_address(description: str) -> tuple[str, str, str | None, str] | None:
+    """``(street, city, state, zip)`` from a multi-line placemark description, or None.
+
+    A Google My Maps description is HTML: ``<br>``-separated lines, typically the operator's legal
+    name, the street, a suite line, "City, State ZIP" and a licence number (Georgia's commission
+    map, 2026-10-11). The street is the last street-shaped line before the city line, a suite line
+    between them is not the street, and the state is returned as the two-letter code when it is
+    one and otherwise None — the caller stamps the roster's own jurisdiction.
+    """
+    lines = [
+        cleaned for raw in re.split(r"<br\s*/?>|\n", description)
+        if (cleaned := _clean(re.sub(r"<[^>]+>", " ", raw)))
+    ]
+    for index, line in enumerate(lines):
+        city_line = _KML_CITY_LINE_RE.match(line)
+        if city_line is None:
+            continue
+        street = next(
+            (candidate for candidate in reversed(lines[:index])
+             if STREET_LINE_RE.match(candidate) and not _KML_SUITE_RE.match(candidate)),
+            None,
+        )
+        if street is None:
+            return None
+        state = city_line.group("state").strip()
+        return (
+            street, city_line.group("city").strip(),
+            state.upper() if len(state) == 2 else None, city_line.group("zip"),
+        )
+    return None
 
 
 def _kml_point(placemark) -> tuple[float | None, float | None]:
