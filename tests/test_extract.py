@@ -26,6 +26,7 @@ from rung.sources.extract import (
     _infer_name_column,
     _location_fraction,
     _match_field,
+    _nh_dhhs_records,
     _query_arcgis_layer,
     _slga_record,
     _split_name_address,
@@ -936,6 +937,57 @@ def test_arcgis_record_prefers_correctly_spelled_longitude() -> None:
     feat = {"attributes": {"NAME": "X", "LATITUDE": 1.0, "LONGITUDE": 2.0, "LONGITDUE": 99.0}}
     rec = _arcgis_record(feat)
     assert rec is not None and rec.longitude == 2.0
+
+
+# --- nh_dhhs ------------------------------------------------------------------------------------
+
+#: New Hampshire DHHS's ATC page, trimmed from the live markup of 2026-10-11: the tab list names the
+#: operators in order and one panel per operator follows in that order.
+_NH_HTML = """<h2>Therapeutic Cannabis</h2><p>Note: You must show your Registry ID Card.</p>
+<div><h3>ATC Locations</h3><section><div><div><ul>
+<li><a href="#tab-tabbed_content-696913de9dd8f-0">GraniteLeaf Cannabis (formerly Prime ATC) </a></li>
+<li><a href="#tab-tabbed_content-696913de9dd8f-1">Sanctuary ATC</a></li>
+<li><a href="#tab-tabbed_content-696913de9dd8f-2">Temescal Wellness, Inc.</a></li>
+</ul>
+<div><p>Dispensaries located in Merrimack and Chichester:</p><ul>
+<li>380 Daniel Webster Highway, Units A and C<br> Merrimack, NH 03054<br> (603) 262-5035</li>
+<li>349 Dover Road (Route 4)<br> Chichester, NH 03258<br> (603) 212-1500</li></ul>
+<p>Website: <a href="https://graniteleaf.com/">graniteleaf.com</a></p>
+<p>Email:&nbsp;<a href="mailto:info@graniteleaf.com">info@graniteleaf.com</a></p></div>
+<div><p>Dispensaries located in Plymouth and Conway:</p><ul>
+<li>568 Tenney Mountain Highway<br> Plymouth, NH 03264<br> (603) 346-4619</li>
+<li>234 White Mountain Highway<br> Conway, NH 03818<br> (603) 662-0113</li></ul>
+<p>Website: <a href="https://www.sanctuarymed.com/nh">www.sanctuarymed.com/nh</a></p></div>
+<div><p>Dispensaries located in Dover, Lebanon, and Keene:</p><ul>
+<li>26 Crosby Road, Units 11-12<br> Dover, NH 03820</li>
+<li>367 Route 120, Unit E-2<br> Lebanon, NH 03766</li>
+<li>69 Island Street, Suite 1<br> Keene, NH 03431</li></ul>
+<p>Website: <a href="https://nh.temescalwellness.com/">nh.temescalwellness.com</a></p>
+<p>Phone: <a href="tel:+16032859383">603-285-9383</a></p></div>
+</div></div></section></div>"""
+
+
+def test_nh_dhhs_pairs_each_tab_label_with_its_panel_of_addresses() -> None:
+    """Seven stores under three operators; the name is the tab label, the website the panel's, and a
+    store with no phone line keeps None rather than the operator's phone."""
+    records = _nh_dhhs_records(_NH_HTML)
+    assert [(r.name, r.address, r.city, r.zip_code) for r in records] == [
+        ("GraniteLeaf Cannabis (formerly Prime ATC)", "380 Daniel Webster Highway, Units A and C", "Merrimack", "03054"),
+        ("GraniteLeaf Cannabis (formerly Prime ATC)", "349 Dover Road (Route 4)", "Chichester", "03258"),
+        ("Sanctuary ATC", "568 Tenney Mountain Highway", "Plymouth", "03264"),
+        ("Sanctuary ATC", "234 White Mountain Highway", "Conway", "03818"),
+        ("Temescal Wellness, Inc.", "26 Crosby Road, Units 11-12", "Dover", "03820"),
+        ("Temescal Wellness, Inc.", "367 Route 120, Unit E-2", "Lebanon", "03766"),
+        ("Temescal Wellness, Inc.", "69 Island Street, Suite 1", "Keene", "03431"),
+    ]
+    assert all(r.state == "NH" and r.source == "nh_dhhs" for r in records)
+    assert records[0].phone == "(603) 262-5035" and records[0].website == "https://graniteleaf.com/"
+    assert records[4].phone is None and records[4].website == "https://nh.temescalwellness.com/"
+
+
+def test_nh_dhhs_is_empty_without_the_atc_section() -> None:
+    assert _nh_dhhs_records("<html><body><h3>Something else</h3></body></html>") == []
+    assert _nh_dhhs_records("") == []
 
 
 # --- va_cca ------------------------------------------------------------------------------------

@@ -21,6 +21,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-11
 
+- **New Hampshire roster** (`rung.sources.extract`, `data/states.yml`): a `nh_dhhs` list type reads
+  DHHS's tabbed Alternative Treatment Centers page — the operators are the tab labels, their
+  dispensaries the panels' list items — so the state's seven licensed stores replace the pool
+  bootstrap that stood in for a roster.
 - **KML rosters** (`rung.sources.extract`): the `kml` list type reads a street, city and ZIP out of
   a Google My Maps placemark description — the `<br>`-separated lines a regulator's map typically
   writes (legal name, street, suite, "City, State ZIP", licence) — so such rows pair by address,

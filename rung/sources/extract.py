@@ -36,6 +36,7 @@ from selectolax.parser import HTMLParser
 
 from rung import db
 from rung.addresses import (
+    CITY_STATE_ZIP_RE,
     PHONE_RE as _PHONE_RE,
     STREET_LINE_RE,
     STREET_RE as _STREET_RE,
@@ -1705,6 +1706,64 @@ async def _extract_va_cca(url: str, session) -> list[DispensaryRecord]:
     return records
 
 
+_NH_TAB_RE = re.compile(r'<a[^>]*href="#tab-[^"]*-(?P<index>\d+)"[^>]*>(?P<label>[^<]+)</a>')
+_NH_ITEM_RE = re.compile(r"<li[^>]*>(?P<body>.*?)</li>", re.S)
+_NH_WEBSITE_RE = re.compile(r'Website:\s*<a[^>]*href="(?P<url>[^"]+)"')
+_NH_SECTION_RE = re.compile(r"<h3[^>]*>\s*ATC Locations\s*</h3>")
+_NH_PANEL_RE = re.compile(r"<div[^>]*>\s*<p[^>]*>Dispensaries located", re.S)
+
+
+def _nh_dhhs_records(document: str) -> list[DispensaryRecord]:
+    """New Hampshire DHHS's Alternative Treatment Centers page → one record per dispensary.
+
+    The page is a tabbed component: a list of tab links names the operators in order, and one
+    panel per operator follows in the same order, each holding its dispensaries as list items
+    ("street<br>City, NH zip<br>phone") and a "Website:" link. The operator name is the TAB
+    label, which no address line carries — the generic line-block reader found three of the
+    seven stores and named each after its panel's lead-in sentence (2026-10-11). Pure.
+    """
+    document = html.unescape(document)
+    heading = _NH_SECTION_RE.search(document)
+    if heading is None:
+        return []
+    section = document[heading.start():]
+    labels = [clean_label for _index, label in _NH_TAB_RE.findall(section)
+              if (clean_label := _clean(label))]
+    if not labels:
+        return []
+    # Panels start after the tab list; each is the run of markup up to the next panel's lead-in.
+    panels = _NH_PANEL_RE.split(section.split("</ul>", 1)[1])[1:]
+    records: list[DispensaryRecord] = []
+    for label, panel in zip(labels, panels, strict=False):
+        website_match = _NH_WEBSITE_RE.search(panel)
+        website = website_match.group("url") if website_match else None
+        for item in _NH_ITEM_RE.finditer(panel):
+            lines = [cleaned for raw in re.split(r"<br\s*/?>", item.group("body"))
+                     if (cleaned := _clean(re.sub(r"<[^>]+>", " ", raw)))]
+            if len(lines) < 2:
+                continue
+            city_line = CITY_STATE_ZIP_RE.match(lines[1])
+            if city_line is None or not _STREET_RE.match(lines[0]):
+                continue
+            phone = next((line for line in lines[2:] if _PHONE_RE.search(line)), None)
+            records.append(DispensaryRecord(
+                source="nh_dhhs", name=label, address=lines[0], city=city_line.group(1).strip(),
+                state=city_line.group(2), zip_code=city_line.group(3), phone=phone, website=website,
+            ))
+    return records
+
+
+async def _extract_nh_dhhs(url: str, session) -> list[DispensaryRecord]:
+    """New Hampshire DHHS's ATC page (tabbed operator panels; `_nh_dhhs_records`)."""
+    try:
+        response = await session.get(url, timeout=60, allow_redirects=True)
+    except Exception:
+        return []
+    if response.status_code >= 400:
+        return []
+    return _nh_dhhs_records(response.text or "")
+
+
 async def _extract_bc_lcrb(url: str, session) -> list[DispensaryRecord]:
     """Fetch BC's roster from the LCRB map API (a bare JSON list, no paging/auth)."""
     try:
@@ -1869,7 +1928,8 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 # so the two never drift. Any other value falls through to the html parser.
 ListType = Literal[
     "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
-    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "lookup", "html",
+    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "lookup",
+    "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
 
@@ -1880,6 +1940,7 @@ _ASYNC_HANDLERS = {
     "on_agco": _extract_on_agco,
     "bc_lcrb": _extract_bc_lcrb,
     "va_cca": _extract_va_cca,
+    "nh_dhhs": _extract_nh_dhhs,
     "atlist": _extract_atlist,
     "sk_slga": _extract_sk_slga,
 }
