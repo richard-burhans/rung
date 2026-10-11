@@ -3,6 +3,7 @@ claim partitioning across connections, target-specific claims, stale recovery.""
 
 import asyncio
 import datetime
+import time
 
 import conftest
 import psycopg
@@ -429,6 +430,30 @@ def test_bump_worker_heartbeat_extends_all_of_a_workers_claims_only() -> None:
     assert untouched == (True,)  # w2's lease was NOT touched
 
 
+def _lease_extended(conn: db.DBConn, job_id: int) -> bool:
+    """Whether a committed bump has pushed the job's 1-min lease out past 20 min (read on the test's
+    own connection, which sees each commit the heartbeat's dedicated connection makes)."""
+    row = conn.execute(
+        "SELECT lease_until > now() + make_interval(mins => 20) FROM jobs WHERE id = %s", (job_id,),
+    ).fetchone()
+    return bool(row and row[0])
+
+
+async def _wait_for(condition, *, timeout_s: float = 15.0, every_s: float = 0.05) -> None:
+    """Poll ``condition`` until it holds, or fail after ``timeout_s``.
+
+    The heartbeat does its bumps in worker threads against a real Postgres, so a FIXED sleep is a
+    bet on the box: 0.2 s was enough alone and lost three gate runs in a row on 2026-10-11 under
+    `-n 8` beside the public build's nested suite, where the thread had not been scheduled yet. A
+    deadline is the honest bound — the test asserts the bump HAPPENS, not that it happens in 200 ms.
+    """
+    deadline = time.monotonic() + timeout_s
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"the heartbeat did not do its work within {timeout_s:.0f} s")
+        await asyncio.sleep(every_s)
+
+
 def test_heartbeat_forever_bumps_the_lease_then_stops_cleanly_on_cancel() -> None:
     conn = _conn()
     queue.enqueue(conn, "t", "k")
@@ -450,7 +475,7 @@ def test_heartbeat_forever_bumps_the_lease_then_stops_cleanly_on_cancel() -> Non
         hb = asyncio.create_task(queue.heartbeat_forever(
             "w1", interval_s=0.05, lease_minutes=30, conn_factory=_dedicated_conn,
         ))
-        await asyncio.sleep(0.2)  # let at least one bump + commit fire
+        await _wait_for(lambda: _lease_extended(conn, job.id))  # at least one bump + commit fired
         hb.cancel()
         assert await hb is None  # CancelledError is swallowed; the coroutine returns
 
@@ -491,7 +516,8 @@ def test_heartbeat_forever_survives_a_transient_bump_failure(capsys) -> None:
         hb = asyncio.create_task(queue.heartbeat_forever(
             "w1", interval_s=0.05, lease_minutes=30, conn_factory=_factory,
         ))
-        await asyncio.sleep(0.3)  # failed first bump + reconnect + at least one good bump
+        # the failed first bump, the reconnect, and at least one good bump through it
+        await _wait_for(lambda: len(made) >= 2 and _lease_extended(conn, job.id))
         hb.cancel()
         assert await hb is None  # still the clean cancel path
 
