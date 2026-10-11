@@ -197,7 +197,16 @@ Three things the live data forced, each of which a naive version gets wrong:
 ## Phase 2 — events table + surfacing (SHIPPED 2026-07-09; relocation tuning deferred)
 
 `store-lifecycle --state XX --write` materializes the derivation into `store_lifecycle_events` so
-maps and the patient UI read events directly instead of re-deriving:
+maps and the patient UI read events directly instead of re-deriving. **Ops (live, since
+2026-10-11):** the Sunday store-history sweep runs it for every
+swept state right after that state's own-site scrape, so the conclusion is never older than the
+evidence by more than the sweep's own ordering. ⚠ It was a hand-run command until then, and nobody
+ran it between 2026-08-03 and 2026-10-11 — ten Sundays of observations landed while the table said
+August. `coverage_healthcheck`'s `lifecycle_stale` names a state whose own-site cycles outrun its
+derivation by two or more, and `menu_of_closed_store` is the first consumer that joins the events
+back to Stage 3: a retained menu snapshot (empty for weeks, kept by the guard) on a rooftop the
+derivation has called closed or operator-changed is a store that is gone, not a rung that broke —
+Chalice Farms' nine Oregon stores, Mr. Nice Guy since 2026-07-26, were that for a month.
 
 ```
 store_lifecycle_events                -- the DERIVED conclusion; recomputed, never appended
