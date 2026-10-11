@@ -117,10 +117,21 @@
 
 - abbr: GA
   name: Georgia
-  programs: cbd_only
+  # `cbd_only` until 2026-10-11, which skipped Stage 1 while Stages 2 and 3 held 52 Georgia stores
+  # and read 18 menus (`skipped_but_scraped`, every night). The programme is a low-THC MEDICAL one
+  # with licensed storefront dispensaries — 19 on the commission's map (Trulieve, Botanical
+  # Sciences, Fine Fettle, Treevana …), plus Board-of-Pharmacy-permitted pharmacies since 2026 —
+  # so it is in scope, and the roster is the commission's Google My Maps embed on its dispensaries
+  # page (gmcc.ga.gov/patients/dispensaries; the old gmcc.georgia.gov host refuses connections).
+  # The KML export carries name, coordinates and a <br>-lined description (legal name, street,
+  # suite, "City, Georgia ZIP", licence number), which the kml handler reads into street/city/ZIP.
+  # Verified live 2026-10-11: 19 placemarks, every one addressed.
+  programs: medical
   program_term: medical cannabis
   agency: Georgia Access to Medical Cannabis Commission
-  known_url: ""
+  known_url: https://www.gmcc.ga.gov/
+  list_url: https://www.google.com/maps/d/kml?mid=1R0lW9jVe3EyfGQk3NGxOeLDV2Nr1FKY&forcekml=1
+  list_type: kml
 
 - abbr: HI
   name: Hawaii
