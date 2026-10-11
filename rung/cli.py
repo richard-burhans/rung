@@ -547,6 +547,14 @@ async def _run_search_states(failed_only: bool = False, force: bool = False) -> 
 async def _run_find_lists(only: set[str] | None = None, force: bool = False) -> None:
     from rung.sources.state_lists import print_list_report, run_find_lists
 
+    # Stage 1 is public core and never resolves a proprietary stage, so this command and
+    # `scrape-states` were the only ones that ran without the overlay loaded — and the overlay is
+    # what opts the process into the browser fingerprint every other command fetches with. Without
+    # it a roster fetch is the honest client, which Akamai refuses outright: New Hampshire's DHHS
+    # page answered 403 to `scrape-states` on the host and 200 to the same page fetched after
+    # `load_plugins` (2026-10-11). Idempotent, and a no-op in the public build, which has no plugin
+    # and stays honest.
+    registry.load_plugins()
     conn = db.get_connection()
     db.create_tables(conn)
     scope = f"{len(only)} states" if only else "all program states"
@@ -565,6 +573,7 @@ async def _run_scrape_states(
         run_extract_states,
     )
 
+    registry.load_plugins()  # see _run_find_lists: the same opt-in, for the same reason
     conn = db.get_connection()
     db.create_tables(conn)
     scope = f"{len(only)} states" if only else "all states with a discovered list URL"

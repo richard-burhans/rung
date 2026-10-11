@@ -148,7 +148,12 @@ A string-keyed registry of **proprietary stage implementations**, discovered at 
 - `resolve(name) -> Callable` — return the registered impl, else the stub (which raises
   `StageNotAvailable` with an install hint).
 - `load_plugins() -> list[str]` — idempotent; iterate the entry-point group, import+invoke each
-  registrar (side-effect registration). Called once at CLI startup.
+  registrar (side-effect registration). Called by every command before it fetches: the proprietary
+  stages reach it through `_stage`, and the two Stage-1 commands (`find-lists`, `scrape-states`)
+  call it explicitly since 2026-10-11, because a registrar is also what opts the process into its
+  browser fingerprint — without it those two fetched as the honest client, which Akamai refuses
+  (New Hampshire's roster page: 403 to the honest client, 200 after the plugin loaded). A public
+  install has no plugin, so the call is a no-op there and the core stays honest.
 - `StageNotAvailable` — raised by a stub when an unplugged proprietary stage is invoked, with a
   `pip install rung-intel` hint.
 

@@ -141,6 +141,33 @@ def test_scrape_states_flags_default_off(monkeypatch) -> None:
     }
 
 
+def test_stage_one_commands_load_the_plugins_before_they_fetch(monkeypatch) -> None:
+    """`find-lists` and `scrape-states` never resolve a proprietary stage, so they were the only
+    commands fetching without the overlay — and so without the browser fingerprint it opts the
+    process into. Akamai refused the honest client on New Hampshire's roster page (2026-10-11)."""
+    import asyncio
+
+    import rung.sources.extract as extract
+    import rung.sources.state_lists as state_lists
+
+    order: list[str] = []
+    monkeypatch.setattr(cli.registry, "load_plugins", lambda **kw: order.append("plugins") or [])
+    monkeypatch.setattr(cli.db, "get_connection", lambda: type("C", (), {"close": lambda self: None})())
+    monkeypatch.setattr(cli.db, "create_tables", lambda conn: None)
+
+    async def ran(*args, **kwargs):
+        order.append("run")
+        return []
+
+    monkeypatch.setattr(state_lists, "run_find_lists", ran)
+    monkeypatch.setattr(state_lists, "print_list_report", lambda results: None)
+    monkeypatch.setattr(extract, "run_extract_states", ran)
+    monkeypatch.setattr(extract, "print_extract_report", lambda results: None)
+    asyncio.run(cli._run_find_lists(only={"NH"}))
+    asyncio.run(cli._run_scrape_states(only={"NH"}))
+    assert order == ["plugins", "run", "plugins", "run"]
+
+
 def test_bootstrap_dutchie_requires_state() -> None:
     result = CliRunner().invoke(cli.bootstrap_dutchie_cmd, [])
     assert result.exit_code == 2  # click: missing required option
