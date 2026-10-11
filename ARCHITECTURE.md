@@ -517,7 +517,7 @@ overlay (its proprietary stages then resolve to registry stubs).
      `cost_tier` label was removed,
      audit M2). A homepage-less ("homeless") company gets a catalog of *only* the three
      directory rungs, since the homepage-based rungs would no-op anyway. **Rank 0 is the
-   first-party handle band** (2026-09-25): `hifyre_stores`, `breadstack_locations`,
+   first-party handle band** (2026-09-25): `hifyre_stores`, `tymber_stores` (2026-10-11), `breadstack_locations`,
    `flowhub_stores`, `treez_stores`, `tendy_locations` and `menu_apps` run BEFORE `next_data`,
    because a generic parser reading a platform storefront returns the location slug as a
    `custom` handle nothing routes, and that row used to win. **The engine stops at the first rung
