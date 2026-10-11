@@ -292,6 +292,15 @@
   program_term: medical marijuana
   agency: New Hampshire Department of Health and Human Services
   known_url: https://www.dhhs.nh.gov/
+  # DHHS's Therapeutic Cannabis Program page lists every Alternative Treatment Center dispensary —
+  # seven, under three operators (GraniteLeaf, Sanctuary ATC, Temescal Wellness) — as a tabbed
+  # component: the tab labels are the operators, one panel per operator follows in the same order,
+  # and each panel's list items are "street / City, NH zip / phone" with a Website link. No table,
+  # and the generic line-block reader found three of the seven and named them after the panels'
+  # lead-in sentences, so the `nh_dhhs` handler reads the tabs. Until 2026-10-11 the roster was the
+  # June Dutchie-pool bootstrap (5 rows). Verified live 2026-10-11: 7 stores, every one addressed.
+  list_url: https://www.dhhs.nh.gov/programs-services/population-health/therapeutic-cannabis/alternative-treatment-centers
+  list_type: nh_dhhs
 
 - abbr: NJ
   name: New Jersey
