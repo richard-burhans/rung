@@ -21,6 +21,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-12
 
+- **`http.TruncatedMenu` carries the status of the refusal that cut the walk**
+  (`http.stop_if_truncated(..., status=)`). The kind stays `broken`; the number is for a caller
+  deciding whether the host, not the page, shut the door — a 429 on page 12 says what a 429 on
+  page 1 does. Optional, so every existing caller is unchanged.
 - **`seed_companies.roster_fold` / `seed_companies.company_keys`** name the key a roster row seeds
   under and the two keys an existing company answers to, so a consumer that must meet a company on
   its key (a per-state website index, here recon's) calls the seeder's rule instead of copying it.

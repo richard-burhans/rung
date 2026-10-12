@@ -202,20 +202,25 @@ class TruncatedMenu(FetchRefused):
     may import ``rung.http``, and the copies are aliases of this one.
     """
 
-    def __init__(self, message: str, *, url: str | None = None) -> None:
-        super().__init__("broken", message, url=url)
+    def __init__(self, message: str, *, url: str | None = None, status: int | None = None) -> None:
+        super().__init__("broken", message, url=url, status=status)
 
 
-def stop_if_truncated(collected: int, where: object, why: str, *, url: str | None = None) -> None:
+def stop_if_truncated(collected: int, where: object, why: str, *, url: str | None = None,
+                      status: int | None = None) -> None:
     """Raise ``TruncatedMenu`` when a walk that has ALREADY gathered something fails partway.
 
     ``collected`` is what the walk holds (items, groups, pages — the caller's unit), ``where`` the
     page or category it failed on, ``why`` the failure. Nothing gathered means the failure is the
-    request's own refusal, which the caller raises instead; that branch is left to it.
+    request's own refusal, which the caller raises instead; that branch is left to it. ``status``
+    is the HTTP status of the refusal that cut the walk, when one did: the kind stays ``broken``
+    (we stopped), but a reader deciding whether the HOST shut the door — a 429 on page 12 says
+    the same thing as a 429 on page 1 — needs the number, and the message alone buries it.
     """
     if collected:
         raise TruncatedMenu(
-            f"menu truncated at {where} with {collected} item(s) already gathered: {why}", url=url)
+            f"menu truncated at {where} with {collected} item(s) already gathered: {why}",
+            url=url, status=status)
 
 
 def refusal(response: object, url: str, *, expect: str = "json",

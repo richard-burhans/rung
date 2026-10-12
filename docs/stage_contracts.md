@@ -413,7 +413,10 @@ ignores the return.
 
 A claim now ends **three** ways, not two. Besides `done` and `failed`, `queue.release` returns a
 target to `pending` **unworked** — the load-shedding path taken when the cross-worker rate gate
-(`rung.rate_gate`, `docs/distributed_scraping_design.md` §4) has no budget for that target's host.
+(`rung.rate_gate`, `docs/distributed_scraping_design.md` §4) has no budget for that target's host,
+and, since 2026-10-12, the path Stage 3 takes for every remaining store of a per-request host that
+has answered HTTP 429 this run (`host_limits.halts_on_rate_limit`): the host is one host on one
+egress, so its refusal is every store's, and asking the rest only keeps its counter pinned.
 It is worker-scoped exactly like `complete`, and it *decrements* the `attempts` that `_CLAIM`
 stamped, because nothing was attempted: without that, sustained throttling would walk every
 deferred target to `max_attempts` and permanently fail work that was never once tried. The
