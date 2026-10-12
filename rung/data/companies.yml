@@ -27,6 +27,8 @@ Maitri Medicinals: []
 MariMart: []
 OREGROWN:
   - OREGROWN CANNON BEACH   # OR roster files the Cannon Beach store under Redmond (2026-10-12)
+  - OREGROWN BEND           # store-less June-2026 company rows the refold cannot fold (no store, so no city);
+  - OREGROWN PORTLAND       #   the roster's own rows fold by their city already (2026-10-12)
 Organic Remedies: []
 RISE:
   - Rise               # wrong capitalisation

@@ -197,8 +197,12 @@ def test_companies_yml_folds_the_rows_whose_roster_city_is_wrong():
     conn = pg_conn()
     db.create_tables(conn)
     seed_companies.create_companies_table(conn)
+    # "OREGROWN BEND" / "OREGROWN PORTLAND" are aliased for the refold's sake: two store-less company
+    # rows carry those names, and a row with no store has no city to strip. Here, with no city at all,
+    # the alias is the only thing that folds them.
     for name, city, state in (("RISE Bristol", "Richmond", "VA"), ("OREGROWN CANNON BEACH", "REDMOND", "OR"),
-                              ("SWEET RELIEF ST. HELENS", "SAINT HELENS", "OR")):
+                              ("SWEET RELIEF ST. HELENS", "SAINT HELENS", "OR"), ("OREGROWN BEND", None, "OR"),
+                              ("OREGROWN PORTLAND", None, "OR")):
         db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state=state))
     conn.commit()
     alias_map = seed_companies.load_company_aliases(seed_companies._YAML_PATH, strict=True)
