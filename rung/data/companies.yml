@@ -25,11 +25,16 @@ Liberty: []
 Local Leaf by Penn Health Group: []
 Maitri Medicinals: []
 MariMart: []
+OREGROWN:
+  - OREGROWN CANNON BEACH   # OR roster files the Cannon Beach store under Redmond (2026-10-12)
 Organic Remedies: []
 RISE:
   - Rise               # wrong capitalisation
+  - RISE Bristol       # VA roster files the Bristol store under Richmond, so the storefront city never strips (2026-10-12)
 Restore Integrative Wellness Center: []
 Standard Farms: []
+SWEET RELIEF:
+  - SWEET RELIEF ST. HELENS # OR roster spells the city "SAINT HELENS", so the storefront suffix never matches (2026-10-12)
 Sunnyside:
   # Cresco's PA stores are licensed under several permit entities but all operate as the
   # Sunnyside retail brand (one shop.sunnyside.shop store list). Without these the legal-entity

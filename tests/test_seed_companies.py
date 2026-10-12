@@ -162,7 +162,7 @@ def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left(
     db.create_tables(conn)
     seed_companies.create_companies_table(conn)
     for name, state, city in (("10613 Northern LLC", "NY", None), ("Elevate 6010", "CO", "Denver"),
-                              ("Cookies Baltimore", "MD", "Baltimore"), ("RISE", "VA", "Bristol"),
+                              ("Cookies Baltimore", "MD", "Baltimore"), ("Harvest Moon", "OR", "Astoria"),
                               ("Dank 716", "NY", "Buffalo"), ("Bloc", "NJ", "Ewing")):
         cid = seed_companies.ensure_company(conn, name, state)
         if city:
@@ -171,7 +171,7 @@ def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left(
                 "scraped_at) VALUES (%s, %s, %s, 'browser', %s, %s, now())", (cid, name, state, name, city))
     for name, state, city in (("10613 Northern LLC", "NY", "Flushing"), ("ELEVATE", "CO", "Denver"),
                               ("Cookies", "MD", "Baltimore"), ("Native Roots", "CO", "Denver"),
-                              ("RISE Bristol", "VA", "Richmond"), ("Dank716", "NY", "Buffalo"),
+                              ("Harvest Moon Astoria", "OR", "Warrenton"), ("Dank716", "NY", "Buffalo"),
                               ("BLOC", "NJ", "Somerset")):
         db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state=state))
     conn.commit()
@@ -179,11 +179,28 @@ def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left(
     pairs = seed_companies._collect_brand_state_pairs(conn, alias_map)
     # "Dank 716" is found by its RAW spelling: the fold reads 716 as a street number and keys the row
     # "dank". "Bloc" likewise — companies.yml aliases it to "Bloc Dispensary", which is not its own
-    # fold. "RISE Bristol" filed under Richmond is the limit no seeder can cross: the roster's own
-    # city is wrong, so the storefront suffix cannot be seen until Stage 2 gives the row a store in
-    # Bristol — which is also why the refold reads a fresh, store-less row as a singleton. It seeds apart.
+    # fold. "Harvest Moon Astoria" filed under Warrenton is the limit no seeder can cross: the roster's
+    # own city is wrong, so the storefront suffix cannot be seen until Stage 2 gives the row a store in
+    # Astoria — which is also why the refold reads a fresh, store-less row as a singleton. It seeds
+    # apart, unless companies.yml names the spelling (the three live cases of 2026-10-12 do).
     assert pairs == [("10613 Northern LLC", "NY"), ("Bloc", "NJ"), ("Cookies Baltimore", "MD"),
-                     ("Dank 716", "NY"), ("Elevate 6010", "CO"), ("Native Roots", "CO"),
-                     ("RISE Bristol", "VA")]
+                     ("Dank 716", "NY"), ("Elevate 6010", "CO"), ("Harvest Moon Astoria", "OR"),
+                     ("Native Roots", "CO")]
     inserted, skipped = seed_companies._seed(conn, pairs)
-    assert inserted == [("Native Roots", "CO"), ("RISE Bristol", "VA")] and skipped == 5
+    assert inserted == [("Harvest Moon Astoria", "OR"), ("Native Roots", "CO")] and skipped == 5
+
+
+def test_companies_yml_folds_the_rows_whose_roster_city_is_wrong():
+    # The three rows the fixed seeder still inserted on 2026-10-12: the roster files each store under a
+    # city that is not the one in its name, so no fold can see the storefront suffix. An alias can.
+    from rung.models import DispensaryRecord
+    conn = pg_conn()
+    db.create_tables(conn)
+    seed_companies.create_companies_table(conn)
+    for name, city, state in (("RISE Bristol", "Richmond", "VA"), ("OREGROWN CANNON BEACH", "REDMOND", "OR"),
+                              ("SWEET RELIEF ST. HELENS", "SAINT HELENS", "OR")):
+        db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state=state))
+    conn.commit()
+    alias_map = seed_companies.load_company_aliases(seed_companies._YAML_PATH, strict=True)
+    assert seed_companies._collect_brand_state_pairs(conn, alias_map) == [
+        ("OREGROWN", "OR"), ("RISE", "VA"), ("SWEET RELIEF", "OR")]
