@@ -19,6 +19,25 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-12
+
+- **`seed-companies` no longer recreates the rows a refold merged away** (`rung.seed_companies`).
+  `extract_brand` strips one tail per pass, and a refold keys a company by applying it to a name the
+  seeder had already extracted once, so the table held the second fold while the seeder keyed roster
+  rows and its existing-row lookup on the first; re-run against a refolded table it inserted a second
+  company for 62 operators. `seed_companies.fold` is now the one key, shared by the seeder and the
+  refold; the seeder applies it to the row it would store, and finds existing rows under that key —
+  computed with the modal city of their stores (`store_cities`), the city the refold sees — or under
+  their raw spelling. A seed followed by a refold dry run now reads "0 groups fold".
+- **A bare trailing "Co" is a legal suffix** (`rung.text.strip_legal_entity`): "High Lakes Cannabis
+  Co" folds to "High Lakes" as "High Lakes Cannabis Co." always did. The dotted-only pattern let a
+  roster's bare spelling seed beside the brand its dotted twin had folded into. A separator the roster
+  left dangling ("FIRE CANNABIS CO -") is trimmed before the suffix strips, not only after them, so it
+  no longer hides the suffix behind it.
+- **A name with no letter or digit is a placeholder** (`rung.text.is_placeholder_name`): a
+  spreadsheet's empty-cell dash (`---`) no longer seeds a company. Letterless brands (`4:19`) and
+  licensees named after their address stay real roster rows.
+
 ### Changed — 2026-10-11
 
 - **New Hampshire roster** (`rung.sources.extract`, `data/states.yml`): a `nh_dhhs` list type reads

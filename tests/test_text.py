@@ -39,10 +39,12 @@ def test_is_placeholder_name() -> None:
     for junk in [
         "[Equity Retailer]", "Cookies Brentwood [Equity Retailer]", "Treez Demo",
         "Test Toker", "DO NOT USE Serra", "DNU Jungle Boys", "Data Not Available",
-        "TBD", "284.000141-CL", "284.CL.4445088", "Calma Weho (Duplicate", "", None,
+        "TBD", "284.000141-CL", "284.CL.4445088", "Calma Weho (Duplicate", "", None, "---", "— —",
     ]:
         assert is_placeholder_name(junk), junk
-    for real in ["Curaleaf", "Zen Leaf", "Trulieve", "Cookies Florida", "RISE", "Sunnyside*"]:
+    # A letterless brand and a licensee named after its address are real roster rows, not junk.
+    for real in ["Curaleaf", "Zen Leaf", "Trulieve", "Cookies Florida", "RISE", "Sunnyside*",
+                 "4:19", "2+2", "420/7", "5403 QUEBEC ST LLC"]:
         assert not is_placeholder_name(real), real
 
 
@@ -464,8 +466,10 @@ def test_a_co_dot_behind_another_suffix_is_still_seen() -> None:
     assert normalize_brand(extract_brand("Green Leaf Wellness Co. LLC", "Colonie")) == \
         normalize_brand(extract_brand("Green Leaf Wellness Co."))
     assert strip_legal_entity("Groove Cannabis Co. Inc.") == "Groove Cannabis"
-    # A "Co" with no period was never a suffix here, and still is not.
-    assert strip_legal_entity("Bar Co LLC") == "Bar Co"
+    # A bare "Co" is a suffix too, since 2026-10-12. This line pinned the opposite for three days,
+    # and the live table measured that day held 64 pairs the dotted-only pattern had kept apart —
+    # "High Lakes" beside "High Lakes Cannabis Co", "True North" beside "True North Cannabis Co".
+    assert strip_legal_entity("Bar Co LLC") == "Bar"
 
 
 def test_a_connector_left_dangling_by_the_strips_is_trimmed_from_the_display_name() -> None:
@@ -707,3 +711,17 @@ def test_menu_type_reads_janes_menu_path_before_the_name() -> None:
     assert menu_type_of("RISE Carlisle", "https://risecannabis.com/.../1547/adult-use-menu/") == "adult_use"
     # The path wins over a name that disagrees: the path is the platform's own routing.
     assert menu_type_of("RISE Carlisle (MED)", "https://x/1547/recreational-menu/") == "adult_use"
+
+
+def test_a_bare_trailing_co_is_the_same_legal_suffix_as_a_dotted_one():
+    # The dotted-only pattern let "SHINYBUD CANNABIS CO" seed beside the "ShinyBud" its dotted twin
+    # had folded into. The guards still hold: a bare generic is not exposed by the strip. A suffix
+    # BEHIND a storefront city is still one pass away ("SHINYBUD CANNABIS CO BLENHEIM" -> "SHINYBUD
+    # CANNABIS CO") — the seeder's second pass is what reaches it (`seed_companies.fold`).
+    assert extract_brand("SHINYBUD CANNABIS CO") == "SHINYBUD"
+    assert extract_brand("High Lakes Cannabis Co") == extract_brand("High Lakes") == "High Lakes"
+    assert extract_brand("Cannabis Co") == "Cannabis Co"
+    assert extract_brand("SHINYBUD CANNABIS CO BLENHEIM", "BLENHEIM") == "SHINYBUD CANNABIS CO"
+    # A dangling separator no longer hides the suffix behind it.
+    assert extract_brand("FIRE CANNABIS CO -") == extract_brand("FIRE CANNABIS CO") == "FIRE"
+    assert extract_brand("Ninny Goat & Co.") == "Ninny Goat"

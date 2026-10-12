@@ -88,10 +88,29 @@ and not their contents.
 - **Re-run:** idempotent per state.
 
 ### seed-companies — `seed_companies.py`
-- **In:** `dispensaries.name/state`; `companies.yml` aliases.
+- **In:** `dispensaries.name/city/state`; `companies.yml` aliases; `company_stores.city` — the modal
+  store city of each EXISTING company (`seed_companies.store_cities`), which is the city its fold sees.
 - **Out:** `companies` — **this module owns the table** (creates it; `db.create_tables` does not).
   Insert-if-absent on `(canonical_name, state)`; never deletes.
-- **Re-run:** additive only.
+- **The key is `seed_companies.fold`** — one pass of `extract_brand` with the name's own city, then
+  the `companies.yml` alias — **shared with the refold migration and the pool bootstrap, and the
+  seeder applies it TWICE to a roster row.** `extract_brand` strips one tail per call ("Ziggyz
+  Cannabis (MacArthur)" → "Ziggyz Cannabis" → "Ziggyz"), and the refold keys a stored
+  `canonical_name` by applying it to a name the seeder had already extracted once — so the table
+  holds the second fold. The seeder keys a roster group as the refold would key the row it is about
+  to insert (`fold(fold(name, city).brand, None)`), and finds every existing row under the refold's
+  key of it (`fold(name, modal store city)`, via `existing_spellings`) AND under its raw spelling —
+  so a row the refold renamed ("RISE"), one it never touched ("Elevate 6010", "10613 Northern LLC"),
+  one the fold over-strips ("Dank 716" → "Dank") and one whose alias target is not its own fold
+  ("Bloc" → "Bloc Dispensary") all keep the row the table holds. Invariant, pinned by
+  `tests/test_seed_companies.py::test_a_seeded_name_is_what_the_refold_would_fold_it_to` and by
+  the refold's own test suite: a seed followed by a refold dry run reads "0 groups fold". It was
+  not true until 2026-10-12: the seeder keyed on `normalize_brand` of the raw name, and re-run on
+  2026-10-11 it recreated 62 of the phantoms the refold had merged away. What it still cannot do:
+  fold a roster row whose own city is wrong ("RISE Bristol" filed under Richmond, "SWEET RELIEF ST.
+  HELENS" under Saint Helens) — only a Stage-2 store in that city, or a `companies.yml` alias, can
+  say so, and the refold reads a store-less row the same way.
+- **Re-run:** additive only — it never re-folds the table; that is the refold's job.
 
 ### recon — `rung_intel/recon.py`
 - **In:** `companies.id/canonical_name/state`; `dispensaries.name/**city**/website` (homepage
@@ -123,14 +142,20 @@ and not their contents.
   reaches no company. It exists because the
   2026-10-05 re-run of IL and OH did this to four companies whose names the 2026-07-14 refold had
   moved out from under their override keys, and only a hand-taken snapshot showed it.
-- **The website index MUST be keyed exactly as `seed_companies` keys a company** — `normalize_brand(
-  extract_brand(name, city))` — **and the stored `canonical_name` must be re-passed through
-  `extract_brand` before lookup, not merely normalized.** It is a string written by whatever
-  `extract_brand` looked like the day that company was seeded, so comparing it raw against a
-  freshly-derived key compares an old fold with a new one. Both mismatches were live: the roster row
-  "Fresh Elizabeth" filed its website under a key the lookup never asked for, and recorded `no_url` —
-  *our* key mismatch, persisted as a fact about the operator ("it publishes no website") while the
-  roster published it.
+- **The website index and the lookup MUST pass through the same transform** — today
+  `normalize_brand(extract_brand(name, city))` on the roster side **and the stored `canonical_name`
+  re-passed through `extract_brand` before lookup, not merely normalized.** It is a string written
+  by whatever `extract_brand` looked like the day that company was seeded, so comparing it raw
+  against a freshly-derived key compares an old fold with a new one. Both mismatches were live: the
+  roster row "Fresh Elizabeth" filed its website under a key the lookup never asked for, and recorded
+  `no_url` — *our* key mismatch, persisted as a fact about the operator ("it publishes no website")
+  while the roster published it. ⚠ **This is ONE pass of `extract_brand` on each side, while
+  `seed_companies.fold` (2026-10-12) keys a company by the SECOND pass**, so a roster row whose first
+  fold is not its second ("Ziggyz Cannabis (MacArthur)" → "Ziggyz Cannabis", company "Ziggyz") files
+  its website under a key the lookup never asks for. Measured 2026-10-12 over every company: keying
+  both sides through `fold` would give 11 companies a roster website, take it from 5 and re-point 4
+  — a change to what the next `recon --state` run writes, so it is NOT folded into the seeder fix;
+  it waits for its own change set, read against the healthcheck forecast before the run.
 - **`company_recon` is DERIVED FROM the roster and nothing re-derives it when the roster changes.**
   Recon is a *snapshot* of the read. NJ's roster was repaired 2026-07-09 (3 rows → 317) and re-scraped
   07-12; recon last ran **06-17**, when NJ had no roster and hence no websites, and recorded `no_url`

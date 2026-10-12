@@ -136,3 +136,54 @@ def test_collect_skips_placeholder_junk_rows():
     conn.commit()
     pairs = seed_companies._collect_brand_state_pairs(conn, {})
     assert [b for b, _ in pairs] == ["Curaleaf"]  # only the real operator survives
+
+
+def test_a_seeded_name_is_what_the_refold_would_fold_it_to():
+    # `extract_brand` strips one tail per pass. The refold applies it to a name the seeder already
+    # extracted, so the table holds the SECOND fold — and the seeder must key and name a row the
+    # same way, or the next run inserts "Ziggyz Cannabis" beside the "Ziggyz" the refold left.
+    from rung.models import DispensaryRecord
+    conn = pg_conn()
+    db.create_tables(conn)
+    seed_companies.create_companies_table(conn)
+    for name, city in (("Ziggyz Cannabis (MacArthur)", "Oklahoma City"), ("Ziggyz Cannabis (Yukon)", "Yukon"),
+                       ("Trulieve Cannabis Dispensary (Findlay)", "Findlay")):
+        db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state="OK"))
+    conn.commit()
+    assert seed_companies._collect_brand_state_pairs(conn, {}) == [("Trulieve", "OK"), ("Ziggyz", "OK")]
+
+
+def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left():
+    # Rows the 2026-10-11 run duplicated: one the refold never needed to touch and so left under a
+    # legal suffix, one under a street number, and one whose storefront city only its STORES know.
+    # All three key through `fold` with the company's modal store city, so the roster lands on them.
+    from rung.models import DispensaryRecord
+    conn = pg_conn()
+    db.create_tables(conn)
+    seed_companies.create_companies_table(conn)
+    for name, state, city in (("10613 Northern LLC", "NY", None), ("Elevate 6010", "CO", "Denver"),
+                              ("Cookies Baltimore", "MD", "Baltimore"), ("RISE", "VA", "Bristol"),
+                              ("Dank 716", "NY", "Buffalo"), ("Bloc", "NJ", "Ewing")):
+        cid = seed_companies.ensure_company(conn, name, state)
+        if city:
+            conn.execute(
+                "INSERT INTO company_stores (company_id, canonical_name, state, source, name, city, "
+                "scraped_at) VALUES (%s, %s, %s, 'browser', %s, %s, now())", (cid, name, state, name, city))
+    for name, state, city in (("10613 Northern LLC", "NY", "Flushing"), ("ELEVATE", "CO", "Denver"),
+                              ("Cookies", "MD", "Baltimore"), ("Native Roots", "CO", "Denver"),
+                              ("RISE Bristol", "VA", "Richmond"), ("Dank716", "NY", "Buffalo"),
+                              ("BLOC", "NJ", "Somerset")):
+        db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state=state))
+    conn.commit()
+    alias_map = seed_companies.load_company_aliases(seed_companies._YAML_PATH, strict=True)
+    pairs = seed_companies._collect_brand_state_pairs(conn, alias_map)
+    # "Dank 716" is found by its RAW spelling: the fold reads 716 as a street number and keys the row
+    # "dank". "Bloc" likewise — companies.yml aliases it to "Bloc Dispensary", which is not its own
+    # fold. "RISE Bristol" filed under Richmond is the limit no seeder can cross: the roster's own
+    # city is wrong, so the storefront suffix cannot be seen until Stage 2 gives the row a store in
+    # Bristol — which is also why the refold reads a fresh, store-less row as a singleton. It seeds apart.
+    assert pairs == [("10613 Northern LLC", "NY"), ("Bloc", "NJ"), ("Cookies Baltimore", "MD"),
+                     ("Dank 716", "NY"), ("Elevate 6010", "CO"), ("Native Roots", "CO"),
+                     ("RISE Bristol", "VA")]
+    inserted, skipped = seed_companies._seed(conn, pairs)
+    assert inserted == [("Native Roots", "CO"), ("RISE Bristol", "VA")] and skipped == 5

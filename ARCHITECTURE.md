@@ -359,7 +359,7 @@ through the core's `db.py` or return records):
 
 | Module | Role |
 |---|---|
-| `seed_companies.py` | Derive `companies` from `dispensaries` brands (canonicalized via `companies.yml` + `text.normalize_brand` spelling-fold). **Owns `companies`** (creates it via `create_companies_table`). Own entry point. |
+| `seed_companies.py` | Derive `companies` from `dispensaries` brands (canonicalized via `companies.yml` + `text.normalize_brand` spelling-fold). **`fold` is the one operator key** — one pass of `extract_brand` + alias, as the refold migration keys a stored row — shared by the refold and the pool bootstrap; the seeder applies it twice to a roster row (the refold's key of the row it would store) and `existing_spellings` finds every existing row under that key, computed with its modal store city (`store_cities`), or under its raw spelling, so a re-seed keeps the row the refold left instead of recreating the phantom beside it (62 did on 2026-10-11). **Owns `companies`** (creates it via `create_companies_table`). Own entry point. |
 | `bootstrap.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). |
 | `analyze.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). |
 | `cli.py` | Thin Click front-end. Orchestrates everything; owns the persistence for `recon` and the per-state dedupe claim. |

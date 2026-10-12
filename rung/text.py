@@ -64,8 +64,13 @@ _TRAILING_GENERIC_RE = re.compile(
 # Every strip is guarded by `_keeps_a_brand`, and that guard is load-bearing here: "Elixir Holdings"
 # folds to "Elixir", so a strip that ate the whole name would collapse unrelated licensees into one
 # phantom operator — the same failure the numeric guard exists to prevent.
+#
+# "Co" matches with or without its period (2026-10-12). The dotted-only pattern let a roster's
+# "SHINYBUD CANNABIS CO BLENHEIM" seed beside the "ShinyBud" its dotted twin had folded into; measured
+# that day, 133 roster rows and 168 companies carry the suffix bare, and the table already held
+# "High Lakes" beside "High Lakes Cannabis Co" and "HWY 99" beside "Hwy 99 Cannabis Co".
 _LEGAL_ENTITY_RE = re.compile(
-    r"[,\s]+(?:l\.?l\.?c\.?|inc\.?|incorporated|corp\.?|corporation|co\.|company|holdings?|group|"
+    r"[,\s]+(?:l\.?l\.?c\.?|inc\.?|incorporated|corp\.?|corporation|co\.?|company|holdings?|group|"
     r"enterprises?|ventures?|partners|l\.?l\.?p\.?|lp|ltd\.?|limited|management|properties|"
     r"investments?)\.?$",
     re.IGNORECASE,
@@ -94,9 +99,10 @@ def strip_legal_entity(name: str) -> str:
       suffix is only noise when a real brand survives it.
 
     A strip keeps its periods. Trimming them too turned "Co. LLC" into "Co" after the first pass, which
-    the suffix pattern ("co." with its dot) no longer saw: "Green Leaf Wellness Co. LLC" folded to
+    the suffix pattern (then "co." with its dot) no longer saw: "Green Leaf Wellness Co. LLC" folded to
     `greenleafwellnessco` while the operator's own "Green Leaf Wellness Co." folded to
-    `greenleafwellness` — two keys for one store (2026-10-09).
+    `greenleafwellness` — two keys for one store (2026-10-09). The pattern sees a bare "Co" too since
+    2026-10-12 (the roster writes it both ways), so the periods are kept for the display name alone.
     """
     current = name.strip()
     while True:
@@ -238,10 +244,19 @@ _LICENSE_RE = re.compile(r"^\d{2,}[\d.\-]*(-cl)?$|\.cl\.\d|^\d{3}\.\d{3}", re.IG
 
 def is_placeholder_name(name: str | None) -> bool:
     """True for a non-operator junk row — a test/demo/equity-tag/no-data stub, a roster header
-    label, or a bare license number — that must not become a dispensary or a company."""
+    label, a bare license number, or a name with no letter or digit in it ("---", a spreadsheet's
+    empty-cell dash) — that must not become a dispensary or a company.
+
+    Deliberately NOT a placeholder: a letterless brand ("4:19", "2+2", "420/7" — all licensed
+    stores), and a licensee named after its address ("5403 QUEBEC ST LLC", "960 bloomingdale road
+    LLC"). Both looked like junk on the 2026-10-11 seed and both are real roster rows; dropping them
+    here would drop them from `dispensaries`, and a store the comparison never sees is a worse
+    defect than an ugly operator key.
+    """
     if not name or not name.strip():
         return True
-    return bool(_PLACEHOLDER_RE.search(name) or _LICENSE_RE.search(name.strip()))
+    return not any(ch.isalnum() for ch in name) or bool(
+        _PLACEHOLDER_RE.search(name) or _LICENSE_RE.search(name.strip()))
 
 
 # ── product-category normalization (the cross-platform `category_std` standard) ──
@@ -786,6 +801,11 @@ def extract_brand(name: str, city: str | None = None) -> str:
         # (space-anchored) generic regex also catch a candidate that is ITSELF a lone generic word.
         if candidate and _keeps_a_brand(_TRAILING_GENERIC_RE.sub("", " " + candidate).strip()):
             normalized = candidate
+    # A separator the roster left dangling ("FIRE CANNABIS CO -") hides the suffix behind it from
+    # every END-anchored strip below, so it goes first; the same trim runs again at the end for a
+    # connector a strip exposes ("Ninny Goat & Co." -> "Ninny Goat &"). Two roster names and 14
+    # companies carried one on 2026-10-12, and the Washington row seeded a second "FIRE".
+    normalized = _DANGLING_CONNECTOR_RE.sub("", normalized) or normalized
     # Drop the legal-entity suffix BEFORE the generic one — a licence roster stacks both
     # ("FLOYD'S CANNABIS COMPANY"), and the generic strip only ever looks at the END of the name, so
     # a "Cannabis" hiding behind a "Company" is invisible to it. Same ordering lesson as the
