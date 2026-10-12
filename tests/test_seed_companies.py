@@ -163,7 +163,8 @@ def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left(
     seed_companies.create_companies_table(conn)
     for name, state, city in (("10613 Northern LLC", "NY", None), ("Elevate 6010", "CO", "Denver"),
                               ("Cookies Baltimore", "MD", "Baltimore"), ("Harvest Moon", "OR", "Astoria"),
-                              ("Dank 716", "NY", "Buffalo"), ("Bloc", "NJ", "Ewing")):
+                              ("Dank 716", "NY", "Buffalo"), ("Bloc", "NJ", "Ewing"),
+                              ("Joint Venture 1111 LLC", "NY", None)):
         cid = seed_companies.ensure_company(conn, name, state)
         if city:
             conn.execute(
@@ -172,7 +173,7 @@ def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left(
     for name, state, city in (("10613 Northern LLC", "NY", "Flushing"), ("ELEVATE", "CO", "Denver"),
                               ("Cookies", "MD", "Baltimore"), ("Native Roots", "CO", "Denver"),
                               ("Harvest Moon Astoria", "OR", "Warrenton"), ("Dank716", "NY", "Buffalo"),
-                              ("BLOC", "NJ", "Somerset")):
+                              ("BLOC", "NJ", "Somerset"), ("Joint Venture 1111 LLC", "NY", "Buffalo")):
         db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state=state))
     conn.commit()
     alias_map = seed_companies.load_company_aliases(seed_companies._YAML_PATH, strict=True)
@@ -183,11 +184,14 @@ def test_a_company_the_refold_already_holds_is_found_under_any_spelling_it_left(
     # own city is wrong, so the storefront suffix cannot be seen until Stage 2 gives the row a store in
     # Astoria — which is also why the refold reads a fresh, store-less row as a singleton. It seeds
     # apart, unless companies.yml names the spelling (the three live cases of 2026-10-12 do).
+    # "Joint Venture 1111 LLC" was seeded before the address strip existed: the roster row folds
+    # twice to "Joint" while the stored name's own fold stops at "Joint Venture", so it is found
+    # under the key the seeder would give the stored name today.
     assert pairs == [("10613 Northern LLC", "NY"), ("Bloc", "NJ"), ("Cookies Baltimore", "MD"),
                      ("Dank 716", "NY"), ("Elevate 6010", "CO"), ("Harvest Moon Astoria", "OR"),
-                     ("Native Roots", "CO")]
+                     ("Joint Venture 1111 LLC", "NY"), ("Native Roots", "CO")]
     inserted, skipped = seed_companies._seed(conn, pairs)
-    assert inserted == [("Harvest Moon Astoria", "OR"), ("Native Roots", "CO")] and skipped == 5
+    assert inserted == [("Harvest Moon Astoria", "OR"), ("Native Roots", "CO")] and skipped == 6
 
 
 def test_companies_yml_folds_the_rows_whose_roster_city_is_wrong():

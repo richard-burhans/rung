@@ -142,20 +142,21 @@ and not their contents.
   reaches no company. It exists because the
   2026-10-05 re-run of IL and OH did this to four companies whose names the 2026-07-14 refold had
   moved out from under their override keys, and only a hand-taken snapshot showed it.
-- **The website index and the lookup MUST pass through the same transform** — today
-  `normalize_brand(extract_brand(name, city))` on the roster side **and the stored `canonical_name`
-  re-passed through `extract_brand` before lookup, not merely normalized.** It is a string written
-  by whatever `extract_brand` looked like the day that company was seeded, so comparing it raw
-  against a freshly-derived key compares an old fold with a new one. Both mismatches were live: the
-  roster row "Fresh Elizabeth" filed its website under a key the lookup never asked for, and recorded
-  `no_url` — *our* key mismatch, persisted as a fact about the operator ("it publishes no website")
-  while the roster published it. ⚠ **This is ONE pass of `extract_brand` on each side, while
-  `seed_companies.fold` (2026-10-12) keys a company by the SECOND pass**, so a roster row whose first
-  fold is not its second ("Ziggyz Cannabis (MacArthur)" → "Ziggyz Cannabis", company "Ziggyz") files
-  its website under a key the lookup never asks for. Measured 2026-10-12 over every company: keying
-  both sides through `fold` would give 11 companies a roster website, take it from 5 and re-point 4
-  — a change to what the next `recon --state` run writes, so it is NOT folded into the seeder fix;
-  it waits for its own change set, read against the healthcheck forecast before the run.
+- **The website index and the lookup are keyed by the seeder's own functions, not beside them**
+  (2026-10-12): `brand_website_index` files a roster row under `seed_companies.roster_fold` (the key
+  the seeder would store it under) and `planned_homepage` asks for the stored `canonical_name`'s
+  `seed_companies.company_keys` — its current fold with the modal city of its stores
+  (`seed_companies.store_cities`), the key the seeder would give the stored name today (a row seeded
+  before a fold rule existed and never refolded is one pass short of its roster), then its raw
+  spelling. The stored name is a string written by
+  whatever `extract_brand` looked like the day that company was seeded, so comparing it raw against
+  a freshly-derived key compares an old fold with a new one; and a hand-kept copy of the seeder's key
+  drifted twice — built without the city (the roster row "Fresh Elizabeth" filed its website under a
+  key the lookup never asked for, and recorded `no_url`: *our* key mismatch, persisted as a fact
+  about the operator while the roster published it), then left on ONE pass of `extract_brand` when
+  the seeder moved to two (#933), so "Ziggyz Cannabis (MacArthur)" filed under a key the company
+  "Ziggyz" never asked for. `coverage_healthcheck.recon_would_change` asks the same function with the
+  same city, so its forecast is the run's.
 - **`company_recon` is DERIVED FROM the roster and nothing re-derives it when the roster changes.**
   Recon is a *snapshot* of the read. NJ's roster was repaired 2026-07-09 (3 rows → 317) and re-scraped
   07-12; recon last ran **06-17**, when NJ had no roster and hence no websites, and recorded `no_url`

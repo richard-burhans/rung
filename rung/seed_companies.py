@@ -38,6 +38,32 @@ def fold(name: str, city: str | None, alias_map: dict[str, str]) -> tuple[str, s
     return normalize_brand(brand), brand
 
 
+def roster_fold(name: str, city: str | None, alias_map: dict[str, str]) -> tuple[str, str]:
+    """``(key, brand)`` for a ROSTER row: `fold` with the row's own city, then `fold` again with none —
+    the refold's key of the company row the seeder would store for it. The seeder groups by this; so
+    does recon's website index, because the two must meet on one key."""
+    _key, canonical = fold(name, city, alias_map)
+    return fold(canonical, None, alias_map)
+
+
+def company_keys(name: str, city: str | None, alias_map: dict[str, str]) -> tuple[str, str, str]:
+    """The three keys an EXISTING company answers to, most specific first:
+
+    * its `fold` with the modal city of its stores — exactly as the refold keys it;
+    * its `roster_fold` — the key the seeder would give the stored name if it met it on a roster
+      today. A row seeded before a fold rule existed and never refolded ("Joint Venture 1111 LLC",
+      "Matchbox Cannabis 605 Rogers") is one pass short of the roster rows it came from;
+    * `normalize_brand` of the stored spelling — for the cases the fold gets wrong ("Dank 716" ->
+      "Dank"; an alias target that is not its own fold, "Bloc" -> "Bloc Dispensary").
+
+    `existing_spellings` indexes under all three; recon's lookup asks all three. Every key names the
+    same operator — none reaches across to another — so more keys can only find a row, never confuse
+    two.
+    """
+    key, _brand = fold(name, city, alias_map)
+    return key, roster_fold(name, city, alias_map)[0], normalize_brand(name)
+
+
 def dominant_spelling(spellings: Counter[str]) -> str:
     """The display name for a folded brand group: the most frequent spelling in the roster,
     tie-broken toward the most readable (more spaces, then longer, then alphabetical) so the
@@ -55,10 +81,9 @@ def _collect_brand_state_pairs(
     for name, city, state in conn.execute("SELECT name, city, state FROM dispensaries"):
         if is_placeholder_name(name):
             continue  # never seed a junk roster row (license-number/header/test stub) as a company
-        # Pass the row's own city so a storefront suffix folds ("Zen Leaf Dayton" -> "Zen Leaf"),
-        # then key the result as the refold keys a stored row — the second pass, see `fold`.
-        _key, canonical = fold(name, city, alias_map)
-        key, brand = fold(canonical, None, alias_map)
+        # The row's own city folds a storefront suffix ("Zen Leaf Dayton" -> "Zen Leaf"); the second
+        # pass keys the result as the refold keys a stored row — see `fold`.
+        key, brand = roster_fold(name, city, alias_map)
         state_val = state if state else "Unknown"
         groups[(key, state_val)][brand] += 1
     # A group the companies table ALREADY holds keeps the spelling it was seeded under. The dominant
@@ -106,9 +131,8 @@ def existing_spellings(conn: db.DBConn, alias_map: dict[str, str]) -> dict[tuple
     cities = store_cities(conn)
     spellings: dict[tuple[str, str], str] = {}
     for cid, name, state in conn.execute("SELECT id, canonical_name, state FROM companies ORDER BY id"):
-        key, _brand = fold(name, cities.get(cid), alias_map)
-        spellings.setdefault((key, state), name)
-        spellings.setdefault((normalize_brand(name), state), name)
+        for key in company_keys(name, cities.get(cid), alias_map):
+            spellings.setdefault((key, state), name)
     return spellings
 
 

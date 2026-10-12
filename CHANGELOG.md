@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Changed — 2026-10-12
+
+- **`seed_companies.roster_fold` / `seed_companies.company_keys`** name the key a roster row seeds
+  under and the two keys an existing company answers to, so a consumer that must meet a company on
+  its key (a per-state website index, here recon's) calls the seeder's rule instead of copying it.
+  The seeder's own behaviour is unchanged.
+
 ### Fixed — 2026-10-12
 
 - **`seed-companies` no longer recreates the rows a refold merged away** (`rung.seed_companies`).
