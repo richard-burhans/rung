@@ -1034,6 +1034,13 @@ def _distinct_new_stores(records: list[CompanyStoreRecord]) -> int:
 # directory-only aggregator arrives.
 _AGGREGATOR_SOURCES = frozenset({"weedmaps_directory", "leafly_directory"})
 AGGREGATOR_PLATFORMS = frozenset({"weedmaps", "leafly"})
+# A geo-radius sweep answers for the stores inside its circles, not for an operator's list: a
+# store near a circle's edge drops out of one sweep and back into the next (the anchors are
+# jittered on purpose), so its shrink is COVERAGE, never a closure. Dutchie's directory is such a
+# sweep that is NOT an aggregator — its handles are real menus — so it must be named here or the
+# same-source exception below would retire a store every time the jitter missed it (three Ontario
+# operators lost Peterborough in one sweep, 2026-10-12).
+_GEO_SWEEP_SOURCES = frozenset({"dutchie_directory"})
 
 
 class HandleServed(Protocol):
@@ -1170,9 +1177,10 @@ def replace_company_stores(
     of them wins as long as it retains ≥ ``_MENU_UPGRADE_RETENTION`` of the stores (so 4 empty
     Leafly listings yield to 3 Jane handles, but a 15→1 collapse is still rejected), and a
     result with **fewer** never clobbers (no downgrading real menus to a bigger empty-aggregator
-    sweep) — unless it is the SAME non-aggregator source answering again with ≥
-    ``_HANDLE_UPGRADE_RETENTION`` of the distinct stores, which is that source recording a closure
-    or a store not yet online (Curaleaf's API, 2026-09-25). Only when both sides have the same
+    sweep) — unless it is the SAME source answering again with ≥ ``_HANDLE_UPGRADE_RETENTION`` of
+    the distinct stores AND that source answers for the operator's own list (neither an aggregator
+    nor a geo-radius sweep, ``_GEO_SWEEP_SOURCES``), which is that source recording a closure or a
+    store not yet online (Curaleaf's API, 2026-09-25). Only when both sides have the same
     menu-platform count does the distinct-count / freshness / handle-upgrade logic below decide.
     Returns ``(resulting_count, kept_prior)`` — ``kept_prior`` is True when better prior data was
     retained.
@@ -1206,10 +1214,12 @@ def replace_company_stores(
         # that source recording a closure or a store not yet online — Curaleaf's own API dropped
         # Hartford CT and filed five stores PRERELEASE, and until 2026-09-25 no re-discovery could
         # ever retire them, because a shrink from the one authoritative list read as a flaky scrape.
+        # Only a source that answers for the OPERATOR's list qualifies: an aggregator's or a geo
+        # sweep's shrink (`_GEO_SWEEP_SOURCES`) is its coverage moving, and is refused as before.
         new_sources = {record.source or "" for record in records}
         overwrite = (
             new_sources == _stored_sources(conn, company_id, abbr)
-            and not (new_sources & _AGGREGATOR_SOURCES)
+            and not (new_sources & (_AGGREGATOR_SOURCES | _GEO_SWEEP_SOURCES))
             and not any((record.platform or "") in AGGREGATOR_PLATFORMS for record in records)
             and new_distinct >= existing_distinct * _HANDLE_UPGRADE_RETENTION
         )

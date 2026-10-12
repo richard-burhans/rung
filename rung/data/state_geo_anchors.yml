@@ -9,10 +9,11 @@
 # pool stops growing. A state with no anchors yields an empty pool — the dutchie
 # rung then returns nothing and the company falls through to the next method.
 #
-# Each sweep randomly jitters every anchor by up to _ANCHOR_JITTER_DEG (~7 mi, in
-# sources/dutchie.py) so repeat runs don't send byte-identical coordinates (anti-
-# fingerprint). The jitter is bounded inside the radius margin, so place anchors with
-# the usual overlap and the in-range store set stays stable run to run.
+# Each sweep randomly jitters every anchor by up to _ANCHOR_JITTER_DEG per axis (~9 mi, in
+# dutchie.py) so repeat runs don't send byte-identical coordinates (anti-fingerprint). A
+# store within the guaranteed radius (~66 mi) of some anchor is in every run; one beyond
+# that from EVERY anchor comes and goes with the jitter. Place anchors until that band is
+# empty — measure a placement against the stores it must hold before adding it here.
 #
 # PA verified: these 5 anchors @ 75 mi deduped to 107 PA Dutchie dispensaries.
 
@@ -187,6 +188,11 @@ MI:
   - [43.4195, -83.9508]   # Saginaw
   - [46.5436, -87.3954]   # Marquette (UP)
   - [45.7453, -87.0646]   # Escanaba (UP)
+  - [42.1167, -86.4542]   # Benton Harbor (New Buffalo's 34 stores sat 68.8 mi from Kalamazoo)
+  - [47.1211, -88.5694]   # Houghton (Keweenaw)
+  - [45.8202, -88.0659]   # Iron Mountain (Iron River / the western UP)
+  - [45.8661, -84.7275]   # St. Ignace (the Straits; Gould City sat 66.9 mi from any anchor)
+  - [45.0617, -83.4327]   # Alpena (Oscoda / the Sunrise side, 75 mi from Saginaw)
 
 # CO: medical stores from the co_med roster; retail stores bootstrapped from the Dutchie pool.
 CO:
@@ -377,6 +383,14 @@ AL:
 # The abbr must be quoted: bare ON is a YAML 1.1 boolean.
 "ON":
   - [43.6532, -79.3832]   # Toronto (covers Hamilton/Niagara/Barrie/K-W overlap)
+  - [44.3091, -78.3197]   # Peterborough (Kawarthas; 69.6 mi from Toronto — in the jitter band)
+  - [44.3894, -79.6903]   # Barrie (Orillia/Collingwood/Wasaga Beach — all in the band from Toronto)
+  - [45.3265, -79.2186]   # Huntsville (Muskoka/Dorset)
+  - [45.8267, -77.1110]   # Pembroke (Ottawa Valley; 73 mi from Ottawa)
+  - [49.4169, -82.4328]   # Kapuskasing (Highway 11 west of Timmins)
+  - [49.7231, -86.9514]   # Geraldton (Greenstone / Longlac — unreachable from Thunder Bay)
+  - [48.7196, -86.3817]   # Marathon (north shore: White River / Manitouwadge)
+  - [49.7797, -92.8370]   # Dryden (74 mi from Kenora)
   - [45.4215, -75.6972]   # Ottawa
   - [44.2312, -76.4860]   # Kingston (Toronto–Ottawa gap)
   - [42.9849, -81.2453]   # London

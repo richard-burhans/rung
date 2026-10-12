@@ -206,8 +206,10 @@ and not their contents.
     physical stores** (by address; raw row counts let a double-counting extractor entrench
     itself), OR new adds `external_id` handles where stored had none AND retains ≥0.8 of the
     distinct count — and, decided before either, MORE menu-bearing handles win at ≥0.5 retention
-    while fewer never clobber (except the SAME non-aggregator source re-answering at ≥0.8 distinct
-    retention: a closure or a not-yet-online store, recorded by the one list that knows), where
+    while fewer never clobber (except the SAME source re-answering at ≥0.8 distinct retention when
+    that source is the operator's own list — not an aggregator and not the Dutchie geo sweep,
+    `_GEO_SWEEP_SOURCES`, whose shrink is a jittered circle's edge moving: a closure or a
+    not-yet-online store, recorded by the one list that knows), where
     "menu-bearing" means a non-aggregator handle that `routing.handle_served_predicate` (the Stage-3
     routing table) says a rung serves. Zero-yield re-runs keep prior data.
   - `access_methods` via `db.record_access_attempt` (db.py) — one upsert **per method attempt,

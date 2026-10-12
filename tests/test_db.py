@@ -778,6 +778,26 @@ def test_replace_lets_the_same_source_retire_a_store_it_no_longer_lists() -> Non
     assert names == {"Meriden", "Stamford", "Groton", "Manchester"}
 
 
+def test_replace_refuses_a_geo_sweep_that_merely_missed_a_store() -> None:
+    """Three Ontario operators each lost Peterborough in one Dutchie directory sweep (2026-10-12):
+    the city sits 69.6 mi from the Toronto anchor, the 75 mi circle is jittered, and the same-source
+    exception read the miss as a closure. A geo sweep answers for its circles, not for the operator's
+    list, so its shrink is refused like an aggregator's — the store comes back with the next sweep."""
+    conn = _conn()
+    def _swept(name, handle):
+        return CompanyStoreRecord(company_id=1, canonical_name="Acme", state="PA", source="dutchie_directory",
+                                  name=name, platform="dutchie", external_id=handle, address=f"{name} St")
+    for name in ("Toronto", "Cobourg", "Peterborough", "Oshawa", "Barrie"):
+        db.insert_company_store(conn, _swept(name, f"D-{name}"))
+    conn.commit()
+    missed = [_swept(n, f"D-{n}") for n in ("Toronto", "Cobourg", "Oshawa", "Barrie")]
+    n, kept = db.replace_company_stores(conn, 1, "PA", missed)
+    assert kept is True and n == 5
+    # the sweep that finds it again is a tie on handles and the fresher result: accepted
+    n, kept = db.replace_company_stores(conn, 1, "PA", [*missed, _swept("Peterborough", "D-Peterborough")])
+    assert kept is False and n == 5
+
+
 def test_replace_still_refuses_a_shrink_from_another_source_or_below_retention() -> None:
     conn = _conn()
     for name in ("A", "B", "C", "D", "E"):
