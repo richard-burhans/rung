@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-12
 
+- **`recon` re-asks a homepage the edge challenged** (`cf-mitigated: challenge`, up to
+  `_CHALLENGE_RETRIES` times in the same session) before filing anything, and files a challenge that
+  stays as `edge_challenge` rather than under the status its page carried. Cloudflare's managed
+  challenge falls on a fresh session's first hit and clears for that session more often than not,
+  and a probe that asked once recorded an operator's whole recon row from the edge's first
+  impression.
 - **`http.TruncatedMenu` carries the status of the refusal that cut the walk**
   (`http.stop_if_truncated(..., status=)`). The kind stays `broken`; the number is for a caller
   deciding whether the host, not the page, shut the door — a 429 on page 12 says what a 429 on

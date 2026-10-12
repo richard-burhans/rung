@@ -131,7 +131,13 @@ and not their contents.
   open work. The listing vote is still a vote: the probe that follows must reach the site, and
   `_probe_one` records what it found.
 - **Out:** `company_recon` full-row upsert per company (`db.upsert_recon`, reference_db.py). Failure is a
-  row with `error` set; success has `error IS NULL` + `platform`/`confidence`.
+  row with `error` set; success has `error IS NULL` + `platform`/`confidence`. A challenge the edge
+  names in a header (`rung.http.edge_challenge`) is re-asked up to `recon._CHALLENGE_RETRIES` times
+  in the same session before anything is filed, because Cloudflare's falls on a fresh session's first
+  hit and then clears for that session more often than not — GraniteLeaf NH, up and on Dutchie, was
+  filed `http_403` with no platform from one ask (2026-10-12). One that outlasts the re-asks is filed
+  `edge_challenge`, never under the status its page carried: the address was judged, and the host
+  never answered.
 - **Re-run:** re-probes and overwrites — **every row of the state, including the ones it can no
   longer derive.** A company whose homepage the override file, the roster or its own listings no longer yields is
   rewritten `no_url`, and Stage 2 then walks it homeless, so a Jane/SweedPOS winner that read the
