@@ -391,6 +391,17 @@ AL:
   - [49.7231, -86.9514]   # Geraldton (Greenstone / Longlac — unreachable from Thunder Bay)
   - [48.7196, -86.3817]   # Marathon (north shore: White River / Manitouwadge)
   - [49.7797, -92.8370]   # Dryden (74 mi from Kenora)
+  # 2026-10-13: the 24 roster stores beyond every circle, in seven clusters; a roster store the
+  # sweep cannot reach is a recall gap for every Dutchie operator with a store there.
+  - [44.4400, -81.3900]   # Port Elgin (Bruce shore: Tiverton/Kincardine/Southampton/Sauble/Wiarton)
+  - [47.5100, -79.6800]   # New Liskeard (Timiskaming: Haileybury/Englehart/Larder Lake)
+  - [46.3800, -82.6500]   # Elliot Lake (north shore, between Sudbury and the Sault)
+  - [47.8400, -83.4000]   # Chapleau (Highway 129; 104 mi from Elliot Lake)
+  - [47.9900, -84.7800]   # Wawa (Highway 17; 65 mi from Chapleau, 95 from Marathon)
+  - [48.6100, -93.4000]   # Fort Frances (Rainy River; 85 mi from the nearest circle)
+  - [48.7600, -91.6200]   # Atikokan (Highway 11 between Fort Frances and Thunder Bay)
+  - [51.0200, -93.8300]   # Red Lake (91 mi north of Dryden)
+  - [50.4300, -88.7700]   # Armstrong (Highway 527; 94 mi north of Thunder Bay)
   - [45.4215, -75.6972]   # Ottawa
   - [44.2312, -76.4860]   # Kingston (Toronto–Ottawa gap)
   - [42.9849, -81.2453]   # London

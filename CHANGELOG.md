@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-13
 
+- **Ontario's Dutchie directory sweep reaches its far north and the Bruce shore.** Nine anchors
+  (Port Elgin, New Liskeard, Elliot Lake, Chapleau, Wawa, Fort Frances, Atikokan, Red Lake,
+  Armstrong) put every one of the province's licensed stores inside a sweep circle; 24 roster
+  stores in seven clusters were beyond every circle, which is a recall gap for any Dutchie operator
+  with a store there.
+
 - **A render that runs out of time is `failed`, not `broken`.** The browser rung filed every
   candidate failure as `Broken` — "fix the rung" — including a page still loading when its 55 s
   budget ran out, which says nothing about the rung and nothing about the world. A new outcome,
