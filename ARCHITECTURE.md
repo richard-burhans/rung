@@ -549,8 +549,8 @@ overlay (its proprietary stages then resolve to registry stubs).
     failure AND on an empty/short page before the server's own total (nine fetchers returned
     that fragment until 2026-09-26; keep-the-best is no backstop above half the prior count).
     The runner turns the kind into `access.MethodOutcome` (`Blocked` / `Unavailable` / `Broken`),
-    plus `Unequipped` for THIS MACHINE lacking a tool (Chromium) — the one outcome that writes no
-    row. Stage 1's twin is `extract.PartialRoster`: a roster handler that gathered rows and then
+    plus `Unequipped` for THIS MACHINE lacking a tool (no Chromium, or a Chrome that will not
+    launch) — the one outcome that writes no row. Stage 1's twin is `extract.PartialRoster`: a roster handler that gathered rows and then
     failed raises it, and `run_extract_states` keeps the prior roster. Enforced by
     `tests/test_truncation_contract.py` (one home for the signal, derived from `PURE_HELPERS`),
     `tests/test_paged_fragments.py` (the empty-page shape per fetcher, the Stage-1 handlers),

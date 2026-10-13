@@ -101,8 +101,9 @@ class Broken(MethodOutcome):
 class Unequipped(MethodOutcome):
     """THIS MACHINE cannot run this method — the rung and the target are both fine.
 
-    A missing executable is not a broken rung. Raising `Broken` for it tells a reader to repair code
-    that is correct, and persists a per-target verdict that was really a fact about the container.
+    A missing executable is not a broken rung, and neither is one that will not launch. Raising
+    `Broken` for either tells a reader to repair code that is correct, and persists a per-target
+    verdict that was really a fact about the container.
 
     **`run_target` deliberately records NO attempt row for this**, which is the only outcome that
     withholds. The library half of this workspace states the same rule for its own checks: an absent

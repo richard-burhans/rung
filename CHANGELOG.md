@@ -21,6 +21,11 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-12
 
+- **A Chrome that will not launch is `Unequipped`, not `Broken`.** The outcome's own docstring
+  already said a missing executable is a fact about the machine and writes no row; a binary that is
+  present and will not come up is the same fact, and was persisted as a per-target `broken` for every
+  company that reached the browser tier while the box's Chrome was down.
+
 - **A geo-radius sweep's shrink is no longer a closure.** The keep-the-best replace's same-source
   exception (a source re-answering with fewer handles over ≥ 80 % of the stores records a closure)
   now applies only to a source that answers for the operator's own list: `_GEO_SWEEP_SOURCES`
