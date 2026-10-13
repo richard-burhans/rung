@@ -7,6 +7,7 @@ from rung.text import (
     dominant_terpene,
     extract_brand,
     is_bare_generic,
+    is_keyless,
     is_placeholder_name,
     menu_type_of,
     normalize_brand,
@@ -750,6 +751,21 @@ def test_is_bare_generic_is_the_one_rule_the_runner_and_the_healthcheck_ask() ->
     assert is_bare_generic("Cannabis") and is_bare_generic("CANNABIS DISPENSARY") and is_bare_generic("Marijuana")
     assert not is_bare_generic("Cannabis Cannabis") and not is_bare_generic("Moonfire")
     assert not is_bare_generic("Cannabis 247")   # the numbered shape `_strip_store_suffix` already protects
+
+
+def test_a_strip_that_leaves_a_stub_under_three_characters_keeps_the_whole_name() -> None:
+    """New York's "NY Cannabis Dispensary LLC" (Johnstown) was keyed "NY" — a token of every New York
+    chain slugged `…-ny` — and handed 37 other operators' listings; Ontario's "T CANNABIS" was keyed "T"
+    (2026-10-13). The storefront-city fold has refused a stub this short all along."""
+    assert extract_brand("NY Cannabis Dispensary LLC", "Johnstown") == "NY Cannabis Dispensary"
+    assert extract_brand("T CANNABIS", "SMITHS FALLS") == "T CANNABIS"
+    assert extract_brand("T CANNABIS - Renfrew", "RENFREW") == "T CANNABIS"
+    assert extract_brand("Oz Cannabis", "Buffalo") == "Oz Cannabis"
+    # A licensee's legal wrapper still comes off a short brand: the stub IS the brand there, and the
+    # runner refuses it a directory on its own.
+    assert extract_brand("MJ LLC") == "MJ"
+    assert is_keyless("NY") and is_keyless("T") and is_keyless("MJ") and is_keyless("Cannabis")
+    assert not is_keyless("NY Cannabis Dispensary") and not is_keyless("T CANNABIS") and not is_keyless("Oz Cannabis")
 
 
 def test_the_unguarded_strip_is_public_so_a_repair_can_ask_what_the_old_rule_produced() -> None:

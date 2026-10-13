@@ -21,6 +21,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-13
 
+- **A brand that strips down to a one- or two-letter stub keeps its whole name.** The same hole as
+  the bare generic, one step over: "NY Cannabis Dispensary LLC" became the company "NY", a token of
+  every New York chain slugged `…-ny`, and was handed 37 other operators' listings; "T CANNABIS"
+  became "T". The generic strip now keeps the floor the storefront-city fold has always kept
+  (`_MIN_BRAND_CHARS`, three characters); `is_keyless` is the one public rule for both halves. The
+  legal-entity strip alone waives the floor: "MJ LLC" still trades as "MJ".
+
 - **A brand that strips down to a bare generic keeps its whole name.** `extract_brand` drops one
   trailing descriptor ("Sessions Cannabis" → "Sessions") and used to keep the remainder whatever it
   was, so a store licensed "CANNABIS CANNABIS" became the company "Cannabis". The bare descriptor is

@@ -87,6 +87,26 @@ def strip_trailing_generic(value: str) -> str:
     return _TRAILING_GENERIC_RE.sub("", value).strip()
 
 
+#: The floor under a brand KEY. A one- or two-character stub ("NY", "T", "MJ") is a coincidence waiting
+#: to happen: the directory rungs match a brand's tokens as a subset of the chain and its slug as a
+#: prefix, and "ny" is a token of every New York chain. `_strip_storefront_city` has refused a stub this
+#: short since the fold landed; since 2026-10-13 the generic strip refuses it too.
+_MIN_BRAND_CHARS = 3
+
+
+def is_keyless(value: str) -> bool:
+    """True when `value` cannot serve as an operator key: only a generic descriptor, or shorter than
+    `_MIN_BRAND_CHARS`.
+
+    THE one rule for "this name is a bucket". `_keeps_a_brand` refuses a strip that would produce one;
+    the private Stage-2 runner refuses to ask a directory for a company so named (the Johnstown store
+    licensed "NY Cannabis Dispensary LLC" was keyed "NY" and handed 37 other operators' listings on
+    2026-10-13, Ontario's "T CANNABIS" keyed "T"); the private health check and repair find the ones
+    that already exist.
+    """
+    return is_bare_generic(value) or len(value.strip()) < _MIN_BRAND_CHARS
+
+
 def is_bare_generic(value: str) -> bool:
     """True when `value` is *only* a generic descriptor — "Cannabis", "Dispensary", "Marijuana".
 
@@ -121,7 +141,9 @@ def strip_legal_entity(name: str) -> str:
     current = name.strip()
     while True:
         stripped = _LEGAL_ENTITY_RE.sub("", current).strip(" ,")
-        if stripped == current or not _keeps_a_brand(stripped):
+        # No length floor here: a licensee "MJ LLC" trades as "MJ", and the stub is the brand; the
+        # runner still refuses so short a key a directory (`is_keyless`), so keeping it costs nothing.
+        if stripped == current or not _keeps_a_brand(stripped, min_chars=1):
             return current
         current = stripped
 
@@ -755,15 +777,15 @@ def _strip_storefront_city(brand: str, city: str | None) -> str:
     # Keep the full name when stripping would leave nothing, a dangling connector ("Harvest of
     # Whitehall"), or a too-short stub (≤2 chars like "JO"/"MJ" — a coincidental prefix risks
     # merging unrelated operators; a real short brand staying per-city is the safe failure).
-    if len(folded) < 3 or last_token in _CITY_CONNECTORS:
+    if len(folded) < _MIN_BRAND_CHARS or last_token in _CITY_CONNECTORS:
         return brand
     return folded
 
 
-def _keeps_a_brand(stripped: str) -> bool:
+def _keeps_a_brand(stripped: str, *, min_chars: int = _MIN_BRAND_CHARS) -> bool:
     """True when what remains after a generic-descriptor strip is still a usable brand.
 
-    Four ways a strip can eat the name, and all four have been observed in the roster:
+    Five ways a strip can eat the name, and all five have been observed in the roster:
 
     * **nothing left** — the name *was* the descriptor;
     * **a bare article** — "The Dispensary" must stay "The Dispensary", not become "The";
@@ -776,11 +798,18 @@ def _keeps_a_brand(stripped: str) -> bool:
       as a PREFIX), so a company keyed on it claims every store carrying the word: Ontario's
       "Cannabis" held 147 Dutchie listings on 2026-10-13, each some other operator's store, and dedupe
       then folded the owner's own row under it. `strip_legal_entity` refuses the same collapse through
-      this test, `_strip_store_suffix` through `is_bare_generic` directly.
+      this test, `_strip_store_suffix` through `is_bare_generic` directly;
+    * **a stub too short to be a key** — "NY Cannabis Dispensary LLC" (Johnstown, New York) must stay
+      "NY Cannabis Dispensary", not become "NY", and "T CANNABIS" (Ontario) must stay "T CANNABIS", not
+      "T". A two-letter brand is a token of, or a prefix on, half the pool ("ny" is in every New York
+      chain slug), and the storefront-city fold has refused the same stub all along
+      (`_MIN_BRAND_CHARS`). Both halves of this rule are `is_keyless`, which the runner, the health
+      check and the repair ask too; `strip_legal_entity` alone waives the floor (``min_chars``).
     """
     if not stripped or stripped.lower() in _ARTICLES:
         return False
-    return any(ch.isalpha() for ch in stripped) and not is_bare_generic(stripped)
+    return (any(ch.isalpha() for ch in stripped) and not is_bare_generic(stripped)
+            and len(stripped) >= min_chars)
 
 
 _DANGLING_CONNECTOR_RE = re.compile(r"(?:\s+[&+/,-]+)+\s*$")
