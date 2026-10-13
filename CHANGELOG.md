@@ -19,6 +19,15 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Changed — 2026-10-13
+
+- **A render that runs out of time is `failed`, not `broken`.** The browser rung filed every
+  candidate failure as `Broken` — "fix the rung" — including a page still loading when its 55 s
+  budget ran out, which says nothing about the rung and nothing about the world. A new outcome,
+  `access.Unanswered`, is that case: silence with a reason, recorded as the honest `failed` and
+  re-explored like any other unknown. An exception that escapes the render is still ours and still
+  `broken`.
+
 ### Changed — 2026-10-12
 
 - **A Chrome that will not launch is `Unequipped`, not `Broken`.** The outcome's own docstring

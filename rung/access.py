@@ -32,13 +32,15 @@ MethodRunner = Callable[[db.DBConn, str, MethodHint], Awaitable[MethodResult]]
 
 # ── the outcome vocabulary ────────────────────────────────────────────────────────────────────────
 #
-# A rung that returns nothing has said almost nothing. There are four reasons it might, and they call
-# for four different responses:
+# A rung that returns nothing has said almost nothing. The reasons it might each call for a different
+# response:
 #
 #   Unavailable  the WORLD says no. This target has no data by this route. Nothing to fix.
 #   Blocked      we were REFUSED. The data exists; this egress cannot have it. Rotate, back off, wait.
 #   Broken       WE are wrong. A dead URL, a changed payload, missing config. Fix the rung.
 #   Unequipped   THIS MACHINE cannot run the method. Nothing is wrong with the rung or the target.
+#   Unanswered   the target did not answer in the time we gave it. UNKNOWN — recorded as 'failed'
+#                with the reason, so it is re-explored like silence and never read as a verdict.
 #   (silence)    the rung returned nothing and did not say why → recorded as 'failed'.
 #
 # Collapsing these is this project's signature bug. Three times, a failure of OURS was persisted and
@@ -96,6 +98,20 @@ class Broken(MethodOutcome):
     """
 
     status = "broken"
+
+
+class Unanswered(MethodOutcome):
+    """The target did not answer in the time we gave it — unknown, which is not a verdict.
+
+    A page that is still loading when the render budget runs out has said nothing about the rung
+    (`Broken` would send a reader to repair correct code) and nothing about the world (`Unavailable`
+    is for a source that SAID no). It is silence with a reason, so it records the honest default,
+    `failed`, with the reason, and the re-exploration governor treats it like any other unknown.
+    Until 2026-10-13 the browser rung filed a render timeout as `broken`: 34 companies whose only
+    fault was a slow page, each asking to be "fixed".
+    """
+
+    status = "failed"
 
 
 class Unequipped(MethodOutcome):

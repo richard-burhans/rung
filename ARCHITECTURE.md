@@ -550,7 +550,9 @@ overlay (its proprietary stages then resolve to registry stubs).
     that fragment until 2026-09-26; keep-the-best is no backstop above half the prior count).
     The runner turns the kind into `access.MethodOutcome` (`Blocked` / `Unavailable` / `Broken`),
     plus `Unequipped` for THIS MACHINE lacking a tool (no Chromium, or a Chrome that will not
-    launch) — the one outcome that writes no row. Stage 1's twin is `extract.PartialRoster`: a roster handler that gathered rows and then
+    launch) — the one outcome that writes no row — and `Unanswered` for a target that did not
+    answer within its budget, which is `failed` with the reason and never `broken` (the browser
+    tier's render timeout). Stage 1's twin is `extract.PartialRoster`: a roster handler that gathered rows and then
     failed raises it, and `run_extract_states` keeps the prior roster. Enforced by
     `tests/test_truncation_contract.py` (one home for the signal, derived from `PURE_HELPERS`),
     `tests/test_paged_fragments.py` (the empty-page shape per fetcher, the Stage-1 handlers),
@@ -697,7 +699,7 @@ meaning what the entry above says.
 | Cross-worker rate limit | `rate_limit.py` (`token_buckets`) | per-host token bucket, non-blocking + caller-commits; §3-4 |
 | Cross-worker rate gate | `rate_gate.py` | the waiting orchestrator over it — own connection, jittered wait, deadline, fail-open-and-latch. Separate module so `rate_limit.py` stays commit-free |
 | Stage contracts | `docs/stage_contracts.md` | read/write matrix, write isolation, claim keys |
-| Access-method registry | `access.py` | `AccessMethod`, `run_target`, `ReExploreGovernor`, the `MethodOutcome` family (`Blocked`/`Unavailable`/`Broken`/`Unequipped`), `require_browser` |
+| Access-method registry | `access.py` | `AccessMethod`, `run_target`, `ReExploreGovernor`, the `MethodOutcome` family (`Blocked`/`Unavailable`/`Broken`/`Unequipped`/`Unanswered`), `require_browser` |
 | Refusal vocabulary (tier 0) | `http.py` | `make_session` (the chokepoint; honest until the overlay's registrar switches impersonation on), `FetchRefused` + `raise_for_refusal`/`refused_by`, `TruncatedMenu` + `stop_if_truncated` — contract 10 |
 | Partial-roster guard (Stage 1) | `sources/extract.py` (`PartialRoster`) | raised by the ArcGIS, CA DCC and Atlist handlers after rows were gathered; `run_extract_states` keeps the prior rows, offers the state to NEITHER later tier (render, AI) and records the attempt `failed` with the reason — contract 10 |
 | Served-handle seam | `reference_db.py` (`HandleServed`) ← `rung_intel/routing.py` (`handle_served_predicate`) | contract 11 |
