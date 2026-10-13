@@ -77,11 +77,25 @@ _LEGAL_ENTITY_RE = re.compile(
 )
 
 
-def _is_bare_generic(value: str) -> bool:
+def strip_trailing_generic(value: str) -> str:
+    """`value` without ONE trailing generic descriptor — "Sessions Cannabis" -> "Sessions" — UNGUARDED.
+
+    The primitive `extract_brand` applies behind `_keeps_a_brand`. Public so a repair can ask what the
+    unguarded strip produces: the one that retires a "Cannabis" company finds the roster row that
+    seeded it by asking which row's brand this reduces to the bucket's name.
+    """
+    return _TRAILING_GENERIC_RE.sub("", value).strip()
+
+
+def is_bare_generic(value: str) -> bool:
     """True when `value` is *only* a generic descriptor — "Cannabis", "Dispensary", "Marijuana".
 
     Such a string is not a brand; it is the word every brand contains. Keying on it folds unrelated
-    operators into one phantom company — the same failure `_keeps_a_brand` refuses for bare numbers.
+    operators into one phantom company — the same failure `_keeps_a_brand` refuses for bare numbers,
+    and since 2026-10-13 the one it refuses for this too. Public because the question outlives the
+    extractor: a roster can file a store under the descriptor itself, and a directory rung that is
+    asked for such a company matches every store carrying the word (the private runner refuses, and
+    the private health check reports one that already exists).
     `_TRAILING_GENERIC_RE` needs leading whitespace, so probe it against a padded copy.
     """
     return not _TRAILING_GENERIC_RE.sub("", f" {value}").strip()
@@ -107,7 +121,7 @@ def strip_legal_entity(name: str) -> str:
     current = name.strip()
     while True:
         stripped = _LEGAL_ENTITY_RE.sub("", current).strip(" ,")
-        if stripped == current or not _keeps_a_brand(stripped) or _is_bare_generic(stripped):
+        if stripped == current or not _keeps_a_brand(stripped):
             return current
         current = stripped
 
@@ -718,7 +732,7 @@ def _strip_store_suffix(brand: str) -> str:
             continue
         last = folded.lower().rsplit(" ", 1)[-1] if folded else ""
         if (len(folded) >= 3 and any(ch.isalpha() for ch in folded)
-                and last not in _CITY_CONNECTORS and not _is_bare_generic(folded)):
+                and last not in _CITY_CONNECTORS and not is_bare_generic(folded)):
             brand = folded
     return brand
 
@@ -749,17 +763,24 @@ def _strip_storefront_city(brand: str, city: str | None) -> str:
 def _keeps_a_brand(stripped: str) -> bool:
     """True when what remains after a generic-descriptor strip is still a usable brand.
 
-    Three ways a strip can eat the name, and all three have been observed in the roster:
+    Four ways a strip can eat the name, and all four have been observed in the roster:
 
     * **nothing left** — the name *was* the descriptor;
     * **a bare article** — "The Dispensary" must stay "The Dispensary", not become "The";
     * **no letters left** — "123 Cannabis" must stay "123 Cannabis", not become "123". A brand that is
       a bare number folds every unrelated numeric name in the state into one phantom company, which is
-      the very failure this whole area exists to prevent.
+      the very failure this whole area exists to prevent;
+    * **only a generic left** — "Cannabis Cannabis" (one Stratford, Ontario store) must stay
+      "Cannabis Cannabis", not become "Cannabis". The bare descriptor is the word every brand
+      contains, and the directory rungs match a brand's tokens as a SUBSET of a chain's (or its slug
+      as a PREFIX), so a company keyed on it claims every store carrying the word: Ontario's
+      "Cannabis" held 147 Dutchie listings on 2026-10-13, each some other operator's store, and dedupe
+      then folded the owner's own row under it. `strip_legal_entity` refuses the same collapse through
+      this test, `_strip_store_suffix` through `is_bare_generic` directly.
     """
     if not stripped or stripped.lower() in _ARTICLES:
         return False
-    return any(ch.isalpha() for ch in stripped)
+    return any(ch.isalpha() for ch in stripped) and not is_bare_generic(stripped)
 
 
 _DANGLING_CONNECTOR_RE = re.compile(r"(?:\s+[&+/,-]+)+\s*$")
@@ -799,7 +820,7 @@ def extract_brand(name: str, city: str | None = None) -> str:
         # keeps "California Street", but a bare "Cannabis" strips to nothing, so "Cannabis at the Green
         # Brier" must NOT collapse into the mega-generic "Cannabis" bucket. The leading space lets the
         # (space-anchored) generic regex also catch a candidate that is ITSELF a lone generic word.
-        if candidate and _keeps_a_brand(_TRAILING_GENERIC_RE.sub("", " " + candidate).strip()):
+        if candidate and _keeps_a_brand(strip_trailing_generic(" " + candidate)):
             normalized = candidate
     # A separator the roster left dangling ("FIRE CANNABIS CO -") hides the suffix behind it from
     # every END-anchored strip below, so it goes first; the same trim runs again at the end for a
@@ -812,7 +833,7 @@ def extract_brand(name: str, city: str | None = None) -> str:
     # storefront-city fold below, which fragmented one Virginia operator into ten companies.
     normalized = strip_legal_entity(normalized)
     # Drop one trailing generic descriptor, subject to the guards in `_keeps_a_brand`.
-    stripped = _TRAILING_GENERIC_RE.sub("", normalized).strip()
+    stripped = strip_trailing_generic(normalized)
     brand = stripped if _keeps_a_brand(stripped) else normalized
     # Store-level tail LAST, so it cannot cascade into the generic strip: "Ziggyz Cannabis
     # (MacArthur)" must fold to "Ziggyz Cannabis" (the brand), not to "Ziggyz" — the parenthetical
@@ -834,7 +855,7 @@ def extract_brand(name: str, city: str | None = None) -> str:
     # brand really is "Ziggyz Cannabis" — no city was removed there, so nothing was hidden, so the first
     # pass's verdict stands. We re-examine only what the city strip newly exposed.
     if folded != brand:
-        restripped = _TRAILING_GENERIC_RE.sub("", folded).strip()
+        restripped = strip_trailing_generic(folded)
         if _keeps_a_brand(restripped):
             folded = restripped
     # A connector the strips left dangling ("Ninny Goat & Co." -> "Ninny Goat &"). Display only: the

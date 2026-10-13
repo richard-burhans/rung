@@ -6,6 +6,7 @@ from rung.text import (
     category_overridden,
     dominant_terpene,
     extract_brand,
+    is_bare_generic,
     is_placeholder_name,
     menu_type_of,
     normalize_brand,
@@ -15,6 +16,7 @@ from rung.text import (
     normalize_strain_type,
     product_type_defaulted,
     strip_legal_entity,
+    strip_trailing_generic,
     terpene_floats,
     terpene_fold_residue,
 )
@@ -725,3 +727,35 @@ def test_a_bare_trailing_co_is_the_same_legal_suffix_as_a_dotted_one():
     # A dangling separator no longer hides the suffix behind it.
     assert extract_brand("FIRE CANNABIS CO -") == extract_brand("FIRE CANNABIS CO") == "FIRE"
     assert extract_brand("Ninny Goat & Co.") == "Ninny Goat"
+
+
+# ── A strip that leaves only the generic descriptor keeps the whole name ──────────────────────────
+# Ontario's one Stratford store licensed "CANNABIS CANNABIS" seeded a company named "Cannabis", and the
+# directory rungs match a brand's tokens as a SUBSET of the chain (or its slug as a PREFIX), so that
+# company was handed 147 Dutchie listings other operators own and dedupe folded the owners' own rows
+# under it (2026-10-13). The bare descriptor is the word every brand contains, not a brand.
+
+def test_a_strip_that_leaves_only_a_generic_keeps_the_whole_name() -> None:
+    assert extract_brand("CANNABIS CANNABIS", "STRATFORD") == "CANNABIS CANNABIS"
+    assert extract_brand("MARIJUANA CANNABIS", "RUSSELL") == "MARIJUANA CANNABIS"
+    # The city strip exposing a descriptor is re-examined too, and refused the same way.
+    assert extract_brand("Cannabis Dispensary Stratford", "Stratford") == "Cannabis Dispensary"
+    # A name that IS the descriptor stays itself, as it always did; a real brand still sheds it.
+    assert extract_brand("CANNABIS DISPENSARY", "BAYAMÓN") == "CANNABIS DISPENSARY"
+    assert extract_brand("Moonfire Cannabis - Port Elgin", "Port Elgin") == "Moonfire"
+    assert extract_brand("Sessions Cannabis - Kincardine", "KINCARDINE") == "Sessions"
+
+
+def test_is_bare_generic_is_the_one_rule_the_runner_and_the_healthcheck_ask() -> None:
+    assert is_bare_generic("Cannabis") and is_bare_generic("CANNABIS DISPENSARY") and is_bare_generic("Marijuana")
+    assert not is_bare_generic("Cannabis Cannabis") and not is_bare_generic("Moonfire")
+    assert not is_bare_generic("Cannabis 247")   # the numbered shape `_strip_store_suffix` already protects
+
+
+def test_the_unguarded_strip_is_public_so_a_repair_can_ask_what_the_old_rule_produced() -> None:
+    """The repair that retires a "Cannabis" company finds the roster row that seeded it by asking which
+    row's brand this reduces to the bucket's name."""
+    assert strip_trailing_generic("CANNABIS CANNABIS") == "CANNABIS"
+    assert strip_trailing_generic("Sessions Cannabis") == "Sessions"
+    assert strip_trailing_generic("Cannabis Dispensary") == "Cannabis"
+    assert strip_trailing_generic("Cannabis") == "Cannabis"   # the pattern needs the space a tail follows

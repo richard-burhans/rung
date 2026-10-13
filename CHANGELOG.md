@@ -21,6 +21,20 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-13
 
+- **A brand that strips down to a bare generic keeps its whole name.** `extract_brand` drops one
+  trailing descriptor ("Sessions Cannabis" → "Sessions") and used to keep the remainder whatever it
+  was, so a store licensed "CANNABIS CANNABIS" became the company "Cannabis". The bare descriptor is
+  the word every brand contains, and a directory sweep matches a brand's tokens as a subset of the
+  chain (or its slug as a prefix), so that company was handed 147 other operators' listings and
+  dedupe folded the owners' own rows under it. The strip is now refused when only a descriptor would
+  remain, like the bare-number and bare-article cases before it; `is_bare_generic` and
+  `strip_trailing_generic` are public so a runner, a health check or a repair can ask the same rule.
+
+- **Sessions' three roster spellings fold to the brand.** `companies.yml` aliases "Sessions Cannabis
+  Retail" (the Welland store's filed name), "Sessions Cannabis-Waterloo" (an unspaced hyphen the
+  storefront split never sees) and "Sessions Cannabis Heritage on Lansdowne" (a plaza, not a city) to
+  "Sessions"; each had seeded a company of its own beside the operator's 47 other stores.
+
 - **Ontario's Dutchie directory sweep reaches its far north and the Bruce shore.** Nine anchors
   (Port Elgin, New Liskeard, Elliot Lake, Chapleau, Wawa, Fort Frances, Atikokan, Red Lake,
   Armstrong) put every one of the province's licensed stores inside a sweep circle; 24 roster

@@ -125,6 +125,24 @@ def test_companies_yml_folds_cresco_entities_into_sunnyside():
     ]
 
 
+def test_companies_yml_folds_sessions_roster_spellings_into_one_operator():
+    """Three AGCO spellings the extractor cannot fold — the Welland store filed as "Sessions Cannabis
+    Retail" ("Retail" is a brand word elsewhere: Growers Retail, Sparq Retail), an unspaced hyphen at
+    Waterloo, Peterborough's plaza — each seeded a company beside "Sessions" (2026-10-13)."""
+    from rung.models import DispensaryRecord
+    conn = pg_conn()
+    db.create_tables(conn)
+    seed_companies.create_companies_table(conn)
+    for name, city in (("Sessions Cannabis - Kincardine", "KINCARDINE"), ("Sessions Cannabis Retail", "WELLAND"),
+                       ("Sessions Cannabis-Waterloo", "WATERLOO"),
+                       ("Sessions Cannabis Heritage on Lansdowne", "PETERBOROUGH")):
+        db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state="ON"))
+    conn.commit()
+    alias_map = seed_companies.load_company_aliases(seed_companies._YAML_PATH, strict=True)
+    pairs = seed_companies._collect_brand_state_pairs(conn, alias_map)
+    assert sorted(pairs) == [("Sessions", "ON")]
+
+
 def test_collect_skips_placeholder_junk_rows():
     # Junk roster rows (license number / header / test stub) must never become a company.
     from rung.models import DispensaryRecord

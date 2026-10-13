@@ -46,7 +46,10 @@ SCRIPTS_THAT_WRITE_ACCESS_METHODS = frozenset(
     {"state_bringup.py", "prune_orphan_targets.py", "repair_jane_hint.py",
      # moves a merged-away company's `company_stores` rows onto its survivor's key and drops the
      # twin's where the survivor already holds that method (a tested maintenance script, 2026-10-07)
-     "merge_duplicate_companies.py"})
+     "merge_duplicate_companies.py",
+     # drops the registry rows the directory rungs wrote for a company named only a generic
+     # descriptor ("Cannabis"), and every row of a phantom one (a tested maintenance script, 2026-10-13)
+     "retire_generic_buckets.py"})
 # The SET clause of an ``UPDATE company_stores …`` (captured up to WHERE / RETURNING / end-of-string),
 # so a column named only in a WHERE filter (a read) is not mistaken for a write.
 _COMPANY_STORES_SET = re.compile(

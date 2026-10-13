@@ -34,6 +34,11 @@ RISE:
   - Rise               # wrong capitalisation
   - RISE Bristol       # VA roster files the Bristol store under Richmond, so the storefront city never strips (2026-10-12)
 Restore Integrative Wellness Center: []
+Sessions:                     # sessions.ca, ~50 Ontario stores; 47 AGCO rows fold to the brand on their own
+  - Sessions Cannabis Retail                  # the roster files the Welland store under this name; "Retail" is a
+                                              #   brand word elsewhere (Growers Retail, Sparq Retail), so it is not stripped
+  - Sessions Cannabis-Waterloo                # an unspaced hyphen, which the storefront split never sees (2026-10-13)
+  - Sessions Cannabis Heritage on Lansdowne   # the Peterborough plaza, not a city, so nothing strips it (2026-10-13)
 Standard Farms: []
 SWEET RELIEF:
   - SWEET RELIEF ST. HELENS # OR roster spells the city "SAINT HELENS", so the storefront suffix never matches (2026-10-12)
