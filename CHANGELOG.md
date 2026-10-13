@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Changed — 2026-10-13
 
+- **Aces and VIP are one Ontario operator each.** `companies.yml` names "Aces Cannabis" / "Aces
+  Cannabis Co." as Aces (acescannabis.ca, Hawkesbury and Alfred) and "VIP Cannabis Co." / "VIP Cannabis
+  Company" as VIP, the chain Weedmaps slugs both ways for the same stores. Each had seeded three
+  companies that the fold already keyed together but a short-key guard kept apart for want of a shared
+  site; a spelling named here is the ruling that guard was waiting for.
+
 - **A brand that strips down to a one- or two-letter stub keeps its whole name.** The same hole as
   the bare generic, one step over: "NY Cannabis Dispensary LLC" became the company "NY", a token of
   every New York chain slugged `…-ny`, and was handed 37 other operators' listings; "T CANNABIS"

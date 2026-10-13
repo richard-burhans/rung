@@ -3,6 +3,9 @@
 # The seed_companies.py script builds a lookup table from this file.
 # Brands with no known aliases have an empty list.
 
+Aces:                         # acescannabis.ca — Hawkesbury ("Aces Cannabis 389 Co.") and Alfred, one operator; the
+  - Aces Cannabis             #   refold declines a four-letter key with no recon site, so these name the ruling
+  - Aces Cannabis Co.         #   (2026-10-13)
 Apothecarium Dispensary:
   - Keystone ReLeaf    # rebrand: keystonecannaremedies.com -> shop.apothecarium.com; its 3 PA stores (Allentown/Bethlehem/Stroudsburg) are Apothecarium's
 Ascend Dispensary: []
@@ -55,5 +58,8 @@ Trulieve:
   - Harvest of Whitehall   # Trulieve acquired Harvest HOC; harvesthoc.com redirects to trulieve.com and its 21 PA stores are the same physical Trulieve PA stores (identical addresses + Magento store-view codes), already handled via trulieve_rest — fold so the duplicate licensee collapses instead of yielding 21 menu-less rows
 Verilife:
   - Verilfe            # transposition typo (missing 'i')
+VIP:                          # one Ontario chain under three roster spellings; Weedmaps slugs the SAME stores both
+  - VIP Cannabis Co.          #   vip-cannabis-co-* and vip-cannabis-company-*; the refold declines a three-letter
+  - VIP Cannabis Company      #   key with no recon site, so these name the ruling (2026-10-13)
 Vytal Options: []
 Zen Leaf: []
