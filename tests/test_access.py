@@ -293,3 +293,43 @@ def test_a_crashing_rung_is_recorded_broken_and_the_ladder_continues() -> None:
     error = rows["cheap_and_crashing"][db.ACCESS_METHOD_COLUMNS.index("error")]
     assert status == "broken", f"a crashed rung must be `broken`, got {status!r}"
     assert "TypeError" in error
+
+
+# ── A rung declares the vantage it needs (2026-10-13, scraping design review item 5) ────────────
+
+
+def test_fits_vantage_accepts_unknowns_and_a_country_less_class_accepts_any_country() -> None:
+    AM = access.AccessMethod
+    assert access.fits_vantage(AM("x", 0, _Method([]), vantage=None, egress="direct"))
+    assert access.fits_vantage(AM("x", 0, _Method([]), vantage=frozenset({"residential"}), egress=None))
+    assert access.fits_vantage(AM("x", 0, _Method([]), vantage=frozenset({"residential"}), egress="residential:CA"))
+    assert access.fits_vantage(AM("x", 0, _Method([]), vantage=frozenset({"residential", "host"}), egress="host"))
+    assert not access.fits_vantage(AM("x", 0, _Method([]), vantage=frozenset({"residential", "host"}), egress="direct"))
+    assert not access.fits_vantage(AM("x", 0, _Method([]), vantage=frozenset({"residential:CA"}), egress="residential:US"))
+    assert not access.fits_vantage(AM("x", 0, _Method([]), vantage=frozenset({"residential:CA"}), egress="residential"))
+
+
+def test_a_rung_outside_the_vantage_writes_no_row_is_counted_and_does_not_reopen_the_ladder() -> None:
+    """A skipped rung has no attempt row, which `untried_cheaper` would otherwise read as "never
+    tried" and re-walk the full ladder for every costlier winner on every run."""
+    from collections import Counter
+
+    conn = _conn()
+    cheap = _Method([_store()])     # rank 1, but this box's egress is outside its vantage
+    costly = _Method([_store()])    # rank 9, the persisted winner
+    catalog = [
+        access.AccessMethod("cheap_directory", 1, cheap, vantage=frozenset({"residential"}), egress="direct"),
+        access.AccessMethod("costly_site", 9, costly),
+    ]
+    skips: Counter[str] = Counter()
+    assert _run(access.run_target(conn, "t", "k", catalog, vantage_skips=skips)) == ("costly_site", [cheap.records[0]])
+    assert cheap.calls == 0 and costly.calls == 1
+    assert skips == {"cheap_directory": 1}
+    rows = {r[0]: r for r in db.get_access_methods(conn, "t", "k")}
+    assert set(rows) == {"costly_site"}                       # no row for the skipped rung
+    # Second run: the winner is trusted; the skipped rung must not count as an untried cheaper rung.
+    _run(access.run_target(conn, "t", "k", catalog, vantage_skips=skips))
+    assert cheap.calls == 0 and costly.calls == 2 and skips == {"cheap_directory": 2}
+    # Without a counter the drop still happens, silently for the caller.
+    _run(access.run_target(conn, "t", "k", catalog))
+    assert cheap.calls == 0

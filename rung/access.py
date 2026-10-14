@@ -13,6 +13,7 @@ import asyncio
 import datetime
 import json
 import random
+from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -159,11 +160,33 @@ class AccessMethod:
     self-gating high-confidence method may be ranked into the cheap band so its complete
     result wins before a noisy generic rung shadows it ("quality vs cheapest"). The catalog
     is sorted by it in ``run_target``.
+
+    ``vantage`` is the set of egress classes the rung is KNOWN to work from (``residential``,
+    ``residential:CA``, ``host``, ``datacenter``, ``direct``; a class without a country accepts
+    any country), or None for "any". ``egress`` is the class THIS run will actually use for the
+    rung, resolved by whoever builds the catalog (it differs per rung: an aggregator rung rides
+    its own pool while the operator's rungs ride the operator's); None means unknown, which is
+    never a refusal. A rung whose egress is outside its vantage is skipped by ``run_target``
+    with NO attempt row — the same contract as `Unequipped`, because "this box cannot reach it
+    from here" is a fact about the machine and the registry must not carry it as a fact about a
+    target. Added 2026-10-13: a rung tried from the wrong egress wrote `failed`/`blocked` rows
+    that read as the target's doing, and a tier with no proxies configured goes direct silently.
     """
 
     name: str
     cost_rank: int
     run: MethodRunner
+    vantage: frozenset[str] | None = None
+    egress: str | None = None
+
+
+def fits_vantage(method: AccessMethod) -> bool:
+    """Whether the rung's resolved egress is one it works from. Unknown either way is yes."""
+    if method.vantage is None or method.egress is None:
+        return True
+    egress = method.egress
+    base = egress.split(":", 1)[0]
+    return egress in method.vantage or base in method.vantage
 
 
 def is_plausible(record: object) -> bool:
@@ -347,8 +370,16 @@ async def run_target(
     plausible: Callable[[object], bool] = is_plausible,
     max_yield: bool = False,
     quality_key: Callable[[list], Any] = len,
+    vantage_skips: Counter[str] | None = None,
 ) -> tuple[str | None, list]:
     """Run the ladder for one target, returning (winning_method, records).
+
+    A rung whose ``egress`` is outside its ``vantage`` (`fits_vantage`) is dropped from the ladder
+    BEFORE the winner-first order and the untried-cheaper test are computed — it writes no row, so
+    without the early drop a cheap skipped rung would read as "never tried" and re-open the full
+    walk for every costlier winner on every run. ``vantage_skips`` counts the drops per rung for
+    the caller to report once per run; a skipped winner is a run that looked at nothing, which the
+    caller must say out loud rather than file as an empty result.
 
     A stored winner is tried first and, on success, the cheaper rungs are skipped.
     The full ladder is walked cheapest-first instead when there is no winner, when
@@ -369,6 +400,13 @@ async def run_target(
     realized in this call's return value. The cheapest-first default is unchanged.
     """
     ladder = sorted(catalog, key=lambda method: method.cost_rank)
+    if vantage_skips is not None or any(not fits_vantage(m) for m in ladder):
+        kept = [m for m in ladder if fits_vantage(m)]
+        if vantage_skips is not None:
+            for m in ladder:
+                if not fits_vantage(m):
+                    vantage_skips[m.name] += 1
+        ladder = kept
     rows = {row[0]: row for row in db.get_access_methods(conn, target_type, target_key)}
 
     if max_yield:

@@ -257,8 +257,13 @@ whose limiter carries the optional per-request budget). See
 §3-4 and §9 Phase 3.
 
 **Generic mechanism:** `access.py` — the access-method registry.
-- `AccessMethod(name, cost_rank, run)` — one extraction method; `cost_rank` is
-  **try-priority** (lower = tried first; cost-informed, confidence-overridden).
+- `AccessMethod(name, cost_rank, run, vantage=None, egress=None)` — one extraction method; `cost_rank` is
+  **try-priority** (lower = tried first; cost-informed, confidence-overridden). `vantage` is the set of
+  egress classes the rung is known to work from (`residential`, `residential:CA`, `host`, `datacenter`,
+  `direct`; None = any) and `egress` the class this run resolved for it (`proxy_tiers.effective_tier`,
+  set by the catalog builder — per rung, since an aggregator rung rides its own pool); a rung outside its
+  vantage is dropped by `run_target` with NO row, before the winner-first order and the untried-cheaper
+  test, and counted in `vantage_skips` for the run's one-line report (2026-10-13).
 - `run_target(conn, target_type, target_key, catalog, *, governor)` — try the stored
   winner first; on failure, admitted staleness, or an UNTRIED method cheaper than the
   winner (a newly added rung gets one shot instead of being shadowed forever), re-walk

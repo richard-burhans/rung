@@ -19,6 +19,16 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-13
+
+- **A rung declares the vantage it needs.** `AccessMethod` gains `vantage` (the egress classes the
+  rung is known to work from — `residential`, `residential:CA`, `host`, `datacenter`, `direct`; None
+  for any) and `egress` (the class this run resolved for it). `run_target` drops a rung whose egress
+  is outside its vantage with no attempt row, before the winner-first order and the untried-cheaper
+  test, and counts the drop in `vantage_skips` for the caller to report. A rung tried from an egress
+  that cannot reach its platform used to write `failed`/`blocked` rows that read as the target's
+  doing; `fits_vantage` is the one rule.
+
 ### Changed — 2026-10-13
 
 - **Aces and VIP are one Ontario operator each.** `companies.yml` names "Aces Cannabis" / "Aces
