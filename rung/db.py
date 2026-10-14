@@ -70,6 +70,7 @@ if TYPE_CHECKING:  # real signatures for the reference API that __getattr__ dele
         replace_company_stores,
         replace_lifecycle_events,
         replace_store_products,
+        retire_listed_closures,
         set_state_list,
         set_store_canonical,
         set_store_location,

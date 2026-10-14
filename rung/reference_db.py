@@ -31,6 +31,7 @@ import contextlib
 import dataclasses
 import datetime
 import json
+from collections.abc import Mapping
 from typing import LiteralString, Protocol
 
 from psycopg.types.json import Jsonb
@@ -972,6 +973,43 @@ def insert_company_store(conn: DBConn, record: CompanyStoreRecord) -> None:
             now,
         ),
     )
+
+
+def retire_listed_closures(
+    conn: DBConn, company_id: int, abbr: str, retired: Mapping[tuple[str, str], str],
+) -> list[tuple[str, str]]:
+    """Delete one company's rows whose menu handle the SOURCE itself has retired, before the
+    keep-the-best comparison looks at them. Returns the handles removed; caller must commit.
+
+    ``retired`` is ``{(platform, external_id): reason}`` — a listing the directory returned WITH a
+    verdict (`dutchie.retired_handles`: ``closed``, or open and carrying no menu). That is a
+    positive statement about one store, which is not what the replace below refuses: a geo sweep
+    that merely did not return a store (a jittered circle's edge) says nothing, and its shrink is
+    refused so the store comes back with the next sweep. A store the sweep returned as closed does
+    not come back. Until 2026-10-14 the extractor dropped such listings silently, the operator's
+    list came back one store short, the shrink was refused, and the dead handle was asked for its
+    menu every day — 104 of the 128 failing Dutchie targets, for up to four months.
+
+    Kept and folded rows alike: a folded row carrying the handle would be re-picked by the next
+    fold. The orphaned snapshot falls to the orphan prune after its grace, the registry row to the
+    dashboard's orphan census, and the weekly observation stops seeing the store, which is how the
+    lifecycle dates the closure.
+    """
+    if not retired:
+        return []
+    rows = conn.execute(
+        "SELECT platform, external_id FROM company_stores "
+        "WHERE company_id = %s AND state = %s AND platform IS NOT NULL AND external_id IS NOT NULL",
+        (company_id, abbr),
+    ).fetchall()
+    gone = sorted({(str(p), str(e)) for p, e in rows if (str(p), str(e)) in retired})
+    for platform, external_id in gone:
+        conn.execute(
+            "DELETE FROM company_stores WHERE company_id = %s AND state = %s "
+            "AND platform = %s AND external_id = %s",
+            (company_id, abbr, platform, external_id),
+        )
+    return gone
 
 
 def delete_company_stores_for_company(conn: DBConn, company_id: int, abbr: str) -> int:

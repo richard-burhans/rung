@@ -19,6 +19,16 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-14
+
+- **A directory listing's own verdict retires its menu handle.** `retire_listed_closures` removes a
+  company's rows whose handle the source has returned with a verdict (closed, or open with no
+  catalogue) before the keep-the-best comparison looks, so the shrink that follows is a replace of
+  equals rather than the geo-sweep miss the rule rightly refuses. Until now the extractor dropped a
+  closed listing silently, the operator's list came back one store short, the shrink was refused,
+  and the dead handle was asked for its menu every day: 104 of the 128 Dutchie menu targets failing
+  on a kept handle were storefronts the directory itself had marked closed.
+
 ### Added — 2026-10-13
 
 - **A rung declares the vantage it needs.** `AccessMethod` gains `vantage` (the egress classes the

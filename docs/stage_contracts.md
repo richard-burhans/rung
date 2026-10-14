@@ -209,7 +209,10 @@ and not their contents.
     while fewer never clobber (except the SAME source re-answering at ≥0.8 distinct retention when
     that source is the operator's own list — not an aggregator and not the Dutchie geo sweep,
     `_GEO_SWEEP_SOURCES`, whose shrink is a jittered circle's edge moving: a closure or a
-    not-yet-online store, recorded by the one list that knows), where
+    not-yet-online store, recorded by the one list that knows — except that a listing the geo
+    sweep RETURNS as closed, or open with no catalogue, is retired by `db.retire_listed_closures`
+    before the comparison, since that is the source's own verdict about one store rather than a
+    circle's edge, 2026-10-14), where
     "menu-bearing" means a non-aggregator handle that `routing.handle_served_predicate` (the Stage-3
     routing table) says a rung serves. Zero-yield re-runs keep prior data.
   - `access_methods` via `db.record_access_attempt` (db.py) — one upsert **per method attempt,

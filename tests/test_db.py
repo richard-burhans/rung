@@ -816,3 +816,43 @@ def test_replace_still_refuses_a_shrink_from_another_source_or_below_retention()
                               platform="weedmaps", external_id=n, address=f"{n} St") for n in ("A", "B", "C", "D", "E")]
     n, kept = db.replace_company_stores(conn, 1, "PA", agg)
     assert kept is True and n == 5
+
+
+def test_retire_listed_closures_removes_only_the_named_handles_of_that_company_kept_or_folded() -> None:
+    """The source's own verdict about one store, applied before the replace looks (2026-10-14)."""
+    conn = _conn()
+    def _swept(company_id, name, handle):
+        return CompanyStoreRecord(company_id=company_id, canonical_name="Acme", state="PA", source="dutchie_directory",
+                                  name=name, platform="dutchie", external_id=handle, address=f"{name} St")
+    for rec in (_swept(1, "Toronto", "D-Toronto"), _swept(1, "Dead", "D-Dead"), _swept(1, "Dead twin", "D-Dead"),
+                _swept(2, "Dead elsewhere", "D-Dead")):
+        db.insert_company_store(conn, rec)
+    conn.execute("UPDATE company_stores SET canonical_company_id = 1 WHERE name = 'Dead twin'")   # folded
+    conn.commit()
+    gone = db.retire_listed_closures(conn, 1, "PA", {("dutchie", "D-Dead"): "closed", ("dutchie", "D-Unknown"): "closed"})
+    conn.commit()
+    assert gone == [("dutchie", "D-Dead")]
+    left = sorted(conn.execute("SELECT company_id, external_id FROM company_stores ORDER BY 1, 2").fetchall())
+    assert left == [(1, "D-Toronto"), (2, "D-Dead")]          # the other company's row is not ours to retire
+    assert db.retire_listed_closures(conn, 1, "PA", {}) == []
+
+
+def test_a_geo_sweep_that_returned_the_store_as_closed_is_accepted_where_a_miss_is_refused() -> None:
+    """The Peterborough rule refuses a geo sweep's shrink because a jittered circle also drops stores
+    it will find next time. A store the sweep RETURNED as closed is the source saying so about that
+    store; retiring it first turns the same shrink into a replace of equals."""
+    conn = _conn()
+    def _swept(name, handle):
+        return CompanyStoreRecord(company_id=1, canonical_name="Acme", state="PA", source="dutchie_directory",
+                                  name=name, platform="dutchie", external_id=handle, address=f"{name} St")
+    for name in ("Toronto", "Cobourg", "Peterborough", "Oshawa", "Barrie"):
+        db.insert_company_store(conn, _swept(name, f"D-{name}"))
+    conn.commit()
+    without = [_swept(n, f"D-{n}") for n in ("Toronto", "Cobourg", "Oshawa", "Barrie")]
+    assert db.replace_company_stores(conn, 1, "PA", without) == (5, True)        # a miss: refused, as before
+    assert db.retire_listed_closures(conn, 1, "PA", {("dutchie", "D-Peterborough"): "closed"}) == [("dutchie", "D-Peterborough")]
+    n, kept = db.replace_company_stores(conn, 1, "PA", without)
+    conn.commit()
+    assert (n, kept) == (4, False)
+    names = {r[0] for r in conn.execute("SELECT name FROM company_stores WHERE company_id = 1").fetchall()}
+    assert names == {"Toronto", "Cobourg", "Oshawa", "Barrie"}
