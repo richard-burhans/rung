@@ -49,7 +49,10 @@ SCRIPTS_THAT_WRITE_ACCESS_METHODS = frozenset(
      "merge_duplicate_companies.py",
      # drops the registry rows the directory rungs wrote for a company named only a generic
      # descriptor ("Cannabis"), and every row of a phantom one (a tested maintenance script, 2026-10-13)
-     "retire_generic_buckets.py"})
+     "retire_generic_buckets.py",
+     # deletes the `store_menu` registry row of a named stale listing it retires, beside the row
+     # itself, after a backup and before a fresh-connection verify (a tested maintenance script, 2026-10-14)
+     "retire_store_rows.py"})
 # The SET clause of an ``UPDATE company_stores …`` (captured up to WHERE / RETURNING / end-of-string),
 # so a column named only in a WHERE filter (a read) is not mistaken for a write.
 _COMPANY_STORES_SET = re.compile(
