@@ -230,3 +230,49 @@ def test_companies_yml_folds_the_rows_whose_roster_city_is_wrong():
     alias_map = seed_companies.load_company_aliases(seed_companies._YAML_PATH, strict=True)
     assert seed_companies._collect_brand_state_pairs(conn, alias_map) == [
         ("OREGROWN", "OR"), ("RISE", "VA"), ("SWEET RELIEF", "OR")]
+
+
+# ── The host at the front door (2026-10-13, scraping design review item 4, phase 1) ─────────────
+
+
+def test_registrable_host_folds_subdomains_and_schemes_and_refuses_platforms():
+    rh = seed_companies.registrable_host
+    assert rh("https://shop.oneplant.ca/menu") == "oneplant.ca"
+    assert rh("www.oneplant.ca") == "oneplant.ca"
+    assert rh("http://user:pw@oneplant.ca:8443/") == "oneplant.ca"
+    assert rh("https://dutchie.com/dispensary/one-plant") is None       # a platform, not an operator
+    assert rh("https://oneplant.business.site") is None
+    assert rh("oneplant") is None and rh("") is None and rh(None) is None
+
+
+def test_a_new_roster_spelling_that_names_an_existing_company_site_is_not_minted():
+    """Thirteen roster spellings of One Plant each became a company on the fold alone (2026-10-13)
+    and each pulled the whole chain's directory list. A spelling whose roster row names the site
+    recon already resolved an existing company to IS that company."""
+    from rung.models import CompanyReconRecord, DispensaryRecord
+    conn = pg_conn()
+    db.create_tables(conn)
+    seed_companies.create_companies_table(conn)
+    cid = seed_companies.ensure_company(conn, "One Plant", "ON")
+    db.upsert_recon(conn, CompanyReconRecord(company_id=cid, canonical_name="One Plant",
+                                             homepage_url="https://www.oneplant.ca/"))
+    other = seed_companies.ensure_company(conn, "Other Shop", "ON")
+    db.upsert_recon(conn, CompanyReconRecord(company_id=other, canonical_name="Other Shop",
+                                             homepage_url="https://dutchie.com/dispensary/other-shop"))
+    rows = (
+        ("ONE PLANT BARRIE (CUNDLES)", "Barrie", "ON", "https://oneplant.ca/locations/barrie"),   # links
+        ("One Plant Recreational Cannabis Store", "Dundas", "ON", "http://shop.oneplant.ca"),     # links
+        ("Stranger Cannabis", "Guelph", "ON", "https://dutchie.com/dispensary/stranger"),         # platform
+        ("No Site Cannabis", "Ajax", "ON", None),                                                 # mints
+        ("One Plant Winnipeg", "Winnipeg", "MB", "https://oneplant.ca/locations/winnipeg"),       # other state
+    )
+    for name, city, state, website in rows:
+        db.insert_dispensary(conn, DispensaryRecord(source="html", name=name, city=city, state=state, website=website))
+    conn.commit()
+    pairs = seed_companies._collect_brand_state_pairs(conn, {})
+    assert ("One Plant", "ON") in pairs
+    assert not [p for p in pairs if p[0].startswith("ONE PLANT") or "Recreational" in p[0]]
+    assert ("Stranger", "ON") in pairs or ("Stranger Cannabis", "ON") in pairs   # a platform host never links
+    assert any(p[1] == "ON" and p[0].startswith("No Site") for p in pairs)
+    assert any(p[1] == "MB" and "One Plant" in p[0] for p in pairs)               # the link is per state
+    assert seed_companies.existing_hosts(conn) == {("oneplant.ca", "ON"): "One Plant"}

@@ -28,6 +28,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   test, and counts the drop in `vantage_skips` for the caller to report. A rung tried from an egress
   that cannot reach its platform used to write `failed`/`blocked` rows that read as the target's
   doing; `fits_vantage` is the one rule.
+- **A new roster spelling that names an existing company's site is that company, not a new one.**
+  `seed-companies` reads the roster's `website` beside the name; a spelling whose fold the table
+  does not hold, but whose rows name the registrable host recon already resolved an existing
+  company in the state to, is seeded under that company's name instead of minted (`registrable_host`,
+  `existing_hosts`; platform hosts such as `dutchie.com` never link). Thirteen roster spellings of
+  one Ontario chain had each become a company on the fold alone, and each pulled the whole chain's
+  directory list. The link is at the front door only; the stored side stays the refold's business.
 
 ### Changed — 2026-10-13
 

@@ -153,10 +153,11 @@ def test_reseeding_reuses_an_existing_spelling_rather_than_adding_a_twin() -> No
     name, so a flipped winner used to seed a second company for the same operator."""
     conn = pg_conn()
     seed_companies.create_companies_table(conn)
-    conn.execute("CREATE TABLE dispensaries (name TEXT, city TEXT, state TEXT)")
+    # The roster table as shipped carries `website` (the seeder reads it for the host link, 2026-10-13).
+    conn.execute("CREATE TABLE dispensaries (name TEXT, city TEXT, state TEXT, website TEXT)")
     conn.execute("INSERT INTO companies (canonical_name, state, created_at) VALUES ('ZenLeaf', 'PA', 'x')")
     for name in ("Zen Leaf", "Zen Leaf", "ZenLeaf"):
-        conn.execute("INSERT INTO dispensaries VALUES (%s, NULL, 'PA')", (name,))
+        conn.execute("INSERT INTO dispensaries VALUES (%s, NULL, 'PA', NULL)", (name,))
     pairs = seed_companies._collect_brand_state_pairs(conn, {})
     assert pairs == [("ZenLeaf", "PA")]
     assert seed_companies.dominant_spelling(Counter({"Zen Leaf": 2, "ZenLeaf": 1})) == "Zen Leaf"

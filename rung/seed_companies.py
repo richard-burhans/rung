@@ -1,6 +1,7 @@
 import datetime
 from collections import Counter, defaultdict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from rung import db
 from rung.text import (
@@ -71,6 +72,52 @@ def dominant_spelling(spellings: Counter[str]) -> str:
     return max(spellings, key=lambda s: (spellings[s], *readability_key(s)))
 
 
+# Hosts that are a PLATFORM or a vendor, never an operator's own identity: two roster rows pointing
+# at one of these share a vendor, not a company. Kept short and obvious; a host missing from it costs
+# a false link only when two different operators share it, which these are the ones that do.
+PLATFORM_HOSTS = frozenset({
+    "dutchie.com", "iheartjane.com", "weedmaps.com", "leafly.com", "shopify.com", "squarespace.com",
+    "wix.com", "wixsite.com", "godaddysites.com", "google.com", "facebook.com", "instagram.com",
+    "linktr.ee", "business.site", "sweedpos.com", "sweed.com", "flowhub.com", "treez.io",
+    "meadow.com", "dispensary.shop", "tymber.com", "hytiva.com", "breadstack.com",
+})
+
+
+def registrable_host(url: str | None) -> str | None:
+    """The registrable domain of a URL — ``shop.apothecarium.com`` and ``apothecarium.com`` are one
+    site — or None for nothing, a bare word, or a platform host (`PLATFORM_HOSTS`). The one
+    per-OPERATOR identity a roster row or a recon probe carries: a licence number is per store, and
+    a name is a spelling."""
+    if not url or not url.strip():
+        return None
+    raw = url.strip()
+    netloc = urlsplit(raw if "//" in raw else f"https://{raw}").netloc.lower()
+    host = netloc.split("@")[-1].split(":")[0].removeprefix("www.")
+    if "." not in host:
+        return None
+    site = ".".join(host.split(".")[-2:])
+    return None if site in PLATFORM_HOSTS else site
+
+
+def existing_hosts(conn: db.DBConn) -> dict[tuple[str, str], str]:
+    """``{(registrable host, state): canonical_name}`` for the companies recon has already given a
+    homepage — the earliest row when several share one host (that pair is the refold's business).
+    Empty when either table does not exist yet."""
+    for table in ("companies", "company_recon"):
+        row = conn.execute("SELECT to_regclass(%s)", (table,)).fetchone()
+        if row is None or row[0] is None:
+            return {}
+    hosts: dict[tuple[str, str], str] = {}
+    for name, state, homepage in conn.execute(
+        "SELECT c.canonical_name, c.state, r.homepage_url FROM companies c "
+        "JOIN company_recon r ON r.company_id = c.id WHERE r.homepage_url IS NOT NULL ORDER BY c.id"
+    ):
+        host = registrable_host(homepage)
+        if host:
+            hosts.setdefault((host, state), name)
+    return hosts
+
+
 def _collect_brand_state_pairs(
     conn: db.DBConn, alias_map: dict[str, str]
 ) -> list[tuple[str, str]]:
@@ -78,7 +125,13 @@ def _collect_brand_state_pairs(
     # a single company per (normalized-brand, state), seeded under the dominant spelling — so a
     # chain like Zen Leaf / ZenLeaf or NuEra / nuEra collapses to one operator instead of N.
     groups: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
-    for name, city, state in conn.execute("SELECT name, city, state FROM dispensaries"):
+    # The registrable hosts a group's roster rows carry (`dispensaries.website`, where a roster
+    # publishes one: ON, NJ, NY, PA, SK, CT, UT, NH on 2026-10-13) — the front door for the host
+    # link below.
+    group_hosts: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for name, city, state, website in conn.execute(
+        "SELECT name, city, state, website FROM dispensaries"
+    ):
         if is_placeholder_name(name):
             continue  # never seed a junk roster row (license-number/header/test stub) as a company
         # The row's own city folds a storefront suffix ("Zen Leaf Dayton" -> "Zen Leaf"); the second
@@ -86,16 +139,32 @@ def _collect_brand_state_pairs(
         key, brand = roster_fold(name, city, alias_map)
         state_val = state if state else "Unknown"
         groups[(key, state_val)][brand] += 1
+        host = registrable_host(website)
+        if host:
+            group_hosts[(key, state_val)].add(host)
     # A group the companies table ALREADY holds keeps the spelling it was seeded under. The dominant
     # spelling can change between runs ("ZenLeaf" most frequent on one roster, "Zen Leaf" after a
     # refresh), and the insert conflicts on the exact name, so a changed winner used to insert a
     # SECOND company for the same operator. Measured 2026-10-06: 858 (folded brand, state) keys were
     # already held by two or more rows.
+    #
+    # A group the table does NOT hold under its fold, but whose roster rows name a SITE an existing
+    # company's recon already resolved to, is that company and is not minted (2026-10-13, scraping
+    # design review item 4 phase 1): thirteen roster spellings of One Plant each became a company
+    # on the fold alone, and each pulled the whole chain's directory list. The host is the one
+    # per-operator identity the roster carries; a platform host never links (`PLATFORM_HOSTS`).
+    # The link is at the front door only — the rows still key by their own fold elsewhere, which
+    # is the refold's business, not the seeder's.
     existing = existing_spellings(conn, alias_map)
-    pairs = {
-        (existing.get((key, state_val)) or dominant_spelling(spellings), state_val)
-        for (key, state_val), spellings in groups.items()
-    }
+    by_host = existing_hosts(conn)
+    pairs: set[tuple[str, str]] = set()
+    for (key, state_val), spellings in groups.items():
+        held = existing.get((key, state_val))
+        if held is None:
+            linked = sorted(by_host[(h, state_val)] for h in group_hosts.get((key, state_val), ())
+                            if (h, state_val) in by_host)
+            held = linked[0] if linked else None
+        pairs.add((held or dominant_spelling(spellings), state_val))
     return sorted(pairs)
 
 
