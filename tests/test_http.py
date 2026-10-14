@@ -304,6 +304,9 @@ HONEST_BY_DESIGN_SCRIPTS = frozenset({
     "fetch_acs_income.py", "fetch_priceofweed.py", "geocode_tracts.py", "school_geocode_error.py",
     # Its one request is to OUR OWN published status page (`_check_published_dashboard`).
     "coverage_healthcheck.py",
+    # Its one request is a ping to OUR OWN dead-man check (2026-10-13): an honest POST to a service
+    # we pay for, carrying a verdict. Impersonation would be exactly wrong for it.
+    "notify.py",
     # RULED 2026-10-06: the POS census stays on the honest client, as an instrument. Its NJ and PA
     # samples of 2026-08-01 were taken that way, and the cost was then measured by re-probing the
     # 31 non-Dutchie stores it recorded `blocked` with the impersonating client: 21 still refused
