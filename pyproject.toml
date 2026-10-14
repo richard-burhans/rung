@@ -15,7 +15,10 @@ dependencies = [
     # drives (`playwright install chromium`); see browser._resolve_chrome_path. Do not prune.
     "playwright>=1.60.0",
     "psycopg[binary]>=3.2",
-    "pydoll-python>=2.23.0",
+    # PINNED, not floored: `company_store_fetch._close_open_targets` reaches two private attributes
+    # (`_execute_command`, `_tabs_opened`) to close a hung target from the browser's connection; a
+    # release that renames either breaks the browser tier's teardown silently. Re-verify on a bump.
+    "pydoll-python==2.23.0",
     "pyyaml>=6.0.3",
     "scrapegraphai>=2.1.3",
     "selectolax>=0.3",
