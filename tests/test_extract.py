@@ -828,6 +828,36 @@ def test_ma_ccc_keeps_active_storefronts_only():
     assert recs[0].latitude == 42.3 and recs[0].zip_code == "02118"
 
 
+def test_ma_ccc_reads_the_establishment_columns_the_commission_renamed_to():
+    # The 2026-10-06 file: premises under ESTABLISHMENT_*, the licensee's office under BUSINESS_*,
+    # no lat/lng. The premises must win and the office must never stand in for it.
+    from rung.sources.extract import _extract_ma_ccc
+    csv_text = (
+        "BUSINESS_NAME,BUSINESS_ADDRESS_1,BUSINESS_CITY,BUSINESS_ZIP_CODE,LICENSE_NUMBER,"
+        "LICENSE_TYPE,LICENSE_STATUS,ESTABLISHMENT_ADDRESS_1,ESTABLISHMENT_CITY,ESTABLISHMENT_ZIP\n"
+        "\"Cultivate Leicester, Inc.\",1764 Main Street,Leicester,01524,MR281268,"
+        "Marijuana Retailer,Active,1764 MAIN STREET,LEICESTER ,01524\n"
+        "Office Only LLC,9 Corporate Dr,Boston,02110,MR000001,"
+        "Marijuana Retailer,Active,,,\n"
+    )
+    recs = _extract_ma_ccc(csv_text)
+    assert [r.name for r in recs] == ["Cultivate Leicester, Inc.", "Office Only LLC"]
+    assert (recs[0].address, recs[0].city, recs[0].zip_code) == ("1764 MAIN STREET", "LEICESTER", "01524")
+    assert recs[0].licence_number == "MR281268" and recs[0].latitude is None
+    assert recs[1].address is None and recs[1].city is None  # the office is not the premises
+
+
+def test_ma_ccc_refuses_a_header_with_no_premises_column_as_partial():
+    # The rename happening a second time: the prior roster must stand, with the reason recorded.
+    from rung.sources.extract import PartialRoster, _extract_ma_ccc
+    csv_text = (
+        "BUSINESS_NAME,LICENSE_TYPE,LICENSE_STATUS,PREMISES_STREET\n"
+        "Store A LLC,Marijuana Retailer,Active,1 Main St\n"
+    )
+    with pytest.raises(PartialRoster, match="no premises address column"):
+        _extract_ma_ccc(csv_text)
+
+
 def test_csv_prefers_dba_column_over_business_name():
     from rung.sources.extract import _extract_csv
     csv_text = (

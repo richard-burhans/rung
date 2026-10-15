@@ -19,6 +19,17 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-15
+
+- **The Massachusetts roster follows the commission's renamed columns.** The CCC's
+  `l_licenses_commence_ops.csv` (stamped 2026-10-06) moved each premises from `ADDRESS_1` / `CITY` /
+  `ZIP_CODE` to `ESTABLISHMENT_ADDRESS_1` / `ESTABLISHMENT_CITY` / `ESTABLISHMENT_ZIP`, added a
+  `BUSINESS_*` office address and dropped the coordinates; `_extract_ma_ccc` read the old names and
+  the next weekly roster sweep replaced 423 addressed rows with 498 name-only ones. The handler now
+  reads every spelling the file has carried, premises first and never the office, carries the
+  `LICENSE_NUMBER` as the store's `licence_number`, and refuses a header naming no premises column
+  as a partial roster so the prior rows stand.
+
 ### Fixed — 2026-10-14
 
 - **A directory listing's own verdict retires its menu handle.** `retire_listed_closures` removes a

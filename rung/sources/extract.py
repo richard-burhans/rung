@@ -866,11 +866,26 @@ def _extract_co_med(content: bytes | str) -> list[DispensaryRecord]:
 
 # ── Massachusetts CCC 'commenced operations' CSV (list_type='ma_ccc') ────────
 # The MA Cannabis Control Commission publishes a SODA CSV of all establishments that have
-# commenced operations — geocoded, with every license type. Keep only the active storefronts
-# (Marijuana Retailer + Medical Marijuana Treatment Center); drop cultivators/manufacturers/
-# transporters/labs. Names are the legal entity (no DBA column), but the rows carry lat/lng.
+# commenced operations, with every license type. Keep only the active storefronts (Marijuana
+# Retailer + Medical Marijuana Treatment Center); drop cultivators/manufacturers/transporters/
+# labs. Names are the legal entity (no DBA column).
+#
+# THE COLUMNS ARE THE COMMISSION'S TO RENAME, AND IT DID. The file stamped `CCCLastUpdated`
+# 2026-10-06 moved the premises from ADDRESS_1 / CITY / ZIP_CODE (and the PHYSICAL_* pair) to
+# ESTABLISHMENT_ADDRESS_1 / ESTABLISHMENT_CITY / ESTABLISHMENT_ZIP, added a BUSINESS_* set that is
+# the licensee's office, and dropped the lat/lng columns. The handler read the old names, found
+# nothing, and the Sunday sweep of 2026-10-11 replaced 423 addressed rows with 498 name-only ones
+# (`roster_name_only MA` went ERROR; the roster leg of the store history recorded nothing for the
+# week, because a row with no address has no location key). Each chain below names every spelling
+# the file has carried, premises first. BUSINESS_* is deliberately absent: an office address would
+# pair `compare` to the wrong building, and no address is the honest reading of such a row. A header
+# naming NONE of a chain's spellings is the rename happening again, and is refused as PARTIAL — the
+# prior roster stands and the attempt records why — rather than landed as a roster of names.
 
 _MA_STOREFRONT_TYPES = {"Marijuana Retailer", "Medical Marijuana Treatment Center"}
+_MA_ADDRESS_COLUMNS = ("ESTABLISHMENT_ADDRESS_1", "PHYSICAL_ADDRESS_1", "ADDRESS_1")
+_MA_CITY_COLUMNS = ("ESTABLISHMENT_CITY", "PHYSICAL_CITY", "CITY")
+_MA_ZIP_COLUMNS = ("ESTABLISHMENT_ZIP", "ESTABLISHMENT_ZIP_CODE", "PHYSICAL_ZIP_CODE", "ZIP_CODE")
 
 
 def _extract_ma_ccc(text: str) -> list[DispensaryRecord]:
@@ -880,7 +895,20 @@ def _extract_ma_ccc(text: str) -> list[DispensaryRecord]:
         except (TypeError, ValueError):
             return None
 
+    def _first(row: dict[str, str | None], columns: tuple[str, ...]) -> str | None:
+        for column in columns:
+            if value := _clean(row.get(column)):
+                return value
+        return None
+
     reader = csv.DictReader(io.StringIO(text))
+    header = set(reader.fieldnames or ())
+    if header and not header & set(_MA_ADDRESS_COLUMNS):
+        raise PartialRoster(
+            "the CCC CSV's header names no premises address column "
+            f"({' / '.join(_MA_ADDRESS_COLUMNS)}) — the commission renamed its columns again; "
+            "a roster of names would pair nothing in compare-stores"
+        )
     records: list[DispensaryRecord] = []
     for row in reader:
         if row.get("LICENSE_TYPE") not in _MA_STOREFRONT_TYPES:
@@ -892,10 +920,11 @@ def _extract_ma_ccc(text: str) -> list[DispensaryRecord]:
             continue
         records.append(DispensaryRecord(
             source="ma_ccc", name=name,
-            address=_clean(row.get("ADDRESS_1")) or _clean(row.get("PHYSICAL_ADDRESS_1")),
-            city=_clean(row.get("CITY")) or _clean(row.get("PHYSICAL_CITY")),
-            zip_code=_clean(row.get("ZIP_CODE")) or _clean(row.get("PHYSICAL_ZIP_CODE")),
+            address=_first(row, _MA_ADDRESS_COLUMNS),
+            city=_first(row, _MA_CITY_COLUMNS),
+            zip_code=_first(row, _MA_ZIP_COLUMNS),
             latitude=_f(row.get("latitude")), longitude=_f(row.get("longitude")),
+            licence_number=_clean(row.get("LICENSE_NUMBER")),
         ))
     return records
 
@@ -1029,6 +1058,10 @@ class ExtractionFailed(Exception):
 
 class PartialRoster(Exception):
     """A roster handler stopped AFTER it had gathered some rows: what it holds is a fragment.
+
+    Also raised BEFORE any row by a handler that can see from the header that every row would
+    be a fragment of itself — `_extract_ma_ccc`, when the commission's CSV names no premises
+    column — since a roster of names is no less a fragment for being complete in one column.
 
     `run_extract_states` replaces a state's rows whenever the extraction is non-empty, so a paging
     failure that returned the pages it had would delete the full prior roster and install the
@@ -2243,7 +2276,7 @@ async def run_extract_states(
     # Tier 2 — browser render of still-empty JS pages (one shared Chrome).
     if use_render:
         # `not in partial` is DEFENSIVE here: every handler that raises `PartialRoster` today
-        # serves a list_type (arcgis, on_agco, atlist, ca_dcc) this filter already excludes, so
+        # serves a list_type (arcgis, on_agco, atlist, ca_dcc, ma_ccc) this filter already excludes, so
         # no refused state can be rendered. It holds the line if an html-path handler ever raises.
         renderable = [
             r for r in targets

@@ -706,7 +706,7 @@ meaning what the entry above says.
 | Stage contracts | `docs/stage_contracts.md` | read/write matrix, write isolation, claim keys |
 | Access-method registry | `access.py` | `AccessMethod`, `run_target`, `ReExploreGovernor`, the `MethodOutcome` family (`Blocked`/`Unavailable`/`Broken`/`Unequipped`/`Unanswered`), `require_browser` |
 | Refusal vocabulary (tier 0) | `http.py` | `make_session` (the chokepoint; honest until the overlay's registrar switches impersonation on), `FetchRefused` + `raise_for_refusal`/`refused_by`, `TruncatedMenu` + `stop_if_truncated` — contract 10 |
-| Partial-roster guard (Stage 1) | `sources/extract.py` (`PartialRoster`) | raised by the ArcGIS, CA DCC and Atlist handlers after rows were gathered; `run_extract_states` keeps the prior rows, offers the state to NEITHER later tier (render, AI) and records the attempt `failed` with the reason — contract 10 |
+| Partial-roster guard (Stage 1) | `sources/extract.py` (`PartialRoster`) | raised by the ArcGIS, CA DCC and Atlist handlers after rows were gathered, and by the MA CCC handler before any row when the CSV header names no premises column (2026-10-15: a renamed column had landed a roster of names); `run_extract_states` keeps the prior rows, offers the state to NEITHER later tier (render, AI) and records the attempt `failed` with the reason — contract 10 |
 | Served-handle seam | `reference_db.py` (`HandleServed`) ← `rung_intel/routing.py` (`handle_served_predicate`) | contract 11 |
 | Dedup + storefront | `sources/dedupe.py` | physical-address clustering |
 | Stage-1 extraction tiers | `sources/extract.py`, `sources/ai_fallback.py` | |
