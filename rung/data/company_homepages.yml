@@ -29,7 +29,9 @@
 #    re-run would erase or re-point, and `homepage_override_dead_key` names a key reaching no
 #    company — read them BEFORE running `recon`, because the run erases the evidence they read.
 
-Apothecarium Dispensary: https://apothecarium.com
+Apothecarium:
+  NJ: https://apothecariumnj.com
+  PA: https://shop.apothecarium.com
 Ayr Wellness: null
 Beyond Hello: https://www.beyond-hello.com
 "Beyond / Hello": https://www.beyond-hello.com
@@ -61,7 +63,8 @@ Insa:
   default: https://insa.com
   PA: https://insa.com/pa/
 Liberty: https://libertycannabis.com
-Local Leaf by Penn Health Group: https://localleafpa.com
+Local Leaf by Penn Health:
+  PA: https://localleafpa.com
 Maitri Medicinals: https://maitrimedicinals.com
 MariMart: null
 Organic Remedies: https://organicremediespa.com
@@ -100,7 +103,8 @@ Windy City: https://windycitycannabis.com
 Earthmed: https://www.earthmed.com
 High Profile: https://highprofilecannabis.com
 Revolution: https://revolutioncannabis.com
-"Nature’s Care Company": https://naturescarecompany.com
+"Nature’s Care":
+  IL: https://naturescarecompany.com
 Mission:
   default: https://missiondispensaries.com
   BC: null
@@ -126,7 +130,8 @@ Terrasana: https://www.terrasana.com
 # ── Florida non-Dutchie operators (seeded 2026-06-16). FL's 392-store Dutchie pool
 #    auto-attributes Ayr/Curaleaf/Parallel/Planet 13/GrowHealthy/Sanctuary/Jungle Boys/
 #    Cookies/Mint/Insa homeless; Trulieve covered by the global entry.
-"GTI (Rise Dispensaries)": https://risecannabis.com
+GTI:
+  FL: https://risecannabis.com
 CHRONTACT: https://popscannabis.ca
 
 # ── Spellings the fold reaches but the exact key did not (audited 2026-10-05). 28 companies were
@@ -153,7 +158,7 @@ HIGH PROFILE: https://highprofilecannabis.com
 BEYOND/HELLO: https://www.beyond-hello.com
 ZEN LEAF: https://zenleafdispensaries.com
 CURALEAF: https://curaleaf.com
-Rise Holdings: https://risecannabis.com
+# ("Rise Holdings" was keyed here for MA — "RISE Holdings, Inc." is Green Thumb's MA licensee — until 2026-10-15: the seed folds that roster spelling into "RISE", which the `RISE` default above already covers; a key reaching no company.)
 I.N.S.A.: https://insa.com/ma/
 INSA: https://insa.com/oh/
 Fluent: https://getfluent.com
@@ -164,7 +169,7 @@ Fluent: https://getfluent.com
 #    NY Green Leaf: the roster publishes this site under "Green Leaf Wellness Co. LLC", which folds
 #    to `greenleafwellnessco` while the company folds to `greenleafwellness` — `extract_brand`
 #    strips one legal suffix, not two. Higher Limits (ON) is NOT keyed: it closed 2026-09-27.
-Green Leaf Wellness Co.:
+Green Leaf Wellness:
   "NY": https://greenleafwellnesscompany.com
 Design:
   "NJ": https://design710.com
