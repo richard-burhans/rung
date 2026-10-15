@@ -58,6 +58,13 @@ Trulieve:
   - Harvest of Whitehall   # Trulieve acquired Harvest HOC; harvesthoc.com redirects to trulieve.com and its 21 PA stores are the same physical Trulieve PA stores (identical addresses + Magento store-view codes), already handled via trulieve_rest — fold so the duplicate licensee collapses instead of yielding 21 menu-less rows
 Verilife:
   - Verilfe            # transposition typo (missing 'i')
+ShinyBud:                                 # shinybud.com — one Ontario chain under three company spellings (2026-10-15):
+  - SHINYBUD CANNABIS CO. SEACHART        #   an AGCO licensee spelling the city-strip cannot fold ("Seachart" is the street, not the town);
+                                          #   its Brampton store is ShinyBud's Weedmaps `shinybud-seachart`, so the row held nothing
+  - Shiny Bud Orillagroup                 #   the Dutchie retailer name for the Emerald Cannabis stores ShinyBud took over — Dutchie
+                                          #   still lists them as "Emerald Cannabis (Alliston / 975 Orillia / Schomberg / Barrie)",
+                                          #   and three of the four share a rooftop with ShinyBud's own Weedmaps rows: 86 Young St
+                                          #   Alliston, 975 West Ridge Blvd Orillia, 6048 Highway 9 Schomberg
 VIP:                          # one Ontario chain under three roster spellings; Weedmaps slugs the SAME stores both
   - VIP Cannabis Co.          #   vip-cannabis-co-* and vip-cannabis-company-*; the refold declines a three-letter
   - VIP Cannabis Company      #   key with no recon site, so these name the ruling (2026-10-13)

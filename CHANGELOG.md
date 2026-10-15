@@ -21,6 +21,11 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-15
 
+- **ShinyBud is one Ontario operator under three company spellings.** `companies.yml` names the AGCO
+  licensee spelling the city-strip cannot fold and the Dutchie retailer name the chain's acquired
+  Emerald Cannabis stores still carry, on the evidence of three shared rooftops, so the refold merges
+  them into the chain.
+
 - **A lifecycle derivation that finds nothing still records that it ran.** `replace_lifecycle_events`
   stamps one `store_lifecycle_derivations` row per state on every run, with the event count, so a
   quiet state no longer reads as "never derived" on every healthcheck for as long as it stays quiet.
