@@ -373,7 +373,8 @@ and not their contents.
   (what was attempted per cycle — an absence counts only under a `succeeded` capture), `companies` +
   `company_stores` (via `compare.build_canon`, for the operator fold), `companies.yml`.
 - **Out:** stdout report; with `--write`, `store_lifecycle_events` (replace-by-state — a derivation
-  may legitimately shrink, so no keep-the-best guard). Needs `--record-history` sweeps to have run —
+  may legitimately shrink, so no keep-the-best guard) and one `store_lifecycle_derivations` row per
+  state, stamped whether or not an event was written. Needs `--record-history` sweeps to have run —
   with fewer than `--closed-after-cycles` usable cycles it reports `first seen` and nothing else.
 - **Roster lag** is reported only when a roster cycle AFTER the store's last sighting on its own site
   still lists it — a roster listing older than that sighting says nothing about the closure (2026-10-06).

@@ -498,6 +498,21 @@ CREATE TABLE IF NOT EXISTS store_lifecycle_events (
     derived_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 )
 """
+# WHEN each state's derivation last ran, kept apart from WHAT it concluded. A state whose derivation
+# wrote zero events (Hawaii, the Dakotas, Nevada, Rhode Island, New Hampshire on 2026-10-15) left no
+# row in store_lifecycle_events, so the only timestamp the table carried was absent and the
+# healthcheck's `lifecycle_stale` read every such state as "never derived" — a WARN no run could
+# clear, which is the saturated-alarm shape this project keeps paying for. One row per state,
+# upserted by `replace_lifecycle_events` whether or not it wrote an event; `events` is the count,
+# so a stamp of zero is distinguishable from a stamp over a hundred.
+_CREATE_STORE_LIFECYCLE_DERIVATIONS = """
+CREATE TABLE IF NOT EXISTS store_lifecycle_derivations (
+    state       TEXT PRIMARY KEY,
+    derived_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    events      INTEGER NOT NULL
+)
+"""
+
 _CREATE_STORE_LIFECYCLE_EVENTS_STATE_INDEX = """
 CREATE INDEX IF NOT EXISTS store_lifecycle_events_state
 ON store_lifecycle_events (state, occurred_on)
@@ -755,6 +770,7 @@ def create_reference_tables(conn: DBConn) -> None:
     conn.execute(_CREATE_STORE_LIFECYCLE_EVENTS)
     ensure_index(conn, _CREATE_STORE_LIFECYCLE_EVENTS_STATE_INDEX)
     ensure_index(conn, _CREATE_STORE_LIFECYCLE_EVENTS_LOCATION_INDEX)
+    conn.execute(_CREATE_STORE_LIFECYCLE_DERIVATIONS)
     conn.execute(_CREATE_STORE_CAPTURE_ATTEMPTS)
     ensure_index(conn, _CREATE_STORE_CAPTURE_ATTEMPTS_INDEX)
     conn.execute(_CREATE_STORE_POS_OBSERVATIONS)
@@ -1737,6 +1753,10 @@ def replace_lifecycle_events(
     cycle must lose that event. Fewer events than last time is therefore a legitimate outcome, and
     the log — not this table — is the thing that must never be lost.
 
+    The run is STAMPED in ``store_lifecycle_derivations`` whether or not it wrote an event: a
+    quiet state's derivation is a conclusion too ("nothing opened, closed or changed hands"), and
+    reading its time off the events table left it "never derived" for as long as it stayed quiet.
+
     Returns the number of event rows written.
     """
     conn.execute("DELETE FROM store_lifecycle_events WHERE state = %s", (state,))
@@ -1748,6 +1768,12 @@ def replace_lifecycle_events(
             (event.location_id, event.state, event.source, event.kind, event.occurred_on,
              event.operator, event.previous_operator, event.confidence, event.related_location_id),
         )
+    conn.execute(
+        "INSERT INTO store_lifecycle_derivations (state, derived_at, events) VALUES (%s, now(), %s) "
+        "ON CONFLICT (state) DO UPDATE SET derived_at = EXCLUDED.derived_at, "
+        "events = EXCLUDED.events",
+        (state, len(events)),
+    )
     return len(events)
 
 

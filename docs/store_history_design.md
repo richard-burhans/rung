@@ -219,7 +219,20 @@ store_lifecycle_events                -- the DERIVED conclusion; recomputed, nev
   confidence          TEXT            -- closed: corroborated | unconfirmed
   related_location_id BIGINT          -- relocation_candidate: the location it may have moved FROM
   derived_at          TIMESTAMPTZ
+
+store_lifecycle_derivations           -- WHEN each state's derivation last ran, apart from WHAT it found
+  state               TEXT PK
+  derived_at          TIMESTAMPTZ
+  events              INTEGER         -- how many rows that run wrote; zero is a conclusion too
 ```
+
+**The run is stamped even when it writes nothing** (2026-10-15). `lifecycle_stale` used to read a
+state's last derivation off `store_lifecycle_events.derived_at`, so a state whose derivation found
+no opening, closure or change of hands — six of them that day — carried no timestamp at all and read
+"never derived" on every healthcheck, however often the Sunday sweep derived it. A WARN no run can
+clear is an alarm nobody reads. `db.replace_lifecycle_events` now upserts one row per state in
+`store_lifecycle_derivations` on every run, and the check reads that (the events table's stamp is the
+fallback for a state last derived before this existed).
 
 **Replaced per state, not appended, and deliberately allowed to shrink.** `store_observations` is the
 evidence and must never be lost; this table is a *conclusion* drawn over all of it. Later evidence

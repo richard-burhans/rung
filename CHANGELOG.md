@@ -21,6 +21,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-15
 
+- **A lifecycle derivation that finds nothing still records that it ran.** `replace_lifecycle_events`
+  stamps one `store_lifecycle_derivations` row per state on every run, with the event count, so a
+  quiet state no longer reads as "never derived" on every healthcheck for as long as it stays quiet.
+
 - **The Massachusetts roster follows the commission's renamed columns.** The CCC's
   `l_licenses_commence_ops.csv` (stamped 2026-10-06) moved each premises from `ADDRESS_1` / `CITY` /
   `ZIP_CODE` to `ESTABLISHMENT_ADDRESS_1` / `ESTABLISHMENT_CITY` / `ESTABLISHMENT_ZIP`, added a
