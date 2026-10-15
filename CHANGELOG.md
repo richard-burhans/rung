@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-15
 
+- **Eleven short-key operators in Massachusetts and Michigan are ruled one operator each.**
+  `companies.yml` names the long spelling under the short one for Aura, Boom X, Pluto and Smyth (MA)
+  and Cloud, Gazzz, HYDE, Lume, PUFF, Wojo and Xhale (MI), on the evidence of a shared rooftop and
+  rows that carry the long name; the short spelling is the canonical because an alias is global and
+  four of the short spellings are other operators in other states.
+
 - **ShinyBud is one Ontario operator under three company spellings.** `companies.yml` names the AGCO
   licensee spelling the city-strip cannot fold and the Dutchie retailer name the chain's acquired
   Emerald Cannabis stores still carry, on the evidence of three shared rooftops, so the refold merges

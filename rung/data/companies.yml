@@ -70,3 +70,33 @@ VIP:                          # one Ontario chain under three roster spellings; 
   - VIP Cannabis Company      #   key with no recon site, so these name the ruling (2026-10-13)
 Vytal Options: []
 Zen Leaf: []
+
+# ── Short-key rulings the MA/MI refolds declined (2026-10-15). Each pair is one operator: the two
+#    spellings share a rooftop (the same street address under Dutchie / Weedmaps / Leafly), and the
+#    short-named company's own rows are named with the long spelling. The SHORT spelling is the
+#    canonical here, deliberately: an alias is global, and "Aura" (PR), "Cloud" (AB), "Pluto" (AB)
+#    and "Lume" (OK) are other operators in other states — a long→short alias touches only rows
+#    spelled the long way, a short→long one would rename those strangers at the next seed.
+Aura:                         # MA — Fall River, 320 Airport Rd (Leafly, twice under the two spellings); the roster's "Aura Cannabis Company LLC"
+  - Aura Cannabis Company
+  - Aura Cannabis Company LLC
+Boom X:                       # MA — Shirley, 114 Lancaster Rd (Dutchie "Boom X (Shirley)" + Leafly "BoomX Cannabis Co")
+  - BoomX Cannabis Co
+Pluto:                        # MA — Lynn, 193 Oxford St (Weedmaps + Dutchie); the Leominster outlet is the same chain
+  - Pluto Cannabis Co.
+Smyth:                        # MA — Lowell, 683 Rogers St (Dutchie + Weedmaps + Leafly); "Smyth"'s three Dutchie rows are all "Smyth Cannabis Co. - …"
+  - Smyth Cannabis Co.
+Cloud:                        # MI — 5 shared rooftops (Traverse City, Utica, Kalamazoo, Grand Rapids ×2)
+  - Cloud Cannabis Co.
+Gazzz:                        # MI — Roseville, 27935 Groesbeck Hwy (Weedmaps + Dutchie)
+  - Gazzz Cannabis Co.
+HYDE:                         # MI — Detroit, 8052 E 8 Mile Rd (Weedmaps + Dutchie)
+  - Hyde Cannabis Co.
+Lume:                         # MI — 38 shared rooftops; every "Lume" row is named "Lume Cannabis Co. (…)"
+  - Lume Cannabis Co.
+PUFF:                         # MI — Sturgis, 651 Wade St shared; the chain's 21 stores are "PUFF <city>"
+  - PUFF Cannabis Company
+Wojo:                         # MI — Bay City, 606 3rd St (both rows named "Wojo Cannabis Co.")
+  - Wojo Cannabis Co
+Xhale:                        # MI — Mt Clemens: Weedmaps "Xhale Cannabis Co. Mt Clemens, formerly …" at 75 Mary St beside Dutchie's 85 Mary St
+  - Xhale Cannabis Co.
