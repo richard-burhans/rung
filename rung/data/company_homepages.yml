@@ -78,7 +78,8 @@ Sunnyside:
   default: https://sunnyside.shop
   MB: null
 Terra Pharm: https://terra-pharm.com
-Terrapin Care Station: null
+Terrapin Care Station:
+  CO: https://terrapincarestation.com
 Trulieve: https://trulieve.com
 Verilife: https://verilife.com
 Vytal Options: null
@@ -225,3 +226,74 @@ Budget Bud:
   "ON": https://budget-bud.com
 ShinyBud:
   "ON": https://shinybud.com
+
+# THE CHAINS THE MAP'S REFUSED BRIDGE EXPOSED (maps plan P-6.3, owner 2026-10-16). Each row below is
+# one operator split across a host key and a name key because a state's roster publishes no website
+# for it, so recon wrote `no_url` and the map coloured its two halves as strangers. The bridge rule
+# that would have joined them by NAME was refused — half its list were namesakes (Manitoba's
+# "Sunnyside", the US Star Buds, "Bloom" → a one-store Oregon shop) — so the real chains are keyed
+# here, per state, which also lets Stage 2 read their own store lists. `scripts/dispensary_maps.py
+# --split-chains` prints the list; every state carrying each spelling was read before it was keyed,
+# and the states deliberately NOT named are the namesakes or rows nobody could confirm.
+Canna Cabana:
+  AB: https://cannacabana.com
+  BC: https://cannacabana.com
+  MB: https://cannacabana.com
+Spiritleaf:
+  AB: https://spiritleaf.ca
+  BC: https://spiritleaf.ca
+  MB: https://spiritleaf.ca
+Inspired:
+  AB: https://inspiredcannabis.ca
+  BC: https://inspiredcannabis.ca
+Tokyo Smoke:
+  MB: https://ca.tokyosmoke.com
+Cost:
+  AB: https://costcan.ca
+  BC: https://costcan.ca
+Farmer Jane:
+  MB: https://farmerjane.ca
+Tweed:
+  "ON": https://tweed.com
+Livwell Enlightened Health:
+  CO: https://livwell.com
+Theory Wellness:
+  MA: https://theorywellness.org
+  ME: https://theorywellness.org
+  OH: https://theorywellness.org
+  VT: https://theorywellness.org
+Sanctuary:
+  FL: https://sanctuarymed.com
+The Botanist:
+  MA: https://shopbotanist.com
+  NY: https://shopbotanist.com
+  OH: https://shopbotanist.com
+Cannabist:
+  AZ: https://gocannabist.com
+  MA: https://gocannabist.com
+  NY: https://gocannabist.com
+Fine Fettle:
+  GA: https://finefettle.com
+Sweetspot:
+  MD: https://sweetspotfarms.com
+  RI: https://sweetspotfarms.com
+  VT: https://sweetspotfarms.com
+SWEETSPOT:
+  CT: https://sweetspotfarms.com
+Nova Farms:
+  MA: https://novafarms.com
+NOVA FARMS:
+  CT: https://novafarms.com
+Kaleafa:
+  OR: https://kaleafa.com
+Serra:
+  OR: https://shopserra.com
+Consume:
+  MI: https://consumecannabis.com
+Green Goods:
+  MD: https://visitgreengoods.com
+  NM: https://visitgreengoods.com
+Northeast Alternatives:
+  MA: https://nealternatives.com
+Quality Roots:
+  MI: https://getqualityroots.com
