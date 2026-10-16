@@ -105,7 +105,9 @@ Wired behind the **existing `record_history` flag**, exactly like product histor
 - `scrape-company-stores --record-history` (new flag) and the self-feeding `worker --record-history`
   (already threads it to menus) now also drive Stage-2 capture. **Ops (live):** a weekly store-history
   sweep runs `scrape-company-stores --record-history` on the host, Sundays 12:00 (see the deployment
-  runbook); first store-history accrual is 2026-07-05.
+  runbook); first store-history accrual is 2026-07-05. Since 2026-10-16 the same sweep also publishes
+  the map site, after the lifecycle derivation, because the map draws the roster, the own-site lists
+  and the lifecycle verdicts this sweep has just refreshed.
 
 Capture is intentionally from the **raw** per-scrape snapshot (not the alias-folded dedupe output):
 keep the raw signal, canonicalize on read — so a future improvement to brand-folding re-derives
