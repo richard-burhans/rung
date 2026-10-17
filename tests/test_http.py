@@ -304,6 +304,9 @@ HONEST_BY_DESIGN_SCRIPTS = frozenset({
     "fetch_acs_income.py", "fetch_priceofweed.py", "geocode_tracts.py", "school_geocode_error.py",
     # Its one request is to OUR OWN published status page (`_check_published_dashboard`).
     "coverage_healthcheck.py",
+    # Its `--nrcan` mode asks a public federal geocoder (2026-10-17), like `backfill_geocode.py`
+    # beside it: an honest client to a free government API, and one a measurement should not vary.
+    "validate_rnf_geocoder.py",
     # Its one request is a ping to OUR OWN dead-man check (2026-10-13): an honest POST to a service
     # we pay for, carrying a verdict. Impersonation would be exactly wrong for it.
     "notify.py",
