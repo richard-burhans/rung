@@ -39,6 +39,18 @@ Organic Remedies: []
 RISE:
   - Rise               # wrong capitalisation
   - RISE Bristol       # VA roster files the Bristol store under Richmond, so the storefront city never strips (2026-10-12)
+"F & L":                      # AB: one Entwistle/Drayton Valley operator; both spellings hold 2-5111 47 Avenue (owner, 2026-10-19)
+  - F & L Cannabis Inc.
+Hat:                          # AB: one Medicine Hat shop at 646 S Railway St under its legal name (owner, 2026-10-19)
+  - Hat Cannabis Inc.
+Kurve:                        # AB: one Sherwood Park shop at 120 14 Sioux Road (owner, 2026-10-19)
+  - Kurve Cannabis at Sherwood Park
+Numo:                         # AB: one Edmonton chain; the spellings share three street addresses (owner, 2026-10-19)
+  - NUMO Cannabis Co.
+  - Numo Cannabis Corp.
+Oasis:                        # NM: Oasis Cannabis Co. (oasiscannabisnm.com); "Oasis" holds only its stores, folded under
+  - Oasis Cannabis Co         #   the long spelling, and "Coors" is one of them. Short canonical: AZ/DC/OR "Oasis" are other
+  - Oasis Cannabis Coors      #   businesses, and only these long spellings are renamed (owner, 2026-10-19)
 Restore Integrative Wellness Center: []
 Sessions:                     # sessions.ca, ~50 Ontario stores; 47 AGCO rows fold to the brand on their own
   - Sessions Cannabis Retail                  # the roster files the Welland store under this name; "Retail" is a

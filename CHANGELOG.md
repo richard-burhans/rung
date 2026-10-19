@@ -26,6 +26,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-19
 
+- **Five Alberta and New Mexico operators are ruled one operator each.** `companies.yml` names the
+  legal and location spellings of F & L, Hat, Kurve and Numo (Alberta), which share their street
+  addresses, and of Oasis (New Mexico), whose short spelling held only Oasis Cannabis Co.'s stores.
+  The short spelling is canonical because unrelated businesses called "Oasis" trade in three other
+  states. Two homepages are pinned per state where a company's own listings voted for another brand.
+
 - **Justice Grown is Bloc Dispensary.** Bloc's parent files its licensees' Bloc-branded stores under
   "Justice Grown" in New Jersey, Michigan and Utah, and Dutchie's chain for them is `justice-grown`;
   `companies.yml` names it as Bloc Dispensary's spelling, so New Jersey's two companies for the same six
