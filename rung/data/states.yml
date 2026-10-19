@@ -364,11 +364,14 @@
   program_term: medical marijuana
   agency: Oklahoma Medical Marijuana Authority
   known_url: https://oklahoma.gov/omma.html
-  # Largest US dispensary market (~2,000 medical, mostly independents). The official OMMA
-  # roster moved behind a JS-gated MedPortal (Salesforce), so there is no static list_url —
-  # discovery is platform-sweep-driven: Dutchie-pool bootstrap (validated 2026-06-18: 9
-  # geo-anchors -> 327 Dutchie dispensaries) + Weedmaps/Leafly for the independent long tail.
-  # Bring-up queued to run after the mg backfill (avoids aggregator-IP contention).
+  # The official roster is OMMA Verify, the regulator's live licence lookup in its Salesforce MedPortal.
+  # It looked JS-gated (2026-06, when OK was bootstrapped from Dutchie: 327 stores); the page's own guest
+  # Apex call returns every business licence with status and address (`salesforce_aura`, `ok_omma`).
+  # Measured 2026-10-19: 4,850 dispensary licences, 1,241 active (1,113 Active + 128 Renewal Pending),
+  # 424 of them with addressDisclosure false — kept for matching, plotted at ~1 km on the public map.
+  # The Dutchie bootstrap of 2026-10-19 swept only 48 stores here, and its replace was refused.
+  list_url: https://medportal.omma.ok.gov/s/verify-license-number
+  list_type: ok_omma
 
 - abbr: OR
   name: Oregon

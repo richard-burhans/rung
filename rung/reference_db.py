@@ -70,13 +70,15 @@ CREATE TABLE IF NOT EXISTS dispensaries (
     longitude         DOUBLE PRECISION,
     licence_number    TEXT,
     licensed_since    TEXT,
+    address_withheld  BOOLEAN NOT NULL DEFAULT FALSE,
     scraped_at        TEXT    NOT NULL
 )
 """
 
 #: Columns added to `dispensaries` after the table first shipped; applied by `_migrate_dispensaries`
 #: so an existing database gains them without a hand-run migration.
-_DISPENSARIES_ADDED_COLUMNS = {"licence_number": "TEXT", "licensed_since": "TEXT"}
+_DISPENSARIES_ADDED_COLUMNS = {"licence_number": "TEXT", "licensed_since": "TEXT",
+                               "address_withheld": "BOOLEAN NOT NULL DEFAULT FALSE"}
 
 # company_id logically references companies(id), but the companies table is owned
 # (and created later) by seed_companies.py, so no FK constraint — Postgres would
@@ -170,8 +172,8 @@ _COMPANY_STORE_ADDED_COLUMNS = {
 _INSERT_DISPENSARY = """
 INSERT INTO dispensaries
   (source, name, address, city, state, zip_code, phone,
-   website, latitude, longitude, licence_number, licensed_since, scraped_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+   website, latitude, longitude, licence_number, licensed_since, address_withheld, scraped_at)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _UPSERT_RECON = """
@@ -940,6 +942,7 @@ def insert_dispensary(conn: DBConn, record: DispensaryRecord) -> None:
             record.longitude,
             record.licence_number,
             record.licensed_since,
+            record.address_withheld,
             now,
         ),
     )

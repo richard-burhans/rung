@@ -35,7 +35,7 @@ INTEL_PKG = "rung_intel"
 # internal imports. `virtual_display` (an X display for a head-full browser) imports nothing at all.
 BASE = frozenset({"models", "http", "html", "browser", "text", "addresses", "normalize", "static_source",
                   "brands", "licensing", "operators", "geocode_rnf", "geocode_points",
-                  "virtual_display"})  # tier 0
+                  "virtual_display", "salesforce_aura"})  # tier 0
 TIER1 = frozenset({"db", "queue"})            # tier 1 — persistence + work queue
 TIER2 = frozenset({"access"})                 # tier 2 — access-method engine
 FOUNDATION = BASE | TIER1 | TIER2
@@ -65,6 +65,10 @@ PUBLIC_MODULES = frozenset({
     # Chromium's own test-harness recipe, re-implemented. Moved here from the private overlay on
     # 2026-10-06: it names no target and imports nothing internal.
     "virtual_display",
+    # A guest Apex call on a Salesforce Experience Cloud site (2026-10-19). Public because it serves a
+    # Stage-1 roster handler, and those live in the public `extract`, which cannot import the overlay;
+    # what it reads is a regulator's public licence lookup (OMMA Verify). Imports only `http`.
+    "salesforce_aura",
 })
 
 # ── Overlay tiers (the proprietary modules left PUBLIC_DIR in the carve-out; their internal layering

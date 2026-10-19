@@ -21,6 +21,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Added — 2026-10-19
 
+- **Oklahoma's official roster, from OMMA Verify.** `rung.sources.salesforce_aura` calls a guest Apex
+  method on a Salesforce Experience Cloud site over plain HTTP — the reason a regulator's licence
+  lookup looks JavaScript-gated and is not — and the `ok_omma` list type reads OMMA's business licences
+  by licence-number prefix, keeping the active dispensaries (1,241 on 2026-10-19). A licensee that did
+  not disclose its address keeps it for matching (`DispensaryRecord.address_withheld`); the maps plot
+  such a store at an approximate position.
+
 - **`recon --company-id`** probes only the named companies (repeatable), so a new homepage override
   can be applied without re-deriving, and overwriting, every other company in its state.
 

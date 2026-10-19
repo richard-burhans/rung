@@ -7,7 +7,7 @@ class DispensaryRecord:
     """One dispensary location from any scrape source."""
 
     source: str  # pdf | csv | kml | arcgis | html | lookup | ca_dcc | az_dhs | co_med |
-    # ma_ccc | ab_aglc | sk_slga | bc_lcrb (static list handlers; on_agco delegates to arcgis) ·
+    # ma_ccc | ab_aglc | sk_slga | bc_lcrb | ok_omma (static list handlers; on_agco delegates to arcgis) ·
     # ai (AI fallback)
     name: str | None = None
     address: str | None = None
@@ -35,6 +35,12 @@ class DispensaryRecord:
     #: store's first appearance in OUR roster, and that is bounded by when we started scraping, not
     #: by when the store opened. 100% filled on Alberta's 963 rows, earliest 2020.
     licensed_since: str | None = None
+    #: The regulator says the licensee did NOT disclose this address for publication — Oklahoma's
+    #: OMMA Verify `addressDisclosure: false` on 424 of 1,241 active dispensaries (2026-10-19). The
+    #: address is still kept, for matching against the operator's own data; what is withheld is its
+    #: PUBLICATION: the public map plots such a roster-only store at an approximate position, never
+    #: its rooftop (the owner's ruling, 2026-10-19).
+    address_withheld: bool = False
 
 
 @dataclass

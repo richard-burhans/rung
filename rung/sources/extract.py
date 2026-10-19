@@ -47,6 +47,7 @@ from rung.addresses import (
 )
 from rung.http import make_session
 from rung.models import DispensaryRecord, LocationObservation
+from rung.sources import salesforce_aura
 from rung.sources.dedupe import location_key
 from rung.text import is_placeholder_name
 
@@ -1805,6 +1806,77 @@ async def _extract_nh_dhhs(url: str, session) -> list[DispensaryRecord]:
     return records
 
 
+# ── Oklahoma OMMA Verify (list_type='ok_omma') ─────────────────────────────────
+
+#: OMMA Verify's guest Apex method, and the cap the site's SOQL OFFSET puts on one search's rows.
+_OMMA_CLASS, _OMMA_METHOD = "OMMA_VerifyLicenseNumberController", "getBusinessLicenses"
+_OMMA_PAGE = 2000
+#: Licence-number prefixes a dispensary carries. `DAAA-` is every one but one: on 2026-10-19 a single
+#: dispensary held a grower-style `GAAA-` number, so those partitions are searched too, filtered by type.
+_OMMA_PREFIXES = ("DAAA-", "GAAA-")
+_OMMA_PARTITIONS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def omma_address(physical: str | None) -> tuple[str | None, str | None, str | None]:
+    """``(street, city, zip)`` from OMMA's ``physicalAddress`` — ``street[, suite], city, county or
+    "Oklahoma", zip``. Pure. The county (or the state's name, which some rows carry instead) is dropped."""
+    parts = [part.strip() for part in (physical or "").split(",") if part.strip()]
+    if len(parts) < 3:
+        return (", ".join(parts) or None), None, None
+    zip_code = parts[-1] if re.fullmatch(r"\d{5}(-\d{4})?", parts[-1]) else None
+    rest = parts[:-1] if zip_code else parts
+    rest = rest[:-1] if len(rest) >= 3 else rest            # the county, or "Oklahoma"
+    return (", ".join(rest[:-1]) or None), rest[-1], (zip_code[:5] if zip_code else None)
+
+
+def omma_record(obj: dict) -> DispensaryRecord | None:
+    """One OMMA Verify business record as a roster row, or None when it is not an ACTIVE dispensary.
+    Pure. "Active - Renewal Pending" is active: the licence holds while the renewal is reviewed."""
+    if obj.get("licenseType") != "Dispensary" or not str(obj.get("licenseStatus") or "").startswith("Active"):
+        return None
+    street, city, zip_code = omma_address(obj.get("physicalAddress"))
+    return DispensaryRecord(
+        source="ok_omma", name=(obj.get("tradeName") or obj.get("legalEntityName") or None),
+        address=street, city=city, state="OK", zip_code=zip_code,
+        phone=(obj.get("telephoneNumber") or None), licence_number=(obj.get("licenseNumber") or None),
+        # The licensee's own choice, which the owner ruled the public map honours (2026-10-19).
+        address_withheld=obj.get("addressDisclosure") is False,
+    )
+
+
+async def _extract_ok_omma(url: str, session) -> list[DispensaryRecord]:
+    """Oklahoma's dispensaries from OMMA Verify, the regulator's live licence lookup.
+
+    OMMA's roster moved into its Salesforce MedPortal in 2026, and `find-lists` saw a JavaScript shell;
+    the page's own guest Apex call (`salesforce_aura`) returns every business licence with its type,
+    status, trade name, phone and address. One search returns at most `_OMMA_PAGE` rows (SOQL's OFFSET
+    cap — the next page answers empty), so it runs once per licence-number prefix, 72 searches of a
+    few dozen to a few hundred rows each. A partition AT the cap may have been cut short:
+    that raises `PartialRoster` rather than return a roster missing rows. Measured 2026-10-19: 4,850 of
+    the export's 4,851 dispensary licences under `DAAA-`, 1,241 of them active.
+    """
+    parsed = urlparse(url)
+    ctx = await salesforce_aura.page_context(session, f"{parsed.scheme}://{parsed.netloc}", parsed.path)
+    records: dict[str, DispensaryRecord] = {}
+    for prefix in _OMMA_PREFIXES:
+        for part in _OMMA_PARTITIONS:
+            value = await salesforce_aura.call_apex(
+                session, ctx, _OMMA_CLASS, _OMMA_METHOD,
+                {"searchString": prefix + part, "offsetSize": 0, "pageSize": _OMMA_PAGE})
+            inner = value.get("returnValue") if isinstance(value, dict) else None
+            rows = inner.get("records") if isinstance(inner, dict) else None
+            if not isinstance(rows, list):
+                raise ExtractionFailed(f"OMMA {prefix}{part}: no record list in {str(value)[:200]}")
+            if len(rows) >= _OMMA_PAGE:
+                raise PartialRoster(f"OMMA {prefix}{part}: {len(rows)} rows, at the {_OMMA_PAGE}-row cap — "
+                                    "the search may be cut short; partition it further")
+            for row in rows:
+                if isinstance(row, dict) and (record := omma_record(row)) and record.licence_number:
+                    records[record.licence_number] = record
+            await asyncio.sleep(0.5)    # 72 calls; a guest endpoint is not a bulk API
+    return list(records.values())
+
+
 async def _extract_bc_lcrb(url: str, session) -> list[DispensaryRecord]:
     """Fetch BC's roster from the LCRB map API (a bare JSON list, no paging/auth)."""
     try:
@@ -1969,7 +2041,7 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 # so the two never drift. Any other value falls through to the html parser.
 ListType = Literal[
     "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
-    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "lookup",
+    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "ok_omma", "lookup",
     "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
@@ -1982,6 +2054,7 @@ _ASYNC_HANDLERS = {
     "bc_lcrb": _extract_bc_lcrb,
     "va_cca": _extract_va_cca,
     "nh_dhhs": _extract_nh_dhhs,
+    "ok_omma": _extract_ok_omma,
     "atlist": _extract_atlist,
     "sk_slga": _extract_sk_slga,
 }
