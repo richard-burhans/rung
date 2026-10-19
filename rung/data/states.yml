@@ -139,6 +139,11 @@
   program_term: medical cannabis
   agency: Hawaii Department of Health
   known_url: https://health.hawaii.gov/medicalcannabis/
+  # Hawaii licenses OPERATORS (8 on 2026-10-19), not storefronts: DOH lists each by county with a link to
+  # its own site and no store address. The roster is that licensee list; the stores come from the
+  # operators' sites (Stage 2), whose websites this list supplies to recon.
+  list_url: https://health.hawaii.gov/medicalcannabisdispensary/dispensary-websites-and-locations/
+  list_type: hi_doh
 
 - abbr: IA
   name: Iowa
@@ -278,6 +283,10 @@
   program_term: medical marijuana
   agency: North Dakota Department of Health and Human Services
   known_url: https://www.hhs.nd.gov/
+  # HHS "Dispensary Locations": a static page, 8 dispensaries with street, phone and website on 2026-10-19,
+  # replacing a July Dutchie bootstrap of 2.
+  list_url: https://www.hhs.nd.gov/mm/dispensary-locations
+  list_type: nd_hhs
 
 - abbr: NE
   name: Nebraska
@@ -410,6 +419,10 @@
   program_term: medical marijuana
   agency: South Dakota Department of Health
   known_url: https://medcannabis.sd.gov/
+  # DOH's Establishments List: the "Dispensary Establishments" table — legal name, doing-business-as and
+  # TOWN only (no street published); 62 dispensaries on 2026-10-19, replacing a June Dutchie bootstrap.
+  list_url: https://doh.sd.gov/programs/medical-cannabis/medical-cannabis-establishments/establishments-list/
+  list_type: sd_doh
 
 - abbr: TN
   name: Tennessee
@@ -482,6 +495,11 @@
   program_term: medical cannabis
   agency: West Virginia Department of Health and Human Resources
   known_url: https://omc.wv.gov/
+  # The Office of Medical Cannabis "Find a Dispensary" map: its markers (coordinates, trade name, address,
+  # phone, status) sit in the page's drupal-settings-json — 65 operational dispensaries on 2026-10-19,
+  # replacing a June Dutchie bootstrap (58). find-lists had stored a PHYSICIANS list here.
+  list_url: https://omc.wv.gov/dispensary
+  list_type: wv_omc
 
 - abbr: WY
   name: Wyoming

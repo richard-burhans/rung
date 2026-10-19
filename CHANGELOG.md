@@ -21,6 +21,12 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Added — 2026-10-19
 
+- **Official rosters for West Virginia, North Dakota, South Dakota and Hawaii.** Four one-page list
+  types read each regulator's own list: West Virginia's dispensary map (its markers are embedded in the
+  page), North Dakota's locations page, South Dakota's establishments table (town only — no street is
+  published) and Hawaii's licensed operators with their websites (Hawaii licenses operators, not
+  storefronts). A page that no longer has the shape a handler reads is a failure, never an empty roster.
+
 - **Oklahoma's official roster, from OMMA Verify.** `rung.sources.salesforce_aura` calls a guest Apex
   method on a Salesforce Experience Cloud site over plain HTTP — the reason a regulator's licence
   lookup looks JavaScript-gated and is not — and the `ok_omma` list type reads OMMA's business licences

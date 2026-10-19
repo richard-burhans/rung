@@ -1806,6 +1806,153 @@ async def _extract_nh_dhhs(url: str, session) -> list[DispensaryRecord]:
     return records
 
 
+# ── The four small official rosters that replaced Dutchie bootstraps (2026-10-19) ──────────────────
+# West Virginia, North Dakota, South Dakota and Hawaii each publish their list on one public page; all
+# four had run on a Dutchie bootstrap since June, whose refresh that day was refused in WV/ND/SD/HI for
+# sweeping fewer stores than the roster held. Each parser is pure (HTML in, records out) and each
+# handler RAISES when the page no longer has the shape it reads — an empty roster is never a result.
+
+_DRUPAL_SETTINGS_RE = re.compile(
+    r'<script type="application/json" data-drupal-selector="drupal-settings-json">(.*?)</script>', re.S)
+
+
+def _wv_omc_records(page: str) -> list[DispensaryRecord]:
+    """WV Office of Medical Cannabis "Find a Dispensary": a Leaflet map whose markers sit in the page's
+    `drupal-settings-json` — coordinates plus a popup with trade name, address, phone and status. Only
+    an "Operational…" dispensary is kept. Pure."""
+    match = _DRUPAL_SETTINGS_RE.search(page)
+    settings = json.loads(match.group(1)) if match else {}
+    records: list[DispensaryRecord] = []
+    for layer in (settings.get("leaflet") or {}).values():
+        for feature in (layer.get("features") or []) if isinstance(layer, dict) else []:
+            popup = feature.get("popup")
+            popup = popup.get("value") if isinstance(popup, dict) else popup
+            tree = HTMLParser(popup if isinstance(popup, str) else "")
+            status = _first_text(tree, ".views-field-views-conditional-field .field-content") or ""
+            if not status.startswith("Operational"):
+                continue
+            phone = tree.css_first('a[href^="tel:"]')
+            records.append(DispensaryRecord(
+                source="wv_omc", name=_first_text(tree, ".views-field-field-trade-name .field-content"),
+                address=_first_text(tree, ".address-line1"), city=_first_text(tree, ".locality"), state="WV",
+                zip_code=_first_text(tree, ".postal-code"), phone=phone.text(strip=True) if phone is not None else None,
+                latitude=_to_float_or_none(feature.get("lat")), longitude=_to_float_or_none(feature.get("lon"))))
+    return records
+
+
+def _first_text(tree: HTMLParser, selector: str) -> str | None:
+    """The stripped text of the first node matching ``selector``, or None. Pure."""
+    node = tree.css_first(selector)
+    text = node.text(strip=True) if node is not None else ""
+    return text or None
+
+
+def _to_float_or_none(value: object) -> float | None:
+    """A float from a JSON number or numeric string, or None. Pure."""
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _nd_hhs_records(page: str) -> list[DispensaryRecord]:
+    """ND HHS "Dispensary Locations": blocks of `<h2>` city, `<h3>` dispensary, then `<p>` street, phone
+    and a link to its site, then hours. Walked in document order so a city with two stores is two rows.
+    Pure."""
+    records: list[DispensaryRecord] = []
+    for block in HTMLParser(page).css("div.field--name-field-wysiwyg-text"):
+        city: str | None = None
+        current: dict[str, str | None] | None = None
+        for node in block.iter():
+            text = node.text(strip=True)
+            if node.tag == "h2":
+                city = text or city
+            elif node.tag == "h3" and text:
+                if current:
+                    records.append(_nd_record(current))
+                current = {"name": text, "city": city, "address": None, "phone": None, "website": None}
+            elif node.tag == "h4":
+                if current:
+                    records.append(_nd_record(current))
+                current = None                      # "Store Hours": the rest of the block is hours
+            elif node.tag == "p" and current is not None and text:
+                link = node.css_first("a[href]")
+                href = (link.attributes.get("href") or "") if link is not None else ""
+                if href.startswith("http"):
+                    current["website"] = href
+                elif _PHONE_RE.fullmatch(text):
+                    current["phone"] = text
+                elif current["address"] is None:
+                    current["address"] = text
+        if current:
+            records.append(_nd_record(current))
+    return records
+
+
+def _nd_record(fields: dict[str, str | None]) -> DispensaryRecord:
+    return DispensaryRecord(source="nd_hhs", name=fields["name"], address=fields["address"],
+                            city=fields["city"], state="ND", phone=fields["phone"], website=fields["website"])
+
+
+def _sd_doh_records(page: str) -> list[DispensaryRecord]:
+    """SD DOH "Medical Cannabis Establishments List": the table under the "Dispensary Establishments"
+    heading — Legal Name, Doing Business As, Location (a town; the list publishes no street). The
+    cultivation, manufacturing and testing tables beside it are not storefronts. Pure."""
+    for table in HTMLParser(page).css("table"):
+        heading = table.prev
+        while heading is not None and not (heading.tag in ("h2", "h3") and heading.text(strip=True)):
+            heading = heading.prev
+        if heading is None or "dispensary" not in heading.text(strip=True).lower():
+            continue
+        records = []
+        for row in table.css("tr")[1:]:
+            cells = [cell.text(strip=True) for cell in row.css("td")]
+            if len(cells) >= 3 and (cells[1] or cells[0]):
+                records.append(DispensaryRecord(source="sd_doh", name=cells[1] or cells[0], city=cells[2] or None,
+                                                state="SD"))
+        return records
+    return []
+
+
+def _hi_doh_records(page: str) -> list[DispensaryRecord]:
+    """HI DOH "Dispensary Websites and Locations": the licensed OPERATORS by county, each linked to its
+    own site. Hawaii licenses operators, not storefronts, and the page lists no store address — so a row
+    is a licensee with its website, and its stores come from that site (Stage 2). Pure."""
+    records: list[DispensaryRecord] = []
+    for cell in HTMLParser(page).css("table td"):
+        for link in cell.css("a[href]"):
+            name, href = link.text(strip=True), link.attributes.get("href") or ""
+            if name and href.startswith("http"):
+                records.append(DispensaryRecord(source="hi_doh", name=name, state="HI", website=href))
+    return records
+
+
+def _static_page_handler(parse, label: str):
+    """An async handler for a roster that is one public page: fetch, parse, and RAISE on a refused fetch
+    or a page that yields nothing (`_extract_nh_dhhs`'s rule — an empty answer is never a roster)."""
+    async def handler(url: str, session) -> list[DispensaryRecord]:
+        response = await session.get(url, timeout=60, allow_redirects=True)
+        if response.status_code >= 400:
+            raise ExtractionFailed(f"{label}: HTTP {response.status_code} from {response.url}")
+        records = parse(response.text or "")
+        if not records:
+            raise ExtractionFailed(f"{label}: HTTP {response.status_code}, {len(response.text or ''):,} bytes "
+                                   f"from {response.url} — no roster in the shape this handler reads")
+        return records
+    handler.__name__ = f"_extract_{label}"
+    return handler
+
+
+_extract_wv_omc = _static_page_handler(_wv_omc_records, "wv_omc")
+_extract_nd_hhs = _static_page_handler(_nd_hhs_records, "nd_hhs")
+_extract_sd_doh = _static_page_handler(_sd_doh_records, "sd_doh")
+_extract_hi_doh = _static_page_handler(_hi_doh_records, "hi_doh")
+
+
 # ── Oklahoma OMMA Verify (list_type='ok_omma') ─────────────────────────────────
 
 #: OMMA Verify's guest Apex method, and the cap the site's SOQL OFFSET puts on one search's rows.
@@ -2041,7 +2188,8 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 # so the two never drift. Any other value falls through to the html parser.
 ListType = Literal[
     "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
-    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "ok_omma", "lookup",
+    "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "ok_omma",
+    "wv_omc", "nd_hhs", "sd_doh", "hi_doh", "lookup",
     "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
@@ -2055,6 +2203,10 @@ _ASYNC_HANDLERS = {
     "va_cca": _extract_va_cca,
     "nh_dhhs": _extract_nh_dhhs,
     "ok_omma": _extract_ok_omma,
+    "wv_omc": _extract_wv_omc,
+    "nd_hhs": _extract_nd_hhs,
+    "sd_doh": _extract_sd_doh,
+    "hi_doh": _extract_hi_doh,
     "atlist": _extract_atlist,
     "sk_slga": _extract_sk_slga,
 }
