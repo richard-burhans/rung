@@ -26,6 +26,11 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-19
 
+- **A recon re-run no longer erases a homepage just because nothing yields it any more.** When the
+  override file, the roster and the company's own listings are all silent, the stored homepage is
+  probed again instead of being overwritten with `no_url`; only an override naming `null` for the
+  state still erases one. The forecast that day named 544 erasures.
+
 - **A name made only of articles is keyless.** `text.is_keyless` now reads "The" as keyless
   (`text.is_only_articles`): Illinois, Maryland and Nevada each held a company so named, and "the" is
   a token of half the directory chains and the prefix of half their slugs.

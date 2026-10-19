@@ -138,10 +138,12 @@ and not their contents.
   filed `http_403` with no platform from one ask (2026-10-12). One that outlasts the re-asks is filed
   `edge_challenge`, never under the status its page carried: the address was judged, and the host
   never answered.
-- **Re-run:** re-probes and overwrites — **every row of the state, including the ones it can no
-  longer derive.** A company whose homepage the override file, the roster or its own listings no longer yields is
-  rewritten `no_url`, and Stage 2 then walks it homeless, so a Jane/SweedPOS winner that read the
-  homepage is no longer offered. `coverage_healthcheck`'s `recon_would_drop_homepage` and
+- **Re-run:** re-probes and overwrites every row of the state. A company whose homepage the override
+  file, the roster and its own listings no longer yield KEEPS the stored one, which is probed again
+  (since 2026-10-19 — the forecast that day named 544 erasures, two thirds of them the site Stage 2
+  read the company's stores from). It is rewritten `no_url` only when an override names `null` for
+  its state, and Stage 2 then walks it homeless, so a Jane/SweedPOS winner that read the homepage is
+  no longer offered. `coverage_healthcheck`'s `recon_would_drop_homepage` and
   `recon_would_change_homepage` forecast exactly that set — erased, and re-pointed — from
   `recon.planned_homepage` (the run's own decision, no request made); read them before the run,
   because the run overwrites the evidence they read. `homepage_override_dead_key` names a key that

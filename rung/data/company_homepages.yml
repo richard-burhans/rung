@@ -28,6 +28,10 @@
 #    healthcheck's `recon_would_drop_homepage` / `recon_would_change_homepage` forecast what a
 #    re-run would erase or re-point, and `homepage_override_dead_key` names a key reaching no
 #    company — read them BEFORE running `recon`, because the run erases the evidence they read.
+#    Since 2026-10-19 a re-run no longer ERASES a homepage nothing yields any more — it carries the
+#    stored one forward and probes it again — so a drop now means an override names `null` for that
+#    state. To apply a NEW key cheaply, run recon on the companies it names alone:
+#    `recon --company-id <id> [--company-id <id> …]`.
 
 Apothecarium:
   NJ: https://apothecariumnj.com
