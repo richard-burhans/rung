@@ -53,6 +53,9 @@ Sunnyside:
   - Delta 9                    # roster "Delta 9 Pittsburgh" (city stripped by extract_brand); not the CA "Delta 9 THC" operator
   - Keystone Integrated Care   # roster entity in Beaver Falls; its roster website is literally sunnyside.shop
 Terra Pharm: []
+The Chronic:                  # MI rebrand: Dutchie lists two Sozo stores as "The Chronic - <city>" and moved the
+  - Sozo                      #   other three to the-chronic-* slugs under the same dispensary ids; the state
+                              #   roster still says Sozo. Owner, 2026-10-19
 Terrapin Care Station: []
 Trulieve:
   - Harvest of Whitehall   # Trulieve acquired Harvest HOC; harvesthoc.com redirects to trulieve.com and its 21 PA stores are the same physical Trulieve PA stores (identical addresses + Magento store-view codes), already handled via trulieve_rest — fold so the duplicate licensee collapses instead of yielding 21 menu-less rows

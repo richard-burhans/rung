@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-19
+
+- **Michigan's Sozo is The Chronic.** Dutchie lists two of its five stores as "The Chronic" and moved
+  the other three to `the-chronic-*` storefronts under the same dispensary ids, while the state roster
+  still says Sozo; `companies.yml` names Sozo as The Chronic's former spelling, so the roster's rows
+  fold to the operator's current name.
+
 ### Fixed — 2026-10-15
 
 - **Eleven short-key operators in Massachusetts and Michigan are ruled one operator each.**
