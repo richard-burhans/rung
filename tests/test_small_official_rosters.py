@@ -9,12 +9,13 @@ import pytest
 from rung.sources import extract
 
 
-def _wv_page(status: str = "Operational with Product") -> str:
-    popup = ('<div class="views-field views-field-field-trade-name"><div class="field-content">Newleaf</div></div>'
+def _wv_page(status: str = "Operational with Product", trade_name: str = "Newleaf") -> str:
+    popup = (f'<div class="views-field views-field-field-trade-name"><div class="field-content">{trade_name}</div></div>'
              '<p class="address"><span class="address-line1">355 WAYFARER DRIVE</span><br>'
              '<span class="locality">TRIADELPHIA</span>, <span class="administrative-area">WV</span> '
-             '<span class="postal-code">26059</span></p><span class="field-content">Phone Number: '
-             '<a href="tel:304-578-5231">304-578-5231</a></span>'
+             '<span class="postal-code">26059</span></p><div class="views-field views-field-nothing">'
+             '<span class="field-content">Dispensary Name: <a href="/node/512">New Leaf WV, LLC</a> <br />'
+             'Phone Number: <a href="tel:304-578-5231">304-578-5231</a></span></div>'
              f'<div class="views-field views-field-views-conditional-field"><span class="field-content">{status}</span></div>')
     settings = {"leaflet": {"leaflet-map-view-x": {"features": [
         {"type": "point", "lat": "40.0602", "lon": "-80.5882", "popup": {"value": popup}}]}}}
@@ -27,6 +28,8 @@ def test_west_virginia_reads_the_map_markers_and_keeps_operational_stores() -> N
     assert (r.name, r.address, r.city, r.zip_code, r.phone, r.latitude, r.longitude, r.source) == (
         "Newleaf", "355 WAYFARER DRIVE", "TRIADELPHIA", "26059", "304-578-5231", 40.0602, -80.5882, "wv_omc")
     assert extract._wv_omc_records(_wv_page("Not Yet Operational")) == []
+    # A marker with no trade name is named by its licensee rather than dropped as nameless.
+    assert [r.name for r in extract._wv_omc_records(_wv_page(trade_name=""))] == ["New Leaf WV, LLC"]
 
 
 def test_north_dakota_reads_city_store_street_phone_and_site_in_order() -> None:

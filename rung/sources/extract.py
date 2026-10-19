@@ -1833,7 +1833,10 @@ def _wv_omc_records(page: str) -> list[DispensaryRecord]:
                 continue
             phone = tree.css_first('a[href^="tel:"]')
             records.append(DispensaryRecord(
-                source="wv_omc", name=_first_text(tree, ".views-field-field-trade-name .field-content"),
+                # Three of 65 markers carried no trade name on the first run (2026-10-19), and a nameless
+                # row is dropped by the roster write; the popup still names the licensee.
+                source="wv_omc", name=(_first_text(tree, ".views-field-field-trade-name .field-content")
+                                       or _first_text(tree, ".views-field-nothing a")),
                 address=_first_text(tree, ".address-line1"), city=_first_text(tree, ".locality"), state="WV",
                 zip_code=_first_text(tree, ".postal-code"), phone=phone.text(strip=True) if phone is not None else None,
                 latitude=_to_float_or_none(feature.get("lat")), longitude=_to_float_or_none(feature.get("lon"))))
