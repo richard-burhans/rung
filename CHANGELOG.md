@@ -21,6 +21,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-19
 
+- **A name made only of articles is keyless.** `text.is_keyless` now reads "The" as keyless
+  (`text.is_only_articles`): Illinois, Maryland and Nevada each held a company so named, and "the" is
+  a token of half the directory chains and the prefix of half their slugs.
+
 - **Michigan's Sozo is The Chronic.** Dutchie lists two of its five stores as "The Chronic" and moved
   the other three to `the-chronic-*` storefronts under the same dispensary ids, while the state roster
   still says Sozo; `companies.yml` names Sozo as The Chronic's former spelling, so the roster's rows

@@ -768,6 +768,13 @@ def test_a_strip_that_leaves_a_stub_under_three_characters_keeps_the_whole_name(
     assert not is_keyless("NY Cannabis Dispensary") and not is_keyless("T CANNABIS") and not is_keyless("Oz Cannabis")
 
 
+def test_a_name_of_only_articles_is_keyless() -> None:
+    """Illinois, Maryland and Nevada each held a company keyed "The" (2026-10-19), and "the" begins half
+    the directory. A name that merely STARTS with one is a brand."""
+    assert is_keyless("The") and is_keyless("THE") and is_keyless("the a")
+    assert not is_keyless("The Joint") and not is_keyless("The Dispensary") and not is_keyless("Theory")
+
+
 def test_the_unguarded_strip_is_public_so_a_repair_can_ask_what_the_old_rule_produced() -> None:
     """The repair that retires a "Cannabis" company finds the roster row that seeded it by asking which
     row's brand this reduces to the bucket's name."""

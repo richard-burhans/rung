@@ -95,8 +95,8 @@ _MIN_BRAND_CHARS = 3
 
 
 def is_keyless(value: str) -> bool:
-    """True when `value` cannot serve as an operator key: only a generic descriptor, or shorter than
-    `_MIN_BRAND_CHARS`.
+    """True when `value` cannot serve as an operator key: only a generic descriptor, only articles
+    ("The" — `is_only_articles`), or shorter than `_MIN_BRAND_CHARS`.
 
     THE one rule for "this name is a bucket". `_keeps_a_brand` refuses a strip that would produce one;
     the private Stage-2 runner refuses to ask a directory for a company so named (the Johnstown store
@@ -104,7 +104,20 @@ def is_keyless(value: str) -> bool:
     2026-10-13, Ontario's "T CANNABIS" keyed "T"); the private health check and repair find the ones
     that already exist.
     """
-    return is_bare_generic(value) or len(value.strip()) < _MIN_BRAND_CHARS
+    return is_bare_generic(value) or is_only_articles(value) or len(value.strip()) < _MIN_BRAND_CHARS
+
+
+def is_only_articles(value: str) -> bool:
+    """True when every word of `value` is an article — "The". A non-empty name, so "" is not one.
+
+    THE THREE-LETTER HOLE `_MIN_BRAND_CHARS` LEAVES (2026-10-19). Illinois and Maryland each held a
+    company keyed "The", and "the" is a token of every Dutchie chain and the slug prefix of every
+    Weedmaps and Leafly listing that starts with the word: Illinois' was handed The Joint's two stores,
+    Maryland's four other operators' (4,656 menu rows). It is the bare-generic case with a different
+    word list.
+    """
+    words = re.findall(r"[a-z0-9]+", value.lower())
+    return bool(words) and all(w in _ARTICLES for w in words)
 
 
 def is_bare_generic(value: str) -> bool:
