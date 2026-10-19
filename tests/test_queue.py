@@ -607,17 +607,24 @@ def test_requeue_stale_spreads_pending_retries() -> None:
     for _ in range(20):
         queue.claim_next(conn, "t", "w1")
     conn.execute("UPDATE jobs SET claimed_at = now() - interval '2 hours', lease_until = now() - interval '90 minutes'")
+    conn.commit()
+    # The window is measured against the requeue's OWN clock, read on either side of it. Measuring
+    # against `now()` in a later transaction failed under the gate's parallel load (2026-10-19): more
+    # than a second passed between the requeue and the read, and an offset fell below the floor.
+    (before,) = conn.execute("SELECT clock_timestamp()").fetchone()
     assert queue.requeue_stale(conn, "t") == 20
     conn.commit()
+    (after,) = conn.execute("SELECT clock_timestamp()").fetchone()
     # Each retry is re-queued with a small (~0–30s) future scheduled_at, and the wave is spread
     # (not all one instant) so simultaneously-requeued jobs don't stampede the target.
     offsets = [
         off for (off,) in conn.execute(
-            "SELECT extract(epoch FROM scheduled_at - now()) FROM jobs WHERE status = 'pending'"
+            "SELECT extract(epoch FROM scheduled_at - %s) FROM jobs WHERE status = 'pending'", (before,)
         ).fetchall()
     ]
+    elapsed = (after - before).total_seconds()
     assert len(offsets) == 20
-    assert all(-1 <= off < 31 for off in offsets)
+    assert all(-1 <= off < 31 + elapsed for off in offsets)
     assert max(offsets) > 0                                  # jitter pushed retries forward
     assert len({round(off) for off in offsets}) > 1          # spread across the window
 
