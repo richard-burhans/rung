@@ -26,6 +26,11 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-19
 
+- **Justice Grown is Bloc Dispensary.** Bloc's parent files its licensees' Bloc-branded stores under
+  "Justice Grown" in New Jersey, Michigan and Utah, and Dutchie's chain for them is `justice-grown`;
+  `companies.yml` names it as Bloc Dispensary's spelling, so New Jersey's two companies for the same six
+  storefronts fold into one.
+
 - **A recon re-run no longer erases a homepage just because nothing yields it any more.** When the
   override file, the roster and the company's own listings are all silent, the stored homepage is
   probed again instead of being overwritten with `no_url`; only an override naming `null` for the

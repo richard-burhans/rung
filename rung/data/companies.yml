@@ -14,6 +14,9 @@ Beyond Hello:
   - Beyond/Hello       # slash used instead of space
 Bloc Dispensary:
   - Bloc dispensary    # wrong capitalisation of 'dispensary'
+  - Justice Grown      # Bloc's parent; its licensees file Bloc-branded stores under it (NJ Waretown/Ewing/
+                       #   Somerset, MI Benton Harbor, UT St. George/South Jordan) and Dutchie's chain is
+                       #   justice-grown (dutchie_chains.yml). Owner, 2026-10-19
 Columbia Care: []
 Curaleaf: []
 Dankley:                      # NY operator under multiple legal-entity / spelling variants
