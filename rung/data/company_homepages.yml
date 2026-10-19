@@ -300,3 +300,229 @@ Quality Roots:
 "Mary J's Cannabis Riverside South":
   "ON": https://maryjcannabis.ca
 
+# ── Dead-link operators (2026-10-19, owner) ─────────────────────────────────────────────────────────
+# Operators whose map link the 2026-10-17 check found dead and that recon held no homepage for. Found
+# by web search (scripts/discover_dead_link_homepages.py --list-only, then a researcher per batch), each
+# re-checked by `--verify`: live, says cannabis, names the operator and one of its stores' cities — or,
+# behind an age gate or a challenge, read by hand from the site's own locations page. EVERY ENTRY IS
+# SCOPED TO ITS ONE STATE: eight of these names belong to strangers elsewhere (Cloud Nine BC/NJ,
+# Elevated CA/NY, Hempire OK, Green Vibes OK, Simply Pure NJ, The Reserve MD, High Mountain BC,
+# Dispensary Near Me DC/MT/OK).
+"Gramsterdam":
+  AB: https://gramsterdam.ca
+"Vincanna":
+  AB: https://www.vincanna.ca
+"Green Pharms":
+  AZ: https://greenpharms.com
+"2ONE2 California":
+  CA: https://2one2dispensary.com
+"2ONE2 California Street":
+  CA: https://2one2dispensary.com
+"420 Central Powered by STIIIZY":
+  CA: https://420central.com
+"A Therapeutic Alternative":
+  CA: https://atherapeuticalternative.com
+"Abatin Wellness Center x 4 Twenty Market":
+  CA: https://4twentymarket.com
+"Balboa Bud":
+  CA: https://balboabud.com
+"Blazed Utopia":
+  CA: https://blazedutopia.com
+"Bored n Stone":
+  CA: https://borednstone.com
+"Cali Kosher":
+  CA: https://calikosher.com
+"Dixon Wellness Collective":
+  CA: https://dixonwellnesscollective.com
+"Doobie Nights":
+  CA: https://doobienights.com
+"Dr. Greenthumb":
+  CA: https://doctorgreenthumbs.com
+"Dr. Greenthumb's":
+  CA: https://doctorgreenthumbs.com
+"Fig Trees":
+  CA: https://figtreesla.com
+"Flore":
+  CA: https://floredispensary.com
+"Golden State Patient Care":
+  CA: https://goldenstatepatientcare.com
+"Goldn Bloom":
+  CA: https://goldnbloom.com
+"Green Qween Weed Dispensary Los Angeles":
+  CA: https://thegreenqween.com
+"Green Qween West Hollywod":
+  CA: https://thegreenqween.com
+"Green Qween West Hollywood":
+  CA: https://thegreenqween.com
+"GreenBean Cannabis And Weed":
+  CA: https://greenbeanpharm.com
+"GreenSTOP":
+  CA: https://www.greenstopla.co
+"Grovys":
+  CA: https://grovysllc.com
+"Herbarium Mid-City":
+  CA: https://herbarium.co
+"High-Land":
+  CA: https://high-landcannabis.com
+"Hyperwolf":
+  CA: https://hyperwolf.com
+"Kolas":
+  CA: https://kolas.com
+"KOLAS Blumenfeld Marijuana Dispensary & Weed Delivery":
+  CA: https://kolas.com
+"KOLAS Fruitridge Marijuana Dispensary & Weed Delivery":
+  CA: https://kolas.com
+"LAPCG x 4 Twenty Market":
+  CA: https://4twentymarket.com
+"Mammoth Roots":
+  CA: https://mammothroots.com
+"Medmen":
+  CA: https://medmen.com
+"Nela Rd I Los Feliz":
+  CA: https://nelard.com
+"Nela Rd | Highland Park":
+  CA: https://nelard.com
+"Oak Park":
+  CA: https://oakparkcannabis.com
+"Obsidian":
+  CA: https://shop.obsidiansanfrancisco.com
+"PACKS Weed Dispensary South Los Angeles":
+  CA: https://packsclub.com
+"Palm Royale Collective":
+  CA: https://www.palmroyalecollective.com
+"Pauwels":
+  CA: https://pauwelscannabis.com
+"Perfect Union Weed Dispensary Eastside Sacramento":
+  CA: https://www.perfect-union.com
+"Phytologie Wellness x 4 Twenty Market":
+  CA: https://4twentymarket.com
+"PLNTBSD":
+  CA: https://plntbsdhlp.com
+"Queen of Dragons":
+  CA: https://thequeenofdragons.com
+"Redbud Apothecary":
+  CA: https://redbudapothecary.com
+"SCSA South Coast Safe Access":
+  CA: https://southcoastsafeaccess.com
+"Street Kings":
+  CA: https://streetkingsla.com
+"The Bright Spot":
+  CA: https://thebrightspot.com
+"The Reserve":
+  CA: https://thereservesd.com
+"The Treehouse Dispensary & Delivery":
+  CA: https://treehouse.delivery
+"Triple C Collective":
+  CA: https://tripleccollective.com
+"Union Station":
+  CA: https://unionstationsf.com
+"Velvet":
+  CA: https://www.velvetcannabis.com
+"Altitude Organic Medicine":
+  CO: https://altitudeorganic.com
+"Cannabis Station By Rocky Mountain High":
+  CO: https://rockymountainhigh.co
+"Emerald Fields":
+  CO: https://emeraldfields.com
+"EmJ's":
+  CO: https://emjsdispo.com
+"Green Pharm 2":
+  CO: https://www.greenpharmco.com
+"Kaya Cannabis Colfax":
+  CO: https://www.kayacannabis.com
+"Simply Pure":
+  CO: https://simplypure.com
+"Star Buds Pueblo East Recreational Dispensary at Highway 50":
+  CO: https://www.starbuds.us
+"The Green Solution":
+  CO: https://tgscolorado.com
+"Verts Neighborhood":
+  CO: https://www.vertsdispensary.com
+"Flower Patch DC":
+  DC: https://www.flowerpatchdc.com
+"Columbia Care Delaware":
+  DE: https://www.columbia.care
+"Spark'd":
+  IL: https://www.sparkdcannabis.com
+"Salty Farmers":
+  MA: https://saltyfarmers.com
+"20 Past 4":
+  MI: https://www.20past4michigan.com
+"Cherry Dispensary & Drive Thru":
+  MI: https://www.cherry517.com
+"Farmhouse PC":
+  MI: https://www.farmhousepc.com
+"Higher Love":
+  MI: https://findhigherlove.com
+"Lake Life Farms":
+  MI: https://lakelifefarms.com
+"Leaf and Bud":
+  MI: https://leafandbud.com
+"LUV Cannabis Co":
+  MI: https://luvcodetroit.com
+"Xhale":
+  MI: https://xhalecannabisco.com
+"Hempire":
+  MN: https://www.hempiredispensary.com
+"Elevated":
+  MT: https://www.elevatedmt.com
+"Herbaceous":
+  MT: https://herbaceousinc.com
+"High Mountain":
+  MT: https://highmountainmt.com
+"Lone Peak Cannabis co":
+  MT: https://lonepeakcannabiscompany.com
+"N8V Grown":
+  MT: https://n8vgrown.com
+"POWER PLANT MONTANA":
+  MT: https://powerplantmt.com
+"Power Plant MT":
+  MT: https://powerplantmt.com
+"The Fruit Factory":
+  MT: https://www.thefruitfactorymt.com
+"Treasure Tree":
+  MT: https://treasuretreemt.com
+"Apogee":
+  NM: https://apogeenm.com
+"Bogo":
+  NM: https://www.bogocannabis.com
+"Deep Sky":
+  NM: https://deepskycannabis.com
+"Dispensary Near Me":
+  NM: https://www.dispensarynearmenm.com
+"Dreamz":
+  NM: https://dreamzcannabis.com
+"Everest Cannabis Co.":
+  NM: https://everestnm.com
+"Everest Las Cruces North":
+  NM: https://everestnm.com
+"Ganjika Gardens":
+  NM: https://ganjikagardens.com
+"Nm Green Door":
+  NM: https://nmgreendoor.com
+"Oasis Cannabis Co":
+  NM: https://www.oasiscannabisnm.com
+"Oasis Cannabis Coors":
+  NM: https://www.oasiscannabisnm.com
+"PurLife":
+  NM: https://www.purlifenm.com
+"R Greenleaf":
+  NM: https://rgreenleaf.com
+"R Greenleaf Cottonwood":
+  NM: https://rgreenleaf.com
+"The Stash":
+  NM: https://thestashnm.com
+"SILVER STATE RELIEF":
+  NV: https://silverstaterelief.com
+"Culture House":
+  NY: https://culturehousenyc.com
+"The Citizen by Klutch":
+  OH: https://shopklutch.com
+"Get Bak'd Weed":
+  OK: https://getbakd.com
+"Cloud Nine":
+  "ON": https://cloudninecannabis.ca
+"Green Vibes":
+  PR: https://greenvibespr.com
+"FORBIDDEN CANNABIS CLUB OLYMPIA":
+  WA: https://superchronicclub.com

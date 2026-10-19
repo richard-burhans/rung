@@ -47,14 +47,22 @@ def test_recon_normalizes_state_to_upper(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_run_recon", fake)
     result = CliRunner().invoke(cli.recon_cmd, ["--state", "pa"])
     assert result.exit_code == 0
-    assert calls == [{"state": "PA", "discover": False}]
+    assert calls == [{"state": "PA", "discover": False, "company_ids": None}]
 
 
 def test_recon_blank_state_becomes_none(monkeypatch) -> None:
     calls, fake = _recorder()
     monkeypatch.setattr(cli, "_run_recon", fake)
     CliRunner().invoke(cli.recon_cmd, [])
-    assert calls == [{"state": None, "discover": False}]
+    assert calls == [{"state": None, "discover": False, "company_ids": None}]
+
+
+def test_recon_can_be_scoped_to_named_companies(monkeypatch) -> None:
+    """Applying a new homepage override must not re-derive a whole state (2026-10-19)."""
+    calls, fake = _recorder()
+    monkeypatch.setattr(cli, "_run_recon", fake)
+    CliRunner().invoke(cli.recon_cmd, ["--company-id", "7", "--company-id", "12"])
+    assert calls == [{"state": None, "discover": False, "company_ids": [7, 12]}]
 
 
 def test_find_lists_parses_only_csv(monkeypatch) -> None:

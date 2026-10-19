@@ -33,9 +33,15 @@ def _stage(name: str) -> Callable[..., Any]:
     help="Web-search operators with no derivable homepage to discover their own site "
     "(network, opt-in, fuzzy). Prints a review list to promote into company_homepages.yml.",
 )
-def recon_cmd(state: str, discover: bool) -> None:
+@click.option(
+    "--company-id", "company_ids", multiple=True, type=int,
+    help="Probe only these companies (repeatable): apply a new homepage override without "
+    "re-deriving, and overwriting, every other company in the state.",
+)
+def recon_cmd(state: str, discover: bool, company_ids: tuple[int, ...]) -> None:
     """Probe company homepages and detect dispensary platform technology."""
-    asyncio.run(_run_recon(state=state.strip().upper() or None, discover=discover))
+    asyncio.run(_run_recon(state=state.strip().upper() or None, discover=discover,
+                           company_ids=list(company_ids) or None))
 
 
 @click.command("fetch-fx")
@@ -637,16 +643,20 @@ async def _run_store_menus(
     print_menu_report(results, state)
 
 
-async def _run_recon(state: str | None = None, discover: bool = False) -> None:
+async def _run_recon(
+    state: str | None = None, discover: bool = False, company_ids: list[int] | None = None,
+) -> None:
     run_recon = _stage("recon.run")
     conn = db.get_connection()
     db.create_tables(conn)
-    records, discovered = await run_recon(conn, state=state, discover=discover)
+    scoped = {"company_ids": company_ids} if company_ids else {}
+    records, discovered = await run_recon(conn, state=state, discover=discover, **scoped)
     for record in records:
         db.upsert_recon(conn, record)
     conn.commit()
     conn.close()
     scope = f" ({state})" if state else ""
+    scope += f" ({len(company_ids)} named companies)" if company_ids else ""
     click.echo(f"Upserted {len(records)} company recon records{scope}.")
 
     if discover:

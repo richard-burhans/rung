@@ -19,6 +19,11 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-19
+
+- **`recon --company-id`** probes only the named companies (repeatable), so a new homepage override
+  can be applied without re-deriving, and overwriting, every other company in its state.
+
 ### Fixed — 2026-10-19
 
 - **A name made only of articles is keyless.** `text.is_keyless` now reads "The" as keyless
