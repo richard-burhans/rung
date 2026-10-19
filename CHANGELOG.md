@@ -26,6 +26,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-19
 
+- **An operator can be recorded as having no website.** `company_homepages.yml` takes `none` beside a URL
+  and `null`: `null` means derive the homepage from the roster and listings, which for an operator whose
+  site is gone can land on a stranger's; `none` stops every source and recon records `no_url`.
+
 - **Five Alberta and New Mexico operators are ruled one operator each.** `companies.yml` names the
   legal and location spellings of F & L, Hat, Kurve and Numo (Alberta), which share their street
   addresses, and of Oasis (New Mexico), whose short spelling held only Oasis Cannabis Co.'s stores.

@@ -3,6 +3,8 @@
 #
 #   Curaleaf: https://curaleaf.com
 #   Ayr Wellness: null
+#   Remedii: {MI: none}
+#
 #   RISE:
 #     default: https://risecannabis.com
 #     BC: null
@@ -536,5 +538,7 @@ Quality Roots:
 # site itself settled it. Scoped to the one state.
 "Red Barn Growers":
   NM: https://p37cannabis.com
+"Remedii":
+  MI: none
 "THE GREEN DOOR":
   WA: https://thegreendoorseattle.com

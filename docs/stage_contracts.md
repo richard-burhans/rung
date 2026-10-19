@@ -142,7 +142,7 @@ and not their contents.
   file, the roster and its own listings no longer yield KEEPS the stored one, which is probed again
   (since 2026-10-19 — the forecast that day named 544 erasures, two thirds of them the site Stage 2
   read the company's stores from). It is rewritten `no_url` only when an override names `null` for
-  its state, and Stage 2 then walks it homeless, so a Jane/SweedPOS winner that read the homepage is
+  its state, or `none` — the operator has no website at all (Remedii MI, 2026-10-19) — and Stage 2 then walks it homeless, so a Jane/SweedPOS winner that read the homepage is
   no longer offered. `coverage_healthcheck`'s `recon_would_drop_homepage` and
   `recon_would_change_homepage` forecast exactly that set — erased, and re-pointed — from
   `recon.planned_homepage` (the run's own decision, no request made); read them before the run,
