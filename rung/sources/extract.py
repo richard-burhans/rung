@@ -47,7 +47,7 @@ from rung.addresses import (
 )
 from rung.http import make_session
 from rung.models import DispensaryRecord, LocationObservation
-from rung.sources import salesforce_aura
+from rung.sources import accela_aca, salesforce_aura
 from rung.sources.dedupe import location_key
 from rung.text import is_placeholder_name
 
@@ -2029,6 +2029,82 @@ async def _extract_ok_omma(url: str, session) -> list[DispensaryRecord]:
     return list(records.values())
 
 
+# ── Michigan CRA, Accela Citizen Access (list_type='mi_cra') ───────────────────
+
+#: The record types that are a store a customer can buy from, each with the record-number prefix its
+#: numbers carry, searched in this order. Adult-use first: a rooftop licensed under both programs is
+#: ONE roster row and the adult-use licence names it (the `co_med` rule). Designated Consumption
+#: Establishments are left out — a lounge, not a store. ``""`` searches the whole type, which is
+#: right while it lists fewer records than the portal's cap; a capped search is split anyway.
+_MI_CRA_TYPES: tuple[tuple[str, str, str], ...] = (
+    ("Adult_Use", "Adult_Use/Marihuana Retailer/License/NA", "AU-R-"),
+    ("Adult_Use", "Adult_Use/Marihuana Microbusiness/License/NA", ""),
+    ("Adult_Use", "Adult_Use/Class A Microbusiness/License/NA", ""),
+    ("Adult_Use", "Adult_Use/Tribal Retailer/Tribal /NA", ""),
+    ("Licenses", "Licenses/Provisioning Center/License/NA", "PC-"),
+)
+#: How deep a capped search is split, one digit at a time, before it is reported as a fragment.
+#: Record numbers are six digits; four of them already put every partition under the 100-row cap.
+_MI_CRA_MAX_PREFIX_DIGITS = 6
+_MI_CRA_ADDRESS_RE = re.compile(r"^(?P<street>.+?),\s*(?P<city>[^,]+?)\s+MI\s+(?P<zip>\d{5})(?:-\d{4})?$", re.I)
+
+
+def mi_cra_record(row: accela_aca.AcaRow) -> DispensaryRecord | None:
+    """One Accela search row as a Michigan roster row, or None when the licence is not ACTIVE. Pure.
+    "Active - Late Renewal" is active; "License Void", "Closed", "Suspended" and "Closed - Suspended"
+    are not. The grid's address is ``street, City MI zip``; one that does not parse is kept whole as
+    the street rather than guessed at."""
+    if not (row.status or "").startswith("Active"):
+        return None
+    match = _MI_CRA_ADDRESS_RE.match(row.address or "")
+    street, city, zip_code = ((match["street"], match["city"], match["zip"]) if match
+                              else (row.address, None, None))
+    return DispensaryRecord(source="mi_cra", name=row.name, address=street, city=city, state="MI",
+                            zip_code=zip_code, licence_number=row.number)
+
+
+async def _mi_cra_walk(session, page: accela_aca.AcaPage, record_type: str, prefix: str,
+                       root_digits: int) -> list[accela_aca.AcaRow]:
+    """Every row of one record type under ``prefix``, splitting a capped search by the next digit."""
+    try:
+        rows = await accela_aca.search_all(session, page, record_type, number_prefix=prefix)
+    except accela_aca.SearchCapped as capped:
+        if len(prefix) - root_digits >= _MI_CRA_MAX_PREFIX_DIGITS:
+            raise PartialRoster(f"MI CRA: {capped}, even at the longest prefix") from capped
+        rows = []
+        for digit in "0123456789":
+            rows.extend(await _mi_cra_walk(session, page, record_type, prefix + digit, root_digits))
+    await asyncio.sleep(0.3)    # ~220 postbacks a run; a public portal is not a bulk API
+    return rows
+
+
+async def _extract_mi_cra(url: str, session) -> list[DispensaryRecord]:
+    """Michigan's dispensaries from the Cannabis Regulatory Agency's Accela Citizen Access portal.
+
+    The CRA's own lists are a dead ArcGIS app and JavaScript-only reports, so Michigan was a Dutchie
+    bootstrap (591 stores on 2026-10-19). Its licence search is not JavaScript-only: it is an ASP.NET
+    form whose postback answers a server-rendered grid (`accela_aca`). One search lists at most 100
+    records (200 in the medical module), so the store types are searched by record-number prefix, one
+    more digit wherever a search is capped. ``url`` is the Adult-Use module's search page; the medical
+    module is the same page under ``module=Licenses``. Measured 2026-10-20: 1,973 store-type licences,
+    941 of them active, 859 rooftops, in about two minutes.
+    """
+    pages: dict[str, accela_aca.AcaPage] = {}
+    by_rooftop: dict[str, DispensaryRecord] = {}
+    for module, record_type, prefix in _MI_CRA_TYPES:
+        if module not in pages:
+            module_url = re.sub(r"module=[^&]*", f"module={module}", url)
+            module_url = re.sub(r"TabName=[^&]*", f"TabName={module}", module_url)
+            pages[module] = await accela_aca.open_search(session, module_url)
+        for row in await _mi_cra_walk(session, pages[module], record_type, prefix, len(prefix)):
+            record = mi_cra_record(row)
+            if record is None:
+                continue
+            rooftop = location_key(None, None, record.address, record.zip_code) or f"licence:{row.number}"
+            by_rooftop.setdefault(rooftop, record)  # one store, two licences: the first type names it
+    return list(by_rooftop.values())
+
+
 async def _extract_bc_lcrb(url: str, session) -> list[DispensaryRecord]:
     """Fetch BC's roster from the LCRB map API (a bare JSON list, no paging/auth)."""
     try:
@@ -2194,7 +2270,7 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 ListType = Literal[
     "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
     "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "ok_omma",
-    "wv_omc", "nd_hhs", "sd_doh", "hi_doh", "lookup",
+    "mi_cra", "wv_omc", "nd_hhs", "sd_doh", "hi_doh", "lookup",
     "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
@@ -2208,6 +2284,7 @@ _ASYNC_HANDLERS = {
     "va_cca": _extract_va_cca,
     "nh_dhhs": _extract_nh_dhhs,
     "ok_omma": _extract_ok_omma,
+    "mi_cra": _extract_mi_cra,
     "wv_omc": _extract_wv_omc,
     "nd_hhs": _extract_nd_hhs,
     "sd_doh": _extract_sd_doh,

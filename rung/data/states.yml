@@ -231,6 +231,13 @@
   program_term: cannabis
   agency: Cannabis Regulatory Agency
   known_url: https://www.michigan.gov/cra
+  # The CRA's published lists are a dead ArcGIS app and JavaScript-only reports, so MI was a Dutchie
+  # bootstrap (591 stores, 2026-10-19). Its Accela Citizen Access licence search is an ASP.NET form
+  # whose postback answers a server-rendered grid (`accela_aca`, `mi_cra`): retailers, both kinds of
+  # microbusiness and tribal retailers from the Adult-Use module, provisioning centres from the medical
+  # one, one row per rooftop. Measured 2026-10-20: 1,973 such licences, 941 active, 859 rooftops.
+  list_url: https://aca-prod.accela.com/MIMM/Cap/CapHome.aspx?module=Adult_Use&TabName=Adult_Use
+  list_type: mi_cra
 
 - abbr: MN
   name: Minnesota

@@ -35,7 +35,7 @@ INTEL_PKG = "rung_intel"
 # internal imports. `virtual_display` (an X display for a head-full browser) imports nothing at all.
 BASE = frozenset({"models", "http", "html", "browser", "text", "addresses", "normalize", "static_source",
                   "brands", "licensing", "operators", "geocode_rnf", "geocode_points",
-                  "virtual_display", "salesforce_aura"})  # tier 0
+                  "virtual_display", "salesforce_aura", "accela_aca"})  # tier 0
 TIER1 = frozenset({"db", "queue"})            # tier 1 — persistence + work queue
 TIER2 = frozenset({"access"})                 # tier 2 — access-method engine
 FOUNDATION = BASE | TIER1 | TIER2
@@ -69,6 +69,10 @@ PUBLIC_MODULES = frozenset({
     # Stage-1 roster handler, and those live in the public `extract`, which cannot import the overlay;
     # what it reads is a regulator's public licence lookup (OMMA Verify). Imports only `http`.
     "salesforce_aura",
+    # An Accela Citizen Access record search (2026-10-20): a regulator's public licence search sent as
+    # the ASP.NET form postback the page itself makes. Public for the same reason as `salesforce_aura`
+    # (it serves the Michigan roster handler in `extract`). Imports only `http`.
+    "accela_aca",
 })
 
 # ── Overlay tiers (the proprietary modules left PUBLIC_DIR in the carve-out; their internal layering

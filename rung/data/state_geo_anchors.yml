@@ -175,8 +175,8 @@ AZ:
   - [31.5455, -110.2773]  # Sierra Vista
   - [34.2542, -110.0298]  # Show Low
 
-# MI bootstrapped from the Dutchie pool (official CRA roster is a dead arcgis app + JS-only
-# licensing reports). Pool stores inserted as dispensaries named by chain (NJ-style).
+# MI was bootstrapped from the Dutchie pool until 2026-10-20, when its roster became the CRA's Accela
+# licence search (`mi_cra`). The anchors still serve the Stage-2 Dutchie sweep.
 MI:
   - [42.3314, -83.0458]   # Detroit
   - [42.9634, -85.6681]   # Grand Rapids

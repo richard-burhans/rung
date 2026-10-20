@@ -19,6 +19,15 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-20
+
+- **Michigan's official roster, from the CRA's Accela licence search.** `rung.sources.accela_aca`
+  searches an Accela Citizen Access portal over plain HTTP: it sends the page's own ASP.NET form back
+  with a record type chosen, walks the result grid's pages, and refuses a search the portal caps rather
+  than return its first 100 rows. The `mi_cra` list type searches retailers, microbusinesses, tribal
+  retailers and medical provisioning centres by record-number prefix and keeps one row per rooftop
+  for the active licences (859 rooftops from 941 active licences on 2026-10-20).
+
 ### Fixed — 2026-10-20
 
 - **A spelling `companies.yml` rules on is taken as written.** The fold used to extract every name before
