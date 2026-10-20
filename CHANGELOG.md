@@ -29,7 +29,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   for the active licences (859 rooftops from 941 active licences on 2026-10-20).
 - **Michigan's roster spellings fold to the chains already held.** The CRA files stores under per-branch
   names ("Levels of Adrian", "High Society 2", "Olswell-Kalkaska"); `companies.yml` names 85 of them
-  across 44 chains, so the seeder no longer makes each one a company of its own.
+  across 44 chains, so the seeder no longer makes each one a company of its own. A second pass named 40
+  more across 27 chains by the rooftop each sits at: among them one chain held as two companies (The
+  Flower Bowl), stores licensed to new entities (three "PT <town> LLC" licences at Herbology stores), and
+  Nirvana Center's per-town licences, named exactly so other states' "Nirvana" companies are not renamed.
 
 ### Fixed — 2026-10-20
 

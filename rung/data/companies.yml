@@ -214,6 +214,7 @@ High Society:
   - High Society 2
   - High Society 4
   - High Society 6
+  - High Society Wellness
 House of Dank:
   - House Of Dank Rec
   - House of Dank 2
@@ -255,6 +256,11 @@ Mystic:
   - Mystic Cannabis of Memphis
 Nirvana Center:
   - Nirvana Center Michigan
+  - Nirvana Escanaba             # the roster's own spellings, named exactly: an alias of bare "Nirvana"
+                                #   would rename CA/IL/MD/OK/WA's Nirvana (2026-10-20)
+  - "Nirvana Kalamazoo, LLC"
+  - Nirvana Houghton
+  - "Nirvana Lowell, LLC"
 Noggin:
   - The Noggin Shop
 Olswell:
@@ -296,3 +302,67 @@ Top Cannabis Outlet:
   - Top Cannabis Outlet RR
 Urb:
   - Urb Mount Morris
+# Roster spellings `scripts/roster_rooftop_holders.py --state MI` placed at a rooftop the chain already holds
+# (2026-10-20). Each spelling is a Michigan company or roster name and nothing else; where the chain was
+# held under a scraped or domain-derived name ("IndiGrow Weed Dispensary Muskegon", "Flowerbowl"), the
+# chain's own name becomes the canonical instead.
+Amsterdam:
+  - Amsterdam Premium
+Apothecare:
+  - Apothecare Houghton
+Cherry:
+  - Cherry Brands
+Eden East:
+  - Eden East Garden
+Emerald Fire:
+  - Emerald Fire Farms powered by Wise Guys Provisioning
+  - Emerald Fire Provisioning Center
+Essence:
+  - Essence Collective
+  - Essence South
+Herbology:                    # Dutchie renamed the Coldwater/Tekonsha/West Branch stores Pleasantrees -> Herbology Cannabis Co. by 2026-10-18; the CRA's newest licences file them as PT <town> LLC
+  - PT Coldwater
+  - PT Tekonsha
+  - PT West Branch
+Hogcannabis:
+  - Hog Cannabis Co. Provisioning
+Indigrow:
+  - IndiGrow Weed Dispensary Muskegon
+LaCannaville:
+  - LaCannaville REC
+Lindzys:                      # both licences are at the two Flint stores Dutchie lists as Lindzys
+  - "Lindzy's Med Supply Station"
+  - "Lindzy's Medz North"
+Mood:
+  - Mood Provisioning Center
+Muha Meds:
+  - Muha Meds East
+North Coast:
+  - North Coast Provisions
+  - North Coast Provisions Sault Ste Marie
+Pegasus:
+  - "Pegasus “Fly High Fly Pure”"
+Planted Prov:
+  - Planted Provisioning
+PlushCo:
+  - Plush Companies
+Pure:
+  - Pure NB
+Quest:                        # PT Whitmore Lake LLC's licence (AU-R-001586) is for the rooftop Dutchie still lists as Quest (2026-10-18)
+  - PT Whitmore Lake
+Releaf Center:
+  - ReLeaf Center for Compassionate Care
+Southland Farms:
+  - Southland Farms Weed Dispensary Niles
+The Flower Bowl:              # one chain held as two companies: both hold the River Rouge, Inkster and Corktown rooftops
+  - Flowerbowl
+  - Flower Bowl Corktown
+  - The Flower Bowl II
+  - The Flower Bowl Corktown
+  - Flower Bowl                 # "Flower Bowl River Rouge" extracts to it; the re-seed after #1029 would mint it
+The Green Door:
+  - The Green Door Watervliet
+Vibe:
+  - Vibe The Ultimate Cannabis Experience
+Green Stem Provisioning:      # MI — Kalamazoo, 1140 S 11th St: the licence (AU-R-000205) is "Green Stem, LLC"
+  - Green Stem
