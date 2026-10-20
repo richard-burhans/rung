@@ -6,7 +6,7 @@
 Aces:                         # acescannabis.ca — Hawkesbury ("Aces Cannabis 389 Co.") and Alfred, one operator; the
   - Aces Cannabis             #   refold declines a four-letter key with no recon site, so these name the ruling
   - Aces Cannabis Co.         #   (2026-10-13)
-Apothecarium Dispensary:
+Apothecarium:   # the spelling the NJ/PA companies hold; "Apothecarium Dispensary" rows extract to it (2026-10-20)
   - Keystone ReLeaf    # rebrand: keystonecannaremedies.com -> shop.apothecarium.com; its 3 PA stores (Allentown/Bethlehem/Stroudsburg) are Apothecarium's
 Ascend Dispensary: []
 Ayr Wellness: []
@@ -155,3 +155,22 @@ Aloha Green:                  # HI — the roster's spelling ("Green Aloha" on K
   - Aloha Green Apothecary
 MMD:                          # CA — five Weedmaps stores; North Hollywood's own company held only its duplicate
   - MMD NORTH HOLLYWOOD
+Local Cannabis Company:       # CA Santa Monica + MA Swampscott: each store held under three spellings (Dutchie's chain is
+  - Localcannabisco           #   localcannabisco). Named exactly, so it is never extracted to "Local": BC's and MO's
+  - Localcannabisco Us        #   "Local" are other businesses and are not renamed (owner, 2026-10-20)
+# Store spellings the 2026-10-20 CA/MA refolds merged by their STORES' city, which the roster abbreviates
+# ("SN Bernrdno", "DSRT Hot SPGS") or files under a neighbouring town (Isla Vista under Goleta, Tarzana under
+# Reseda, Cultivate Leicester's Framingham and Worcester stores) — so the seeder could not strip the town and
+# would re-create each one. Named exactly, they fold to the chain.
+Cookies:
+  - COOKIES SAN BERNARDINO
+  - Cookies Woodland Hills
+The Syndicate:
+  - The Syndicate Tarzana
+  - The Syndicate Desert Hot Springs
+Backpack Boyz:
+  - BACKPACK BOYZ SAN BERNARDINO
+Farmacy:
+  - Farmacy Isla Vista
+Cultivate:
+  - Cultivate Leicester

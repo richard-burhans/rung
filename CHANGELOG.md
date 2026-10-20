@@ -21,6 +21,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-20
 
+- **A spelling `companies.yml` rules on is taken as written.** The fold used to extract every name before
+  looking it up, so a canonical that extracts to something shorter ("Local Cannabis Company" -> "Local")
+  could not be reached without ruling on the short word, which renames every unrelated company of that
+  name. A name the file names exactly, as an alias or as a canonical with aliases, now keys as written.
 - **Oklahoma roster names are unescaped.** OMMA Verify returns trade names HTML-escaped ("All Love
   Cannabis &amp; Wellness"), and the company fold cut such a name at the `;`. `ok_omma` now unescapes
   them.
