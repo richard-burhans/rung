@@ -235,6 +235,29 @@ def test_companies_yml_folds_the_rows_whose_roster_city_is_wrong():
 # ── The host at the front door (2026-10-13, scraping design review item 4, phase 1) ─────────────
 
 
+def test_a_spelling_companies_yml_rules_on_is_taken_as_written():
+    # "Local Cannabis Company" extracts to "Local". Ruled on exactly, it keys as written and its
+    # Dutchie-slug spellings join it -- while an unruled "Local" elsewhere (BC, MO) stays "Local".
+    aliases = {"Localcannabisco": "Local Cannabis Company", "Localcannabisco Us": "Local Cannabis Company"}
+    assert seed_companies.fold("Local Cannabis Company", "Santa Monica", aliases)[1] == "Local Cannabis Company"
+    assert seed_companies.fold("Localcannabisco Us", None, aliases)[1] == "Local Cannabis Company"
+    assert seed_companies.roster_fold("Local Cannabis Company", "Lynn", aliases)[1] == "Local Cannabis Company"
+    assert seed_companies.fold("Local", None, aliases)[1] == "Local"
+    # A canonical NOT ruled on (no aliases) is still extracted like any other name.
+    assert seed_companies.fold("Local Cannabis Company", None, {})[1] == "Local"
+
+
+def test_companies_yml_canonicals_with_aliases_are_their_own_fold_or_ruled_on_purpose():
+    # The rule above changes the key of a canonical whose extraction differs from its spelling. Only one
+    # is meant to: a second ("Apothecarium Dispensary", 2026-10-20) would have split the NJ/PA company
+    # "Apothecarium" on the next seed.
+    from rung.text import extract_brand, load_company_aliases
+    aliases = load_company_aliases(seed_companies._YAML_PATH, strict=True)
+    differs = sorted(c for c in set(aliases.values())
+                     if aliases.get(extract_brand(c), extract_brand(c)) != c)
+    assert differs == ["Local Cannabis Company"]
+
+
 def test_registrable_host_folds_subdomains_and_schemes_and_refuses_platforms():
     rh = seed_companies.registrable_host
     assert rh("https://shop.oneplant.ca/menu") == "oneplant.ca"

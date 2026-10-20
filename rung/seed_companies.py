@@ -34,8 +34,14 @@ def fold(name: str, city: str | None, alias_map: dict[str, str]) -> tuple[str, s
     the phantom the refold just merged away: re-run on 2026-10-11 against a refolded table it recreated
     62 of them. A roster row is therefore keyed as the refold would key the row it is about to become:
     ``fold(fold(name, city).brand, None)`` — see :func:`_collect_brand_state_pairs`.
+
+    A spelling `companies.yml` rules on EXACTLY — an alias, or a canonical that has aliases — is taken as
+    written and never extracted. "Local Cannabis Company" extracts to "Local", and no alias could reach
+    it from there: the loader files each alias under its folded form too, so ruling on "Local" would
+    rename BC's and MO's unrelated "Local" as well (2026-10-20).
     """
-    brand = canonicalize(extract_brand(name, city), alias_map)
+    ruled = alias_map.get(name) or (name if name in set(alias_map.values()) else None)
+    brand = ruled or canonicalize(extract_brand(name, city), alias_map)
     return normalize_brand(brand), brand
 
 
