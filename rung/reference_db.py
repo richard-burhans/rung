@@ -422,6 +422,25 @@ CREATE TABLE IF NOT EXISTS yield_daily (
 )
 """
 
+# The same counts per STORE, so the canary can compare like with like. A platform-wide fill rate moves
+# whenever the store MIX moves: on 2026-10-19 Flowhub went from 16 stores to 37 and Treez from 20 to
+# 51, the newcomers mostly publish no terpenes, and both platforms' terpene rate halved with not one
+# continuing store losing a field — two ERRORs that were a population change. `_check_yield` judges a
+# field over the latest sweep's established stores, read from here.
+_CREATE_YIELD_STORE_DAILY = """
+CREATE TABLE IF NOT EXISTS yield_store_daily (
+    day           DATE NOT NULL,
+    store_key     TEXT NOT NULL,
+    platform      TEXT NOT NULL,
+    rows          BIGINT NOT NULL,
+    priced        BIGINT NOT NULL,
+    potent        BIGINT NOT NULL,
+    terpenes      BIGINT NOT NULL,
+    cannabinoids  BIGINT NOT NULL,
+    PRIMARY KEY (day, store_key)
+)
+"""
+
 # A BRIN index on the observation timestamp: `product_observations` is append-only and written in
 # time order, so a day's rows sit in a contiguous run of blocks and BRIN summarises 172M rows in a few
 # MB. Without it, the yield ledger's one-day aggregate walked the ENTIRE (store_key,
@@ -765,6 +784,7 @@ def create_reference_tables(conn: DBConn) -> None:
     ensure_index(conn, _CREATE_PRODUCT_OBSERVATIONS_STORE_INDEX)
     ensure_index(conn, _CREATE_PRODUCT_OBSERVATIONS_SCRAPED_BRIN)
     conn.execute(_CREATE_YIELD_DAILY)
+    conn.execute(_CREATE_YIELD_STORE_DAILY)
     conn.execute(_CREATE_FX_RATES)
     conn.execute(_CREATE_STORE_LOCATIONS)
     conn.execute(_CREATE_STORE_OBSERVATIONS)

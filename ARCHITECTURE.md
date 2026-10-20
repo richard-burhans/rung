@@ -196,7 +196,9 @@ the daily history sweep — a `REFRESH` can't run inside `create_tables`' transa
 by `db.create_tables`; it is a read-path analysis cache, not pipeline-persisted truth. The
 **`yield_daily`** table (one row per platform per UTC day: rows, stores, and the price/potency/
 terpene/cannabinoid fill COUNTS) is the canary's memory — written by at the
-host sweep's tail, read by `coverage_healthcheck._check_yield`, and created by `create_tables`; a BRIN
+host sweep's tail, read by `coverage_healthcheck._check_yield`, and created by `create_tables`, with
+**`yield_store_daily`** beside it holding the same counts per store, so a fill rate is judged over
+established stores rather than moved by stores joining or leaving; a BRIN
 index on `product_observations.scraped_at` makes its one-day aggregate a range scan instead of a walk
 of the whole (store_key, scraped_at) btree. Being a
 matview (like `products_normalized`), it is outside Contract 3's table-ownership rule.

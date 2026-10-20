@@ -21,6 +21,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Added — 2026-10-20
 
+- **`yield_store_daily`, the yield ledger per store.** `create_tables` creates a table holding each
+  store's daily row count and price/potency/terpene/cannabinoid fill counts beside the per-platform
+  `yield_daily`, so a fill rate can be compared over the same stores day to day. A platform-wide rate
+  also moves when stores join or leave, which is not a field stopping.
 - **Michigan's official roster, from the CRA's Accela licence search.** `rung.sources.accela_aca`
   searches an Accela Citizen Access portal over plain HTTP: it sends the page's own ASP.NET form back
   with a record type chosen, walks the result grid's pages, and refuses a search the portal caps rather
