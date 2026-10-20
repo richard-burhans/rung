@@ -60,7 +60,8 @@ later.
 | Weedmaps | 36% | `edge_category` + `ancestors` (hierarchy) | ground truth + capture later |
 | Leafly | 10% | `productCategory` (top only) | name-derive |
 | Jane | 2% | `root_subtype` / `kind_subtype` | ground truth — **carried since 2026-10-11** as the form hint the product-type and obtention rules read beside `kind` (a "Ground Flower" sub-type is `Ground`, read, not `Bud`, defaulted) |
-| Trulieve / SweedPOS / Cresco | ~5% | `subcategory` / `kind_subtype` / `sub_category` | capture later |
+| SweedPOS | — | `productType` (`subcategory` its shorter form) | ground truth — **carried since 2026-10-20** as the same form hint: "Small Buds" is `Smalls`, "Ground Flower" `Ground`, and "Infused Ground Flower" is the only place Curaleaf's infused ground flower says so (`obtention_std` Infused) |
+| Trulieve / Cresco | ~5% | `subcategory` / `sub_category` | capture later |
 
 ## Empirical sizing (name keywords over all ~5.5M rows)
 
