@@ -19,6 +19,15 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-20
+
+- **Oklahoma roster names are unescaped.** OMMA Verify returns trade names HTML-escaped ("All Love
+  Cannabis &amp; Wellness"), and the company fold cut such a name at the `;`. `ok_omma` now unescapes
+  them.
+- **The new official rosters' spellings fold to the companies already seeded.** West Virginia, South
+  Dakota, North Dakota and Hawaii file one operator under a numbered, per-branch or longer spelling
+  ("Royzzz of Watertown", "The Next Level Wellness #2", "Cure Oahu"); `companies.yml` names each one.
+
 ### Added — 2026-10-19
 
 - **Official rosters for West Virginia, North Dakota, South Dakota and Hawaii.** Four one-page list
