@@ -71,6 +71,7 @@ Terra Pharm: []
 The Chronic:                  # MI rebrand: Dutchie lists two Sozo stores as "The Chronic - <city>" and moved the
   - Sozo                      #   other three to the-chronic-* slugs under the same dispensary ids; the state
                               #   roster still says Sozo. Owner, 2026-10-19
+  - The Chronic Michigan
 Terrapin Care Station: []
 Trulieve:
   - Harvest of Whitehall   # Trulieve acquired Harvest HOC; harvesthoc.com redirects to trulieve.com and its 21 PA stores are the same physical Trulieve PA stores (identical addresses + Magento store-view codes), already handled via trulieve_rest — fold so the duplicate licensee collapses instead of yielding 21 menu-less rows
@@ -115,10 +116,13 @@ Lume:                         # MI — 38 shared rooftops; every "Lume" row is n
   - Lume Cannabis Co.
 PUFF:                         # MI — Sturgis, 651 Wade St shared; the chain's 21 stores are "PUFF <city>"
   - PUFF Cannabis Company
+  - Puff TC
+  - Puff Cannabis Centerline
 Wojo:                         # MI — Bay City, 606 3rd St (both rows named "Wojo Cannabis Co.")
   - Wojo Cannabis Co
 Xhale:                        # MI — Mt Clemens: Weedmaps "Xhale Cannabis Co. Mt Clemens, formerly …" at 75 Mary St beside Dutchie's 85 Mary St
   - Xhale Cannabis Co.
+  - Xhale of Mt Clemens
 # The official WV/SD/ND/HI rosters (2026-10-19/20) name stores the Dutchie bootstrap had already seeded
 # under another spelling; each canonical is the spelling that holds the stores, and each alias is used by
 # no other state, so no company elsewhere is renamed (2026-10-20).
@@ -165,12 +169,130 @@ Local Cannabis Company:       # CA Santa Monica + MA Swampscott: each store held
 Cookies:
   - COOKIES SAN BERNARDINO
   - Cookies Woodland Hills
+  - Cookies GR
 The Syndicate:
   - The Syndicate Tarzana
   - The Syndicate Desert Hot Springs
 Backpack Boyz:
   - BACKPACK BOYZ SAN BERNARDINO
+  - Backpack Boyz NB
 Farmacy:
   - Farmacy Isla Vista
 Cultivate:
   - Cultivate Leicester
+# The CRA's Accela roster (2026-10-20) files Michigan stores under per-branch spellings ("Levels of Adrian",
+# "High Society 2", "Olswell-Kalkaska") the seeder cannot strip. Each spelling here is a Michigan company
+# and nothing else; most sit at a rooftop the chain itself holds. "House of Dank" becomes the canonical for
+# the chain held as "House Of Dank Rec" — the other direction would rename OK's House of Dank.
+31 Cannabis:
+  - 31 Cannabis Park Street
+Cannaisseur:
+  - Cannaisseur Provisioning Center
+Capital Dank:
+  - Capital Dank Wellness
+Elite:
+  - Elite Wellness Mount Morris
+FLY SHIFTER RECREATIONAL:
+  - Fly Shifter
+Farmhouse PC:
+  - Farmhouse Provisions
+Flavors Detroit:
+  - "Flavors Detroit #1"
+Green Acres:
+  - Green Acres Collective
+  - Green Acres Michigan Ave
+  - Green Acres Ann Arbor 2
+Green Pharm:
+  - Green Pharm TC
+  - Green Pharm of Allegan
+Greener Days:
+  - Greener Days Recreational Retail
+High Profile:
+  - High Profile Boutique
+High Society:
+  - High Society 1
+  - High Society 2
+  - High Society 4
+  - High Society 6
+House of Dank:
+  - House Of Dank Rec
+  - House of Dank 2
+  - House of Dank TC
+  - House of Dank Michigan
+  - "House of Dank (H.O.D.) Woodward"
+  - House of Dank Eastside
+Igloo:
+  - Igloo Cannabis Store
+Information Entropy:
+  - Information Entropy I
+Jazz Club:
+  - Jazz Cannabis Club
+Joyology:
+  - Joyology Cass and Groesbeck
+  - Joyology of Centerline Sherwood
+  - Joyology of Lake Orion
+  - Joyology of Niles
+King of Budz:
+  - King of Budz Ferndale
+  - King of Budz Provisioning
+Kinship:                      # "Kinship Cannabis Co." extracts to it; nothing else anywhere is named Kinship
+  - Kinship Cannabis Co.
+  - Kinship Parma
+Lake Effect:
+  - Lake Effect Westnedge
+Lettuce:
+  - Lettuce 01
+Levels:
+  - Levels of Adrian
+  - Levels of Redford
+  - Levels of Grand Haven
+  - Levels of Waterford
+  - Levels Cannabis of Ironwood
+  - Levels Provisioning of Niles
+"Light'N Up Provisioning and Microbuddery":
+  - "Light'N Up"
+Mystic:
+  - Mystic Cannabis of Memphis
+Nirvana Center:
+  - Nirvana Center Michigan
+Noggin:
+  - The Noggin Shop
+Olswell:
+  - Olswell-Grand Rapids
+  - Olswell-Kalkaska
+  - Olswell-Traverse City
+Premier:
+  - Premier Provisioning Center
+  - "Premier Provisioning Center #2"
+  - Premier Cannabis Co. 2
+  - Premier Saginaw III
+  - PREMIER MT. MORRIS
+Rush:
+  - Rush Canna
+  - Rush Cannaco
+Smilez:
+  - Smilez of Allegan
+  - Smilez of Burton
+  - Smilez of Corunna
+  - Smilez of Quincy
+  - Smilez of Reading
+  - Smilez of Three Rivers
+  - Smilez of Wayne
+Star Budz:
+  - Star Budz Mt Morris
+The Dude Abides:
+  - The Dude Abides Provisioning Center
+  - The Dude Abides Marijuana Retailer
+The Greenhouse Of Walled Lake:
+  - Green House of Walled Lake
+The Nest:
+  - The Nest Provisioning
+The Releaf Center:
+  - The Releaf Center of Buena Vista
+  - The Releaf Center of Dowagiac
+The Woods:
+  - The Woods Mt Pleasant
+Top Cannabis Outlet:
+  - Top Cannabis Outlet RR
+Urb:
+  - Urb Mount Morris

@@ -27,6 +27,9 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   than return its first 100 rows. The `mi_cra` list type searches retailers, microbusinesses, tribal
   retailers and medical provisioning centres by record-number prefix and keeps one row per rooftop
   for the active licences (859 rooftops from 941 active licences on 2026-10-20).
+- **Michigan's roster spellings fold to the chains already held.** The CRA files stores under per-branch
+  names ("Levels of Adrian", "High Society 2", "Olswell-Kalkaska"); `companies.yml` names 85 of them
+  across 44 chains, so the seeder no longer makes each one a company of its own.
 
 ### Fixed — 2026-10-20
 
