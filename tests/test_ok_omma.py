@@ -52,6 +52,8 @@ def test_omma_addresses_and_records() -> None:
     assert record.address_withheld is False
     assert extract.omma_record(_row(addressDisclosure=False)).address_withheld is True   # type: ignore[union-attr]
     assert extract.omma_record(_row(licenseStatus="Active - Renewal Pending")) is not None
+    assert extract.omma_record(_row(tradeName="Hippies, Cowboys &amp; Company")).name == (  # type: ignore[union-attr]
+        "Hippies, Cowboys & Company")
     assert extract.omma_record(_row(licenseStatus="Expired")) is None
     assert extract.omma_record(_row(licenseType="Processor")) is None
 

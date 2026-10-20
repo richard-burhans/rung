@@ -1985,8 +1985,10 @@ def omma_record(obj: dict) -> DispensaryRecord | None:
     if obj.get("licenseType") != "Dispensary" or not str(obj.get("licenseStatus") or "").startswith("Active"):
         return None
     street, city, zip_code = omma_address(obj.get("physicalAddress"))
+    # Names arrive HTML-escaped ("All Love Cannabis &amp; Wellness"), and the fold cut one at the `;`.
+    name = html.unescape(str(obj.get("tradeName") or obj.get("legalEntityName") or "")) or None
     return DispensaryRecord(
-        source="ok_omma", name=(obj.get("tradeName") or obj.get("legalEntityName") or None),
+        source="ok_omma", name=name,
         address=street, city=city, state="OK", zip_code=zip_code,
         phone=(obj.get("telephoneNumber") or None), licence_number=(obj.get("licenseNumber") or None),
         # The licensee's own choice, which the owner ruled the public map honours (2026-10-19).
