@@ -243,6 +243,22 @@ revises an earlier verdict — a store called "closed" that reappears next cycle
 protects `replace_company_stores` would be actively wrong here: that guard stops a transient scrape
 failure from clobbering a live snapshot, whereas *fewer events* is a legitimate re-derivation.
 
+### A re-key is not a closure (2026-10-21)
+
+A location is a `location_key`, and an address-normalization or geocoding change mints a NEW key for a
+store that did not move. The old key then goes quiet and read as a closure, and the new one as an
+opening. Cuzzie's (NJ) "closed" at location 19561 on 2026-08-09 while the same Leafly handle was
+observed weekly at location 137616 from 2026-08-30. So the derivation now asks the menu handle, which
+is the platform's own id for one storefront. A closure whose handle went on being seen at another
+location of the same source is a re-key, and so is an opening whose handle had already been seen at
+another. Neither is emitted, and both are counted (`rekeyed_closures` / `rekeyed_openings`, printed by
+`store-lifecycle`). Measured over every state on 2026-10-21: 48 of 3,875 closures and 114 of 4,675
+openings. `custom` and `unknown` handles do not count, because they are not one namespace: such an id
+is whatever number a generic parser read off one operator's page, and two operators' numbers collide.
+
+This is not the relocation question below. A handle continuing is the source saying the store is open,
+not a guess that two events are one store.
+
 ### Relocation: reported, never collapsed — and NOT tuned
 
 The remaining edge case is "a store relocating a few blocks vs a genuinely new one". Today it
