@@ -114,6 +114,11 @@ class StoreProductRecord:
     name: str | None = None
     brand: str | None = None
     category: str | None = None          # the platform's raw category string (preserved)
+    # The platform's own SUB-category, raw, where its payload carries one (Dutchie `subcategory`,
+    # Weedmaps's leaf category, Jane `kind_subtype`, Cresco `sub_category`, ...). Stored from
+    # 2026-10-21; nothing before that day kept it, so an older row's NULL means "not captured", not
+    # "the platform said none".
+    subcategory: str | None = None
     category_std: str | None = None      # canonical cross-platform category (text.normalize_category)
     # True when `category_std` was CORRECTED from the product NAME (category_name_overrides.yml)
     # rather than read from the platform's raw category — a capsule the platform bucketed as an

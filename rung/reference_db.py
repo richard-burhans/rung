@@ -271,6 +271,9 @@ CREATE TABLE IF NOT EXISTS store_products (
     retained_since      TIMESTAMPTZ,
     -- The kept store row's menu type at scrape time: medical | adult_use | NULL (2026-10-06).
     menu_type           TEXT,
+    -- The platform's own sub-category, raw (2026-10-21). NULL on a row scraped before then means
+    -- "not captured", not "none published".
+    subcategory         TEXT,
     -- The percent-OR-mg potency contract (CLAUDE.md): a cannabinoid is published as a percent
     -- (thc/cbd) OR a per-dose mg (thc_mg/cbd_mg), never both. The extractors route by the
     -- platform's unit; this makes the invariant a schema guarantee, not just a convention.
@@ -299,6 +302,9 @@ _STORE_PRODUCT_ADDED_COLUMNS = {
     "retained_since": "TIMESTAMPTZ",
     # The kept store row's menu type at scrape time (medical | adult_use | NULL), 2026-10-06.
     "menu_type": "TEXT",
+    # The platform's own sub-category, raw, 2026-10-21. Deliberately NOT in `products_normalized`
+    # yet: widening that view stops an older checkout on the same database at `create_tables`.
+    "subcategory": "TEXT",
 }
 
 # The percent-OR-mg potency CHECK, added in-place to a database created before the constraint
@@ -727,8 +733,8 @@ INSERT INTO store_products
    product_type_defaulted, obtention_std,
    strain_type, strain_type_std,
    price, size_g, thc, cbd, thc_mg, cbd_mg, terpenes, terpenes_std, terp_total, terpenes_repaired,
-   potency_implausible, cannabinoids_std, variants, menu_type, scraped_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+   potency_implausible, cannabinoids_std, variants, menu_type, subcategory, scraped_at)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 """
 
 _INSERT_COMPANY_STORE = """
@@ -1365,6 +1371,7 @@ def insert_store_product(conn: DBConn, record: StoreProductRecord) -> None:
             Jsonb(record.cannabinoids_std) if record.cannabinoids_std is not None else None,
             Jsonb(record.variants) if record.variants is not None else None,
             record.menu_type,
+            record.subcategory,
             now,
         ),
     )

@@ -377,3 +377,13 @@ def test_the_view_exposes_the_retention_stamp_and_the_guard_excludes_a_kept_snap
     ).fetchone()[0] == 0
     stamps = {r[0] for r in conn.execute("SELECT retained_since FROM products_normalized").fetchall()}
     assert stamps == {datetime.datetime(2026, 6, 18, tzinfo=datetime.UTC)}
+
+
+def test_the_platform_subcategory_round_trips_raw() -> None:
+    conn = _conn()
+    db.replace_store_products(conn, "sweedpos:42", [_product("Smalls Haze", subcategory="Rough Cut Smalls"),
+                                                    _product("Plain")])
+    conn.commit()
+    rows = conn.execute("SELECT name, subcategory FROM store_products WHERE store_key = %s ORDER BY name",
+                        ("sweedpos:42",)).fetchall()
+    assert rows == [("Plain", None), ("Smalls Haze", "Rough Cut Smalls")]

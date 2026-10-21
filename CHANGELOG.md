@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-21 (sub-categories)
+
+- **`store_products.subcategory` keeps the platform's own sub-category, raw**, beside the raw
+  `category` (`StoreProductRecord.subcategory`). It is added in place to an existing database and
+  is not yet in `products_normalized`. A NULL on a row scraped before this release means the value
+  was not captured, not that the platform published none.
+
 ### Added — 2026-10-21 (Texas roster)
 
 - **Texas's official roster reads deterministically** (`list_type: tx_dps`). DPS publishes its

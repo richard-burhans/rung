@@ -140,6 +140,11 @@ Edible
    platforms but leaves ~20% `Unspecified` (higher in medical states whose vape names omit the form).
    Capturing Weedmaps `edge_category` + Jane `root_subtype` going forward would lift precision on
    ~40% of rows; it needs a menu re-scrape since those fields aren't stored today.
+   **Capture STARTED 2026-10-21:** `store_products.subcategory` keeps the platform's own sub-category
+   raw — Dutchie `subcategory`, Weedmaps's leaf `edge_category`, Jane `kind_subtype`, SweedPOS
+   `productType`/`subcategory` (the four already read as a form hint) and Cresco `sub_category`,
+   Dispense `subType` (stored, read by nothing yet). The integrated taxonomy that maps them is not
+   built yet, and a NULL on a row scraped before that day means "not captured".
 
 ## The other categories (built)
 
