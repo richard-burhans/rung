@@ -56,8 +56,8 @@ later.
 
 | Platform | Share | Field | Use |
 |---|---|---|---|
-| Dutchie | 46% | none (`type` only) | name-derive |
-| Weedmaps | 36% | `edge_category` + `ancestors` (hierarchy) | ground truth + capture later |
+| Dutchie | 46% | `subcategory` (`infused`, `small-buds`, `pre-ground`, `packs`, …) | ground truth — **requested and carried since 2026-10-21** as the form hint; on pre-rolls it is where the infusion lives (13.6% of 3,750 pre-rolls on five live menus newly read Infused) |
+| Weedmaps | 36% | `edge_category` + `ancestors` (hierarchy) | ground truth — the root is the category; the **leaf is carried since 2026-10-21** as the form hint ("Smalls", "Infused Flower") |
 | Leafly | 10% | `productCategory` (top only) | name-derive |
 | Jane | 2% | `root_subtype` / `kind_subtype` | ground truth — **carried since 2026-10-11** as the form hint the product-type and obtention rules read beside `kind` (a "Ground Flower" sub-type is `Ground`, read, not `Bud`, defaulted) |
 | SweedPOS | — | `productType` (`subcategory` its shorter form) | ground truth — **carried since 2026-10-20** as the same form hint: "Small Buds" is `Smalls`, "Ground Flower" `Ground`, and "Infused Ground Flower" is the only place Curaleaf's infused ground flower says so (`obtention_std` Infused) |
