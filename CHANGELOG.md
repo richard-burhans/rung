@@ -49,6 +49,9 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   substring it matched every "Battery". Coated product lines that never say "infused" — Snowballs,
   Snow Caps, Snowcaps, Jetpacks, Sunrocks, Lava Rocks — now read Infused, in the plural only, since the
   singulars are strains. Stored rows change when `obtention_std` is backfilled.
+- **`normalize_obtention` takes an optional `rules`** (`load_obtention_rules` on another file), so a
+  backfill can tell which stored stamps a vocabulary change actually moves rather than recomputing
+  every row and erasing stamps a platform sub-category made.
 - **A spelling `companies.yml` rules on is taken as written.** The fold used to extract every name before
   looking it up, so a canonical that extracts to something shorter ("Local Cannabis Company" -> "Local")
   could not be reached without ruling on the short word, which renames every unrelated company of that

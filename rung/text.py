@@ -614,7 +614,9 @@ def load_obtention_rules(path: Path = _OBTENTION_ALIASES_PATH) -> list[Obtention
     return rules
 
 
-def normalize_obtention(name: str | None, category: str | None) -> str | None:
+def normalize_obtention(
+    name: str | None, category: str | None, rules: list[ObtentionRule] | None = None,
+) -> str | None:
     """The obtention method a product's NAME or RAW category declares — else ``None``.
 
     Answers one question: *did the cannabinoids in this product come from the plant as grown?*
@@ -632,14 +634,19 @@ def normalize_obtention(name: str | None, category: str | None) -> str | None:
     Reads the platform's **raw** ``category``, never ``category_std``: 267 Flower rows carry the signal
     only there ("Infused Flower", "Moonrocks"). Deriving this facet from ``category_std`` would make it
     a function of the conflated field it exists to disentangle (see reports/obtention_facet_design.md).
+
+    ``rules`` judges with another vocabulary (`load_obtention_rules` on another file) — how a backfill
+    tells which stored stamps a vocabulary change actually moves.
     """
     global _obtention_rules_cache
     raw = " ".join(p for p in (name, category) if p)
     if not raw.strip():
         return None
-    if _obtention_rules_cache is None:
-        _obtention_rules_cache = load_obtention_rules()
-    for canonical, contains, words_re, except_re in _obtention_rules_cache:
+    if rules is None:
+        if _obtention_rules_cache is None:
+            _obtention_rules_cache = load_obtention_rules()
+        rules = _obtention_rules_cache
+    for canonical, contains, words_re, except_re in rules:
         said = except_re.sub(" ", raw) if except_re is not None else raw
         key = _category_key(said)
         if any(kw and kw in key for kw in contains):
