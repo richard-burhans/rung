@@ -585,6 +585,36 @@ def test_normalize_obtention_short_keywords_do_not_match_inside_a_word():
     assert normalize_obtention("Wax Melts", "Flower") == "Infused"
 
 
+def test_normalize_obtention_a_strain_named_for_a_keyword_is_not_infused():
+    # 2026-10-20: the keywords' real infused flower runs 40-53% THC; these ran 24-28% with no tail —
+    # strains and a brand whose names carry the word. 1,956 natural Flower rows were excluded by them.
+    for name in ("Lemon Batter", "LEMON BATTER 3.5G", "Berry Batter", "Wedding Cake Badder", "Fresh Powder",
+                 "Board Wax", "Hash Burger Flower Dab Daddy® 14g Premium Indoor Flower"):
+        assert normalize_obtention(name, "Flower") is None, name
+    # …while the same keyword with no strain around it, or a strain that also says more, still reads.
+    assert normalize_obtention("BIG - 90 Badder - 1g", "Flower") == "Infused"
+    assert normalize_obtention("Good Supply - Grower's Choice Starwalker Wax - 1g", "Flower") == "Infused"
+    assert normalize_obtention("Cake Batter Infused Pre-Roll", "Flower") == "Infused"
+    assert normalize_obtention("Lemon Batter Cart", "Flower") == "Extracted"
+
+
+def test_normalize_obtention_batter_is_a_word_so_a_battery_is_not_infused():
+    # As a substring `batter` stamped 69,435 batteries and vape kits Infused.
+    assert normalize_obtention("Thunder 510 Battery", "Accessories") is None
+    # …and one that names a pod is read by that word, as the vocabulary says a pod is read.
+    assert normalize_obtention("STLTH LOOP MAX CLOSED POD DEVICE BATTERY - RED", "Accessories") == "Extracted"
+
+
+def test_normalize_obtention_reads_coated_product_lines_in_the_plural_only():
+    # Plural product lines (median THC 50-57%) are coated bud; the singulars are strains (26-30%).
+    for name in ("Frosteez Peach Snowballs (2G)", "Infinity Extracts Berry Gelato Snow Caps",
+                 "Jetpacks | New York City Diesel | Powdered Donut", "Dadirri - Sun Rocks - Queso",
+                 "LAVA Rocks 2.5g - Gelato"):
+        assert normalize_obtention(name, "Flower") == "Infused", name
+    for name in ("Snowball S1 | Flower 14.15g", "GDL Flower (3.5G) | Selections | Jetpack"):
+        assert normalize_obtention(name, "Flower") is None, name
+
+
 def test_normalize_obtention_is_silent_when_the_name_is_silent():
     # 96.35% of Flower rows say nothing. NULL means "neither the name nor the category declares a
     # method" — NOT "we determined this is natural". There is no `Natural` value precisely so that this

@@ -40,6 +40,15 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-20
 
+- **The obtention facet no longer reads a strain name as an infusion, or a battery as one.**
+  `normalize_obtention` keywords that are real words inside strain and brand names flagged natural
+  flower Infused — "Lemon Batter", "Berry Batter", "Fresh Powder", "Board Wax", "Wedding Cake Badder",
+  "Dab Daddy" — and so excluded it from `NATURAL_FLOWER_WHERE`. `obtention_aliases.yml` gains an
+  `except:` list of those phrases, removed from the text before any keyword is tried, so the same
+  keywords still catch a concentrate a store filed as Flower. `batter` is now a whole word: as a
+  substring it matched every "Battery". Coated product lines that never say "infused" — Snowballs,
+  Snow Caps, Snowcaps, Jetpacks, Sunrocks, Lava Rocks — now read Infused, in the plural only, since the
+  singulars are strains. Stored rows change when `obtention_std` is backfilled.
 - **A spelling `companies.yml` rules on is taken as written.** The fold used to extract every name before
   looking it up, so a canonical that extracts to something shorter ("Local Cannabis Company" -> "Local")
   could not be reached without ruling on the short word, which renames every unrelated company of that

@@ -70,7 +70,6 @@ Infused:
     - distillate
     - shatter
     - badder
-    - batter
   words:
     # Measured on 250k distinct Flower names (2026-07-16): each of these matches ACROSS a joined word
     # boundary as a substring, so each must be a whole word.
@@ -80,6 +79,59 @@ Infused:
     - wax               # "Beezwax", "Waxstix"                          (12 names)
     - dab               # "Panda: Blue Sugar" -> "pan-DAB-luesugar"    (166 names)
     - dabs
+    # `batter` was a substring until 2026-10-20, and matched every "Battery": 69,435 rows of 510
+    # batteries and vape kits stamped Infused. As a word it loses only CamelCase joins
+    # ("LiveResinBatter", 7 concentrate rows) and a Grassroots strain, "BerryBatter".
+    - batter
+    # PRODUCT LINES of THCA- or kief-coated bud that never say "infused" (added 2026-10-20), measured on
+    # Flower rows the vocabulary passed as natural: snowballs 779 rows, median THC 56.8%; snowcaps 487,
+    # 55.8%; snow caps 582, 56.2%; jetpacks 173, 52.7%; sunrock(s) 55, ~50%; lava rocks 3, 48.7%.
+    # PLURAL ONLY: the singulars are strains — Snowball (Firelands, Woods Reserve; median 30.1%),
+    # Jetpack (Green Dot Labs; 26.0%), "Snow Cap" (Old Pal; 27.3%). Known cost: 61 of the 487 "Snowcaps"
+    # rows label natural THC (OZ Cannabis, Fenix, Root & Bloom, some Trapstars), a base-flower test or a
+    # plain bud under a product name; the guard errs toward excluding a declared coated form.
+    - snowballs
+    - snow balls
+    - snowcaps
+    - snow caps
+    - jetpacks
+    - jet packs
+    - sunrock
+    - sunrocks
+    - sun rocks
+    - lava rocks
+  # STRAIN AND BRAND NAMES that carry a keyword as a real word, so no word boundary separates them
+  # from an infusion. Removed from the text before any keyword is tried, so "Lemon Batter Cart" is still
+  # read by what remains. Each was measured on the Flower rows it flagged (2026-10-20): natural THC and
+  # no tail, where the keywords' real infused flower runs 40-53% —
+  #     lemon/berry/cake/rainbow/yuzu/bitter/cookie batter   777 rows, median 28.3%, 5 above 40%
+  #     cake/cookie/mantra badder                             49 rows, median 25.4%, 0 above 40%
+  #     fresh/gunn/gun/graffiti powder                       247 rows, median 27.5%, 0 above 40%
+  #     board/josh/sex/sizzle wax                            113 rows, median 23.6%, 0 above 40%
+  #     dab daddy (a brand), dab ums                         715 rows, median 25.7%, 1 above 40%
+  # Phrases that DO run hot stay caught: "dab bods" (median 42%), "resin/live/cured badder", "house/
+  # rhino/starwalker wax" — concentrates a store filed as Flower.
+  except:
+    - lemon batter
+    - berry batter
+    - cake batter
+    - rainbow batter
+    - yuzu batter
+    - bitter batter
+    - cookie batter
+    - cake badder
+    - cookie badder
+    - mantra badder
+    - fresh powder
+    - gunn powder
+    - gun powder
+    - graffiti powder
+    - board wax
+    - josh wax
+    - sex wax
+    - sizzle wax
+    - dab daddy
+    - dab ums
 
 # The cannabinoids were extracted from the plant, not left in it. On a Flower-category row this is a
 # STORE's mislabel on the platform (169 rows, measured 2026-07-16) — the raw category really does say

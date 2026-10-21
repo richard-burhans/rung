@@ -582,30 +582,35 @@ def normalize_strain_type(raw: str | None) -> str | None:
 # ── obtention normalization (the `obtention_std` facet) ──────────────────────────────────────────
 
 _OBTENTION_ALIASES_PATH = Path(__file__).parent / "data" / "obtention_aliases.yml"
-_obtention_rules_cache: list[tuple[str, tuple[str, ...], re.Pattern[str] | None]] | None = None
+#: ``(canonical, contains keywords, words pattern, except pattern)`` — one obtention_aliases.yml entry.
+ObtentionRule = tuple[str, tuple[str, ...], re.Pattern[str] | None, re.Pattern[str] | None]
+_obtention_rules_cache: list[ObtentionRule] | None = None
 
 
-def load_obtention_rules(
-    path: Path = _OBTENTION_ALIASES_PATH,
-) -> list[tuple[str, tuple[str, ...], re.Pattern[str] | None]]:
-    """Ordered ``[(canonical, (contains_kw, ...), words_re | None), ...]`` from obtention_aliases.yml.
+def _whole_words(phrases: object) -> re.Pattern[str] | None:
+    escaped = [re.escape(str(p)) for p in (phrases or [])] if isinstance(phrases, list) else []
+    return re.compile(rf"\b(?:{'|'.join(escaped)})\b", re.IGNORECASE) if escaped else None
+
+
+def load_obtention_rules(path: Path = _OBTENTION_ALIASES_PATH) -> list[ObtentionRule]:
+    """Ordered ``[(canonical, (contains_kw, ...), words_re, except_re), ...]`` from obtention_aliases.yml.
 
     YAML key order is the match PRIORITY. Two keyword kinds, and the split is not cosmetic:
     ``contains`` matches a substring of the ALNUM-NORMALIZED text (so "In fused" -> "infused");
     ``words`` matches whole words against the RAW text, because alnum-normalization joins words and
-    manufactures substrings — "Panda: Blue Sugar" contains "dab".
+    manufactures substrings — "Panda: Blue Sugar" contains "dab". ``except`` names whole-word PHRASES
+    removed from the text before either kind is tried: a strain or brand whose name carries a keyword
+    as a real word ("Lemon Batter", "Board Wax", "Dab Daddy"), which no word boundary can tell apart.
     """
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Expected a mapping at the top level of {path}")
-    rules: list[tuple[str, tuple[str, ...], re.Pattern[str] | None]] = []
+    rules: list[ObtentionRule] = []
     for canonical, spec in data.items():
         if not isinstance(spec, dict):
-            raise ValueError(f"{path}: {canonical!r} must map to `contains:`/`words:` lists")
+            raise ValueError(f"{path}: {canonical!r} must map to `contains:`/`words:`/`except:` lists")
         contains = tuple(_category_key(str(k)) for k in (spec.get("contains") or []))
-        words = [re.escape(str(w)) for w in (spec.get("words") or [])]
-        pattern = re.compile(rf"\b(?:{'|'.join(words)})\b", re.IGNORECASE) if words else None
-        rules.append((str(canonical), contains, pattern))
+        rules.append((str(canonical), contains, _whole_words(spec.get("words")), _whole_words(spec.get("except"))))
     return rules
 
 
@@ -634,11 +639,12 @@ def normalize_obtention(name: str | None, category: str | None) -> str | None:
         return None
     if _obtention_rules_cache is None:
         _obtention_rules_cache = load_obtention_rules()
-    key = _category_key(raw)
-    for canonical, contains, words_re in _obtention_rules_cache:
+    for canonical, contains, words_re, except_re in _obtention_rules_cache:
+        said = except_re.sub(" ", raw) if except_re is not None else raw
+        key = _category_key(said)
         if any(kw and kw in key for kw in contains):
             return canonical
-        if words_re is not None and words_re.search(raw):
+        if words_re is not None and words_re.search(said):
             return canonical
     return None
 
