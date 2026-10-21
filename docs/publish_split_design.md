@@ -15,7 +15,7 @@ guard (4a), and the ARCHITECTURE/README/CLAUDE docs swept to the two-package str
 `pyproject` — no uv workspace / overlay dep) and **leak-guards the output**: no file imports the
 overlay, no overlay directory, no proprietary data, no overlay reference in the pyproject, and a
 generic secret-content/secret-filename scan over the assembled tree. It auto-excludes anything
-importing the overlay (the private tests) or and treats the analysis scripts / research
+importing the overlay (the private tests), and treats the analysis scripts / research
 reports / recipe docs (`scraping_techniques`, `access_methods_design`) / the bring-up + data-source
 docs (`multi_state_expansion`, `data_sources`) / the dataset as private intel (tunable via the
 script's exclude-lists). `--check` is test-gated (`tests/test_build_public_repo.py`). Tokens are untracked + gitignored; both packages
@@ -129,7 +129,7 @@ move is localized.
   ownership, powers the analysis's parent-collapse and the clean-dataset `brand_parent` table), and
   `license_regime.yml` (the per-jurisdiction retail licence-regime coding — assembled entirely from
   statutes and one regulator's page, so it discloses public law and nothing about our targets or our
-  methods; see `rung/licensing.py` and), and `operator_parent.yml`
+  methods; see `rung/licensing.py`), and `operator_parent.yml`
   (retail-banner → corporate-parent, the cross-state operator key — SEC filings and public corporate
   structure, same class as `brand_parent.yml`; see `rung/operators.py`). These are operator rosters + own-site homepages (public-record,
   not evasion); the public build strips the inline platform/override annotations from
