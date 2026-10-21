@@ -42,6 +42,11 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-21
 
+- **"JADE" and "JADE CANNABIS CO." are one Nevada operator.** `companies.yml` names "JADE" as
+  JADE CANNABIS CO.: the state roster spells all three stores that way, the "JADE" company's stores are
+  each named "Jade Cannabis Co. …", and both hold the Reno store at 1085 S Virginia St. A short-key guard
+  had declined the pair for want of a shared site.
+
 - **A product with no weight label is sized from the weight its name declares.** A lone variant
   labelled "each" or nothing, or a row with no variants at all, had no `size_g` and so no
   `price_per_g`, though the name said "- 7G", "3.5g …" or "| 28g". `normalize.name_grams` reads
