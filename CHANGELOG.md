@@ -19,6 +19,17 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-21
+
+- **A product with no weight label is sized from the weight its name declares.** A lone variant
+  labelled "each" or nothing, or a row with no variants at all, had no `size_g` and so no
+  `price_per_g`, though the name said "- 7G", "3.5g …" or "| 28g". `normalize.name_grams` reads
+  the ONE weight a name states, in grams, and a pack count only where it is tied to that weight
+  ("0.5G X 3", "5 × 0.5g", "1g | 2pk"); two weights, two counts, or a count beside a weight over
+  1.5 g ("2.5G 5-Pack" — a total or five?) are not read, and a milligram figure is a dose, never a
+  weight. The variant it sizes carries `size_source: "name"`. `normalize.size_of` is the one sizing
+  rule the scrape and the backfill share.
+
 ### Added — 2026-10-20
 
 - **`yield_store_daily`, the yield ledger per store.** `create_tables` creates a table holding each

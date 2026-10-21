@@ -227,6 +227,51 @@ def variant_pricing(variant: dict, channel: str | None = None) -> tuple[float | 
     return effective, original
 
 
+# ── the weight a product NAME declares ─────────────────────────────────────────
+#
+# Many listings carry no weight label at all — a Leafly or Value Buds variant whose option is "each" or
+# null, a Weedmaps row with no variants — while the name states the pack: "1964 KUSH MINTS (IND) DRIED -
+# 7G", "3.5g King Louis OG", "Mandarin Cookies | Flower | 28g". Measured 2026-10-21, 1.13M weight-sold
+# rows had no size and so no $/g, and ~850k of them name exactly one weight. A pack COUNT is read only
+# where it is tied to the weight it multiplies ("5 × 0.5g", "0.5G X 3") or written as a pack word
+# ("1g | 2pk", ".5G 5 Pack"); a strain cross ("Burger 42 x Blueberry") or a word ending in x ("Cuban
+# Linx 3.5G") is not a count. A count beside a weight over 1.5 g is NOT read: "2.5G 5-Pack" is a total
+# and "7G X 4" four tubes, and the name cannot say which.
+_NAME_WEIGHT = r"(?:\d*\.\d+|\d+)\s*(?:grams?|g)\b"
+_NAME_COUNT_RES = (
+    re.compile(rf"(?<![\w.])(\d{{1,3}})\s*[x×]\s*(?={_NAME_WEIGHT})", re.IGNORECASE),
+    re.compile(rf"{_NAME_WEIGHT}\s*[x×]\s*(\d{{1,3}})(?![\d.])", re.IGNORECASE),
+    re.compile(r"(?<![\w.])(\d{1,3})\s*-?\s*(?:pk|packs?|pac|ct|count)\b", re.IGNORECASE),
+)
+_MAX_UNIT_IN_A_PACK_G = 1.5
+
+
+def name_grams(name: object) -> float | None:
+    """The one weight a product name declares, in grams — a pack's whole weight — or None.
+
+    None when the name states no weight, two different weights, two different counts, or a count
+    beside a weight too large to be one unit of a pack. A milligram figure is never a weight here: in a
+    name it is almost always a dose ("(1000mg THC)").
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    weights = [float(n) / float(d) * _UNIT_TO_GRAMS[u.lower()] for n, d, u in _FRACTION_RE.findall(name)]
+    for value, unit in _NUMERIC_UNIT_RE.findall(_FRACTION_RE.sub(" ", name)):
+        if _UNIT_TO_GRAMS[unit.lower()] >= 1.0:
+            weights.append(float(value) * _UNIT_TO_GRAMS[unit.lower()])
+    distinct = {round(w, 3) for w in weights if w > 0}
+    if len(distinct) != 1:
+        return None
+    grams = next(iter(distinct))
+    counts = {int(c) for pattern in _NAME_COUNT_RES for c in pattern.findall(name)} - {0}
+    if len(counts) > 1:
+        return None
+    count = next(iter(counts), 1)
+    if count > 1 and grams > _MAX_UNIT_IN_A_PACK_G:
+        return None
+    return _plausible_g(grams * count)
+
+
 # Categories sold by weight, where grams and price-per-gram are meaningful. Everything else
 # (edibles, tinctures, beverages, capsules, topicals, accessories) is dosed in mg or sold per
 # unit, so an ``option`` like "100mg" is a DOSE, not a sellable weight — sizing it yields a
@@ -240,7 +285,7 @@ _MIN_SELLABLE_GRAMS = 0.05
 
 
 def enrich_variants(
-    variants: object, category: str | None = None, channel: str | None = None
+    variants: object, category: str | None = None, channel: str | None = None, name: object = None,
 ) -> float | None:
     """Stamp ``size_g`` + ``price_per_g`` onto each variant in place; return the representative
     top-level size_g (the smallest variant weight, the most granular sellable unit).
@@ -250,16 +295,22 @@ def enrich_variants(
     Idempotent: recomputes from the variant's own ``option``/price/``category`` fields,
     overwriting (or clearing) any prior stamp, so the same list can be enriched again after a
     deferred build (Cresco) or re-run by the backfill with the guards applied.
+
+    A product with ONE variant whose label carries no weight is sized from its ``name``
+    (`name_grams`), and that variant says so: ``size_source: "name"``. With several variants the
+    name's weight is one of them at most, so it is never read.
     """
     if not isinstance(variants, list):
         return None
     weight_sold = category in _WEIGHT_CATEGORIES
+    lone = len([v for v in variants if isinstance(v, dict)]) == 1
     sizes: list[float] = []
     for variant in variants:
         if not isinstance(variant, dict):
             continue
         item: dict = variant
         item.pop("price_per_g", None)
+        item.pop("size_source", None)
         # Unify discount capture: stamp `original_price` (pre-discount regular) when the variant is
         # on sale — recovered from per-platform price fields (Dutchie special_price_*, Jane
         # discounted_price, …). Done for ALL variants (discounts aren't weight-only) and idempotent:
@@ -270,6 +321,9 @@ def enrich_variants(
         else:
             item.pop("original_price", None)
         grams = size_to_grams(item.get("option")) if weight_sold else None
+        if grams is None and weight_sold and lone and (from_name := name_grams(name)) is not None:
+            grams = from_name
+            item["size_source"] = "name"
         if grams is None or grams < _MIN_SELLABLE_GRAMS:
             item.pop("size_g", None)
             continue
@@ -479,14 +533,25 @@ def potency_implausible(category_std: object, thc: object, cbd: object) -> bool:
 
 # ── stamp onto a record ─────────────────────────────────────────────────────────
 
+def size_of(variants: object, category: str | None, channel: str | None, name: object) -> float | None:
+    """A row's ``size_g``: `enrich_variants` (which stamps the variants in place), else — for a row with
+    no variants at all, a Weedmaps listing that publishes one price — the weight its name declares.
+    With no variant to carry ``size_source``, the absence of variants is the provenance. The one
+    sizing rule the scrape (`enrich_record`) and the backfill both call."""
+    size = enrich_variants(variants, category, channel, name)
+    if size is None and not variants and category in _WEIGHT_CATEGORIES:
+        grams = name_grams(name)
+        size = grams if grams is not None and grams >= _MIN_SELLABLE_GRAMS else None
+    return size
+
+
 def enrich_record(record: StoreProductRecord, *, medical_only: bool = False) -> None:
     """Stamp the normalized fields (``size_g``, ``terpenes_std``, ``terp_total``,
     ``terpenes_repaired``, ``potency_implausible``, and the per-variant ``size_g``/``price_per_g``)
     onto a record from its own raw fields. Idempotent. ``medical_only`` is the jurisdiction's
     program (`price_channel`)."""
-    record.size_g = enrich_variants(
-        record.variants, record.category_std,
-        price_channel(record.menu_type, medical_only=medical_only))
+    record.size_g = size_of(record.variants, record.category_std,
+                            price_channel(record.menu_type, medical_only=medical_only), record.name)
     record.terpenes_std, record.terp_total = normalize_terpenes(record.terpenes)
     record.terpenes_repaired = terpenes_repaired(record.terpenes)
     record.potency_implausible = potency_implausible(record.category_std, record.thc, record.cbd)

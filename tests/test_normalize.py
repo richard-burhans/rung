@@ -1,10 +1,13 @@
 """Tests for the product-data normalizers (sizes -> grams, terpenes -> canonical %)."""
 
+import pytest
+
 from rung.models import StoreProductRecord
 from rung.normalize import (
     enrich_record,
     enrich_variants,
     grams_to_label,
+    name_grams,
     normalize_terpenes,
     potency_implausible,
     size_to_grams,
@@ -396,3 +399,61 @@ def test_our_own_original_price_stamp_is_not_read_back_as_a_markdown() -> None:
     platform = [{"option": "1g", "price": 30, "original_price": 40}]
     enrich_variants(platform, "Flower")
     assert platform[0]["original_price"] == 40
+
+
+# ── the weight a product NAME declares (2026-10-21) ─────────────────────────────────────────────
+# 1.13M weight-sold rows had no size and so no $/g; ~850k of their names state one. Every case below
+# is a live name.
+
+@pytest.mark.parametrize(("name", "grams"), [
+    ("1964 KUSH MINTS (IND) DRIED - 7G", 7.0),                         # option null
+    ("3.5g King Louis OG - Pacific Cultivation", 3.5),                 # option "each"
+    ("Back Forty | Mandarin Cookies | Flower | 28g", 28.0),            # an aggregator row, no variants
+    ("Lemon 1/8 oz", 3.5),
+    ("Blue Dream 3.5g (1000mg THC)", 3.5),                             # a mg figure is a dose
+    ("VERSUS SOUR DUBB (S) PRE-ROLL - 0.5G X 3", 1.5),                 # weight × count
+    ("Lawn Darts Do-si Mints Pre-Rolls | 5 × 0.5g", 2.5),              # count × weight
+    ("Indica | Joints | 1g | 2pk", 2.0),
+    ("- KING LOUIS XIII - .5G 40's Infused Preroll 5 Pack", 2.5),
+    ("Cuban Linx 3.5G", 3.5),                                          # a word ending in x
+    ("Burger 42 x Blueberry GMO | Infused Minis | 0.5g each | 5pk", 2.5),  # a strain cross
+])
+def test_name_grams_reads_the_one_weight_a_name_declares(name, grams) -> None:
+    assert name_grams(name) == grams
+
+
+@pytest.mark.parametrize("name", [
+    "Bubble Up",                                   # no weight
+    "Gelato 3.5g / 7g",                            # two weights
+    "CAM: Lady Pink - Diamond Infused Pre-Rolls | 2.5G 5-Pack",  # a total or five 2.5 g? unsaid
+    "SHRED RAINBOW OZ (H) MILLED - 7G X 4",        # a count beside a large weight is not read
+    "Wyld Gummies 100mg",                          # a dose is not a weight
+])
+def test_name_grams_declines_a_name_that_does_not_say_one_weight(name) -> None:
+    assert name_grams(name) is None
+
+
+def test_a_lone_unlabelled_variant_is_sized_from_the_name_and_says_so() -> None:
+    variants = [{"option": "each", "price": 17.0}]
+    assert enrich_variants(variants, "Flower", name="3.5g King Louis OG") == 3.5
+    assert variants[0] == {"option": "each", "price": 17.0, "size_g": 3.5, "price_per_g": 4.86,
+                           "size_source": "name"}
+    # Idempotent, and a label that DOES carry a weight is never overridden by the name.
+    labelled = [{"option": "1g", "price": 10.0}]
+    enrich_variants(labelled, "Flower", name="Blue Dream 3.5g")
+    assert labelled[0]["size_g"] == 1.0 and "size_source" not in labelled[0]
+
+
+def test_the_name_is_not_read_for_several_variants_or_a_dosed_category() -> None:
+    several = [{"option": "each", "price": 10.0}, {"option": "each", "price": 18.0}]
+    assert enrich_variants(several, "Flower", name="Blue Dream 3.5g") is None
+    gummy = [{"option": "each", "price": 20.0}]
+    assert enrich_variants(gummy, "Edible", name="Gummies 3.5g") is None
+
+
+def test_a_row_with_no_variants_is_sized_from_its_name() -> None:
+    record = StoreProductRecord(company_id=1, state="CA", store_key="example:x", platform="example",
+                                external_id="x", source="example_menu", name="Jean Guy - 7g",
+                                category_std="Flower", price=36.98, variants=None)
+    enrich_record(record)
+    assert record.size_g == 7.0
