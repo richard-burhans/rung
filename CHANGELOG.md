@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-21
+
+- **`make_session` and `make_sync_session` take `extra_fp`**, curl_cffi's `ExtraFingerprints`,
+  to adjust an impersonated profile (for example, to permute its TLS extensions per connection, as
+  the browser it names does). It is forwarded only when a profile is in force; the honest default
+  session has no browser fingerprint to adjust and ignores it.
+
 ### Fixed — 2026-10-21
 
 - **A product with no weight label is sized from the weight its name declares.** A lone variant

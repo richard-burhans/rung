@@ -294,6 +294,20 @@ def test_set_impersonation_opts_into_a_profile(monkeypatch) -> None:
     assert "headers" not in session.kwargs  # impersonation supplies the fingerprint, not an honest UA
 
 
+def test_extra_fp_adjusts_only_an_impersonated_fingerprint(monkeypatch) -> None:
+    """``extra_fp`` reaches curl_cffi with a profile in force, and never rides the honest session."""
+    from curl_cffi import ExtraFingerprints
+
+    from rung import http
+
+    monkeypatch.setattr(http, "AsyncSession", _SessionRecorder)
+    monkeypatch.setattr(http, "_impersonate", None)
+    extra = ExtraFingerprints(tls_permute_extensions=True)
+    assert http.make_session(impersonate="chrome146", extra_fp=extra).kwargs["extra_fp"] is extra
+    honest = http.make_session(extra_fp=extra)
+    assert "extra_fp" not in honest.kwargs and "impersonate" not in honest.kwargs
+
+
 #: Scripts that fetch PUBLIC data (census, geocoders, a price index, the public build) and are right
 #: to send the honest client. Every other script that opens a session through `make_session` must
 #: load the overlay first — its plugin registrar is what turns TLS impersonation on, and without it

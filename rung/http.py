@@ -2,6 +2,7 @@ import json
 import os
 from typing import Literal, overload
 
+from curl_cffi import ExtraFingerprints
 from curl_cffi.requests import AsyncSession, Session
 from curl_cffi.requests.errors import RequestsError
 
@@ -46,6 +47,7 @@ def make_session(
     *,
     cookies: dict[str, str] | None = None,
     impersonate: str | None = None,
+    extra_fp: ExtraFingerprints | None = None,
 ) -> AsyncSession:
     """Return an ``AsyncSession``: impersonating when a profile is opted in, else honest.
 
@@ -65,6 +67,8 @@ def make_session(
     ``impersonate`` overrides the opted-in profile for this one session; it MUST match the browser that
     minted such a token, because ``cf_clearance`` is bound to the exact IP **and** the UA/TLS
     fingerprint that solved the challenge — so a mismatched profile (or a different egress) is rejected.
+    ``extra_fp`` adjusts that profile's fingerprint (curl_cffi's ``ExtraFingerprints``) and is
+    forwarded only when a profile is in force: the honest session has no browser fingerprint to adjust.
 
     Usage::
 
@@ -75,7 +79,7 @@ def make_session(
     if profile:
         # curl_cffi types `impersonate` as a fixed Literal; we pass a runtime str (the
         # opted-in profile) on purpose, so the stub can't verify it.
-        return AsyncSession(impersonate=profile, proxy=proxy, cookies=cookies)  # ty: ignore[invalid-argument-type, invalid-return-type]
+        return AsyncSession(impersonate=profile, extra_fp=extra_fp, proxy=proxy, cookies=cookies)  # ty: ignore[invalid-argument-type, invalid-return-type]
     return AsyncSession(headers={"User-Agent": HONEST_USER_AGENT}, proxy=proxy, cookies=cookies)
 
 
@@ -84,6 +88,7 @@ def make_sync_session(
     *,
     cookies: dict[str, str] | None = None,
     impersonate: str | None = None,
+    extra_fp: ExtraFingerprints | None = None,
 ) -> Session:
     """The synchronous sibling of :func:`make_session` — same impersonation chokepoint, a blocking
     ``Session`` instead of an ``AsyncSession``.
@@ -100,7 +105,7 @@ def make_sync_session(
     """
     profile = impersonate or _impersonate
     if profile:
-        return Session(impersonate=profile, proxy=proxy, cookies=cookies)  # ty: ignore[invalid-argument-type, invalid-return-type]
+        return Session(impersonate=profile, extra_fp=extra_fp, proxy=proxy, cookies=cookies)  # ty: ignore[invalid-argument-type, invalid-return-type]
     return Session(headers={"User-Agent": HONEST_USER_AGENT}, proxy=proxy, cookies=cookies)
 
 
