@@ -1934,6 +1934,29 @@ def _hi_doh_records(page: str) -> list[DispensaryRecord]:
     return records
 
 
+_TX_LICENCE = re.compile(r"License\s*#\s*(\d+)", re.I)
+
+
+def _tx_dps_records(page: str) -> list[DispensaryRecord]:
+    """TX DPS "Licensed Dispensaries": one paragraph per licensed dispensing organization — the name in
+    its first bold run, "License #0004", an e-mail and a website. Texas licenses organizations and
+    publishes no address. The website is read from the link TEXT: DPS's hrefs are mail-security
+    rewrites (urldefense, Outlook safelinks) that wrap the real address. Pure."""
+    records: list[DispensaryRecord] = []
+    for para in HTMLParser(page).css("p"):
+        licence = _TX_LICENCE.search(para.text())
+        bold = para.css_first("strong")
+        name = bold.text(strip=True) if bold is not None else ""
+        if not licence or not name or _TX_LICENCE.search(name):
+            continue
+        sites = [a.text(strip=True) for a in para.css("a[href]")
+                 if a.text(strip=True).startswith(("http://", "https://"))]
+        records.append(DispensaryRecord(source="tx_dps", name=name, state="TX",
+                                        website=sites[0] if sites else None,
+                                        licence_number=licence.group(1)))
+    return records
+
+
 def _static_page_handler(parse, label: str):
     """An async handler for a roster that is one public page: fetch, parse, and RAISE on a refused fetch
     or a page that yields nothing (`_extract_nh_dhhs`'s rule — an empty answer is never a roster)."""
@@ -1954,6 +1977,7 @@ _extract_wv_omc = _static_page_handler(_wv_omc_records, "wv_omc")
 _extract_nd_hhs = _static_page_handler(_nd_hhs_records, "nd_hhs")
 _extract_sd_doh = _static_page_handler(_sd_doh_records, "sd_doh")
 _extract_hi_doh = _static_page_handler(_hi_doh_records, "hi_doh")
+_extract_tx_dps = _static_page_handler(_tx_dps_records, "tx_dps")
 
 
 # ── Oklahoma OMMA Verify (list_type='ok_omma') ─────────────────────────────────
@@ -2270,7 +2294,7 @@ async def _extract_ca_dcc(url: str, session) -> list[DispensaryRecord]:
 ListType = Literal[
     "pdf", "csv", "kml", "arcgis", "atlist", "ca_dcc", "az_dhs", "co_med", "ma_ccc",
     "on_agco", "on_agco_csv", "ab_aglc", "bc_lcrb", "sk_slga", "va_cca", "il_idfpr", "nh_dhhs", "ok_omma",
-    "mi_cra", "wv_omc", "nd_hhs", "sd_doh", "hi_doh", "lookup",
+    "mi_cra", "wv_omc", "nd_hhs", "sd_doh", "hi_doh", "tx_dps", "lookup",
     "html",
 ]
 HANDLED_LIST_TYPES: frozenset[str] = frozenset(get_args(ListType))
@@ -2289,6 +2313,7 @@ _ASYNC_HANDLERS = {
     "nd_hhs": _extract_nd_hhs,
     "sd_doh": _extract_sd_doh,
     "hi_doh": _extract_hi_doh,
+    "tx_dps": _extract_tx_dps,
     "atlist": _extract_atlist,
     "sk_slga": _extract_sk_slga,
 }

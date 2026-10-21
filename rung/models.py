@@ -7,7 +7,7 @@ class DispensaryRecord:
     """One dispensary location from any scrape source."""
 
     source: str  # pdf | csv | kml | arcgis | html | lookup | ca_dcc | az_dhs | co_med |
-    # ma_ccc | ab_aglc | sk_slga | bc_lcrb | ok_omma | mi_cra | wv_omc | nd_hhs | sd_doh | hi_doh (static list
+    # ma_ccc | ab_aglc | sk_slga | bc_lcrb | ok_omma | mi_cra | wv_omc | nd_hhs | sd_doh | hi_doh | tx_dps (static list
     # handlers; on_agco delegates to arcgis) ·
     # ai (AI fallback)
     name: str | None = None

@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-21 (Texas roster)
+
+- **Texas's official roster reads deterministically** (`list_type: tx_dps`). DPS publishes its
+  licensed dispensing organizations as one paragraph each (name, licence number, e-mail,
+  website, no address), which the generic HTML parser read as empty; each row now carries
+  the licence number, and the website is unwrapped from the page's mail-security redirect.
+
 ### Added — 2026-10-21
 
 - **`make_session` and `make_sync_session` take `extra_fp`**, curl_cffi's `ExtraFingerprints`,

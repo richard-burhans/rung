@@ -449,8 +449,11 @@
   # (verified live 2026-07-10). The three-name roster is therefore COMPLETE and CORRECT, not a
   # scraping failure. Their pickup locations are not published. We hold no TX company stores, so
   # nothing is blocked; the guard reports this at WARN, not ERROR.
+  # The page is one paragraph per licensee, not a table, so the generic `html` parser read it as empty
+  # on every attempt and our three rows were the AI fallback's (source `ai`), which nothing refreshed
+  # and the healthcheck then reported as our own bootstrap. `tx_dps` reads it (2026-10-21).
   list_url: https://www.dps.texas.gov/section/compassionate-use-program/licensed-dispensaries
-  list_type: html
+  list_type: tx_dps
 
 - abbr: UT
   name: Utah

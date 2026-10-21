@@ -58,6 +58,18 @@ def test_hawaii_lists_licensed_operators_with_their_sites() -> None:
         ("Maui Grown Therapies", "https://www.mauigrown.com/", None)]
 
 
+def test_texas_reads_each_licensee_paragraph_and_unwraps_its_website() -> None:
+    page = ('<p><strong>Current Active Licensed Dispensaries:</strong></p>'
+            '<p><strong>Fluent </strong>(formerly Cansortium Texas)<br><strong>License #0004</strong><br>'
+            '<a href="mailto:info@fluenttx.com"><strong>info@fluenttx.com</strong></a><br>'
+            '<a href="https://urldefense.com/v3/__https:/getfluent.com/__;!!x$"><span><strong>https://getfluent.com/'
+            '</strong></span></a></p><p>&nbsp;</p>'
+            '<p><span><strong>Goodblend </strong>(Surterra Texas LLC)</span><br><span><strong>License #0006</strong>'
+            '</span></p>')
+    assert [(r.name, r.licence_number, r.website, r.address) for r in extract._tx_dps_records(page)] == [
+        ("Fluent", "0004", "https://getfluent.com/", None), ("Goodblend", "0006", None, None)]
+
+
 def test_a_page_that_no_longer_has_the_shape_is_a_failure_not_an_empty_roster() -> None:
     class _Resp:
         status_code, url, text = 200, "https://omc.wv.gov/dispensary", "<html>redesigned</html>"
@@ -67,4 +79,4 @@ def test_a_page_that_no_longer_has_the_shape_is_a_failure_not_an_empty_roster() 
             return _Resp()
     with pytest.raises(extract.ExtractionFailed, match="no roster"):
         asyncio.run(extract._extract_wv_omc("https://omc.wv.gov/dispensary", _Session()))
-    assert {"wv_omc", "nd_hhs", "sd_doh", "hi_doh"} <= extract.HANDLED_LIST_TYPES
+    assert {"wv_omc", "nd_hhs", "sd_doh", "hi_doh", "tx_dps"} <= extract.HANDLED_LIST_TYPES
