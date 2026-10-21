@@ -351,6 +351,7 @@ through the core's `db.py` or return records):
 | `flowhub.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `tendy.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `barnet.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
+| `joint.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `dispense.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `treez.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
 | `tymber.py` **[overlay]** | Private overlay module — not shipped in the public core; resolved via the plugin seam (Stage-2/3 catalogs + per-platform helpers; recipe withheld). | — | — |
@@ -528,7 +529,7 @@ overlay (its proprietary stages then resolve to registry stubs).
      audit M2). A homepage-less ("homeless") company gets a catalog of *only* the three
      directory rungs, since the homepage-based rungs would no-op anyway. **Rank 0 is the
    first-party handle band** (2026-09-25): `hifyre_stores`, `tymber_stores` and `valuebuds_locations` (both 2026-10-11), `breadstack_locations`,
-   `flowhub_stores`, `treez_stores`, `tendy_locations` and `menu_apps` run BEFORE `next_data`,
+   `flowhub_stores`, `treez_stores`, `tendy_locations`, `menu_apps` and `joint_stores` (2026-10-21) run BEFORE `next_data`,
    because a generic parser reading a platform storefront returns the location slug as a
    `custom` handle nothing routes, and that row used to win. **The engine stops at the first rung
    that yields**, which is why `menu_apps` is ONE rung for every menu-app platform (Dispense
