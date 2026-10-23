@@ -109,7 +109,7 @@ PURE_HELPERS = frozenset({"cresco", "curaleaf", "dutchie", "dutchie_plus", "flue
                           "canna_cabana", "delta9", "storerocket", "shopify", "woocommerce",
                           "hybris_occ", "sqdc", "cannabis_nb", "shopapps_locator", "tymber", "waio",
                           "breadstack", "hifyre", "flowhub", "treez", "tendy", "dispense",
-                          "barnet", "valuebuds", "joint"})
+                          "barnet", "valuebuds", "joint", "bloom"})
 # The two aggregator sweeps stay lean: they import only the overlay's `aggregator_http` (the private
 # anti-throttle machinery) and at most the public base-layer `http`
 # (the honest `make_session`) — never the heavier catalogs/extractors. Acyclic, just not zero-import.
