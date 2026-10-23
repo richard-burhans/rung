@@ -19,6 +19,15 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-23 (rung revisions)
+
+- **`AccessMethod.revision` lets a fixed rung retry where it had failed.** A rung that failed kept
+  its row, so once its code was fixed the stored winner still went first and won, and the rung never
+  ran again on that target without a full `max_yield` pass. Each attempt now records the rung's
+  `revision` (a new `access_methods.revision` column, added by `create_tables` on an existing
+  database), and a failure recorded at an older revision counts as untried. Bump the revision when
+  you fix the rung; each target it had failed gets one fresh attempt.
+
 ### Added — 2026-10-23 (preferred rungs)
 
 - **`run_target(preferred=…)` tries named rungs before the stored winner.** A rung that had failed

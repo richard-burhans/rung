@@ -178,6 +178,21 @@ class AccessMethod:
     run: MethodRunner
     vantage: frozenset[str] | None = None
     egress: str | None = None
+    #: Bump when the rung's CODE is fixed so that it can now succeed where it failed. Every attempt
+    #: stores the revision it ran at, and a NON-OK row from an older revision reads as untried — so
+    #: the untried-cheaper re-walk gives the fixed rung one fresh try on each target it had failed,
+    #: instead of the stored winner shadowing it forever (2026-10-23: the menu-app and Breadstack
+    #: fixes reached their operators only through a hand-run `max_yield` pass). An ok row is never
+    #: re-walked by a bump: a fix to a rung that already works changes nothing to re-decide.
+    revision: int = 0
+
+
+def _stale_failure(row: tuple, method: AccessMethod) -> bool:
+    """A stored non-ok attempt made at an OLDER revision of ``method`` — a failure of code that has
+    since been fixed, which says nothing about the target any more."""
+    columns = db.ACCESS_METHOD_COLUMNS
+    status = row[columns.index("status")]
+    return status != "ok" and row[columns.index("revision")] < method.revision
 
 
 def fits_vantage(method: AccessMethod) -> bool:
@@ -382,8 +397,7 @@ async def run_target(
     and the untried-cheaper re-walk only fires for a rung with NO row — so every pin needed a
     hand-run ``max_yield`` pass to take effect (2026-10-23: THE SOURCE, PRC, Matchbox). A preferred
     rung that yields nothing costs one attempt and the walk goes on as before. (A rung whose CODE
-    was fixed has the same problem — its pre-fix failure row shadows it — and is not covered here:
-    there is no pin to name it, so that case is still a ``max_yield`` pass.)
+    was fixed had the same problem, with no pin to name it; `AccessMethod.revision` covers that.)
 
     A rung whose ``egress`` is outside its ``vantage`` (`fits_vantage`) is dropped from the ladder
     BEFORE the winner-first order and the untried-cheaper test are computed — it writes no row, so
@@ -432,6 +446,7 @@ async def run_target(
                     db.record_access_attempt(
                         conn, target_type, target_key, method.name, method.cost_rank,
                         outcome.status, error=str(outcome) or outcome.status,
+                        revision=method.revision,
                     )
                     conn.commit()
                 continue
@@ -440,6 +455,7 @@ async def run_target(
                 db.record_access_attempt(
                     conn, target_type, target_key, method.name, method.cost_rank,
                     "ok", resource_url, json.dumps(params) if params else None, len(records),
+                    revision=method.revision,
                 )  # full fetched count (matches the cheapest-first path + design doc); diagnostic only (L-26)
                 # Strictly-greater so a tie keeps the earlier (cheaper) rung.
                 score = quality_key(kept)
@@ -449,6 +465,7 @@ async def run_target(
                 db.record_access_attempt(
                     conn, target_type, target_key, method.name, method.cost_rank,
                     "failed", error="no_plausible_records",
+                    revision=method.revision,
                 )
             conn.commit()
         return (best[0], best[1]) if best is not None else (None, [])
@@ -475,7 +492,8 @@ async def run_target(
         # runs later in the walk if the newcomer yields nothing). Without this, a
         # working winner would shadow a cheaper/better method forever.
         untried_cheaper = any(
-            method.cost_rank < winner_rank and method.name not in rows
+            method.cost_rank < winner_rank
+            and (method.name not in rows or _stale_failure(rows[method.name], method))
             for method in ladder
         )
         if not re_explore and not untried_cheaper:
@@ -503,6 +521,7 @@ async def run_target(
             db.record_access_attempt(
                 conn, target_type, target_key, method.name, method.cost_rank,
                 outcome.status, error=str(outcome) or outcome.status,
+                revision=method.revision,
             )
             conn.commit()
             continue
@@ -511,12 +530,14 @@ async def run_target(
                 conn, target_type, target_key, method.name, method.cost_rank,
                 "ok", resource_url, json.dumps(params) if params else None,
                 len(records),
+                revision=method.revision,
             )
             conn.commit()
             return method.name, records
         db.record_access_attempt(
             conn, target_type, target_key, method.name, method.cost_rank,
             "failed", error="no_plausible_records",
+            revision=method.revision,
         )
         conn.commit()
     return None, []

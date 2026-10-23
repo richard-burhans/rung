@@ -120,12 +120,14 @@ def test_create_tables_still_migrates_what_an_older_database_lacks() -> None:
     conn.execute("ALTER TABLE access_methods DROP CONSTRAINT access_methods_status_check")
     conn.execute("ALTER TABLE access_methods ADD CONSTRAINT access_methods_status_check "
                  "CHECK (status IN ('ok', 'failed'))")  # an older, narrower vocabulary
+    conn.execute("ALTER TABLE access_methods DROP COLUMN revision")
     conn.commit()
 
     db.create_tables(conn)
 
     assert "retained_since" in db.table_columns(conn, "store_products")
     assert "lease_until" in db.table_columns(conn, "jobs")
+    assert "revision" in db.table_columns(conn, "access_methods")
     assert db.constraint_definition(
         conn, "store_products", "store_products_potency_unit_check") is not None
     status_check = db.constraint_definition(conn, "access_methods", "access_methods_status_check")

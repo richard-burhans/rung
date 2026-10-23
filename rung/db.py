@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS access_methods (
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_ok_at   TEXT,
     last_fail_at TEXT,
+    revision     INTEGER NOT NULL DEFAULT 0,
     updated_at   TEXT    NOT NULL,
     PRIMARY KEY (target_type, target_key, method),
     CONSTRAINT access_methods_status_check
@@ -616,6 +617,14 @@ def _migrate_access_methods(conn: DBConn) -> None:
     validates existing rows when the constraint is added, so a database carrying some other status
     fails loudly here rather than silently accepting it forever.
     """
+    # The rung revision each attempt ran at (`access.AccessMethod.revision`, 2026-10-23). Checked
+    # first so a current database takes no lock: this runs at every process start.
+    has_revision = conn.execute(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() "
+        "AND table_name = 'access_methods' AND column_name = 'revision'"
+    ).fetchone()
+    if has_revision is None:
+        conn.execute("ALTER TABLE access_methods ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0")
     current = constraint_definition(conn, "access_methods", "access_methods_status_check")
     if current is not None and set(_QUOTED_RE.findall(current)) == ACCESS_STATUSES:
         return  # already the current vocabulary: no ALTER, so no ACCESS EXCLUSIVE and no table scan
@@ -672,10 +681,11 @@ def _migrate_jobs(conn: DBConn) -> None:
 _UPSERT_ACCESS_METHOD = """
 INSERT INTO access_methods
   (target_type, target_key, method, cost_rank, status, resource_url, params,
-   record_count, error, attempts, last_ok_at, last_fail_at, updated_at)
-VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s)
+   record_count, error, attempts, last_ok_at, last_fail_at, updated_at, revision)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s,%s,%s)
 ON CONFLICT (target_type, target_key, method) DO UPDATE SET
   cost_rank    = excluded.cost_rank,
+  revision     = excluded.revision,
   status       = excluded.status,
   -- On success keep/refresh the winning locator; on FAILURE clear it, so the next
   -- attempt re-discovers instead of re-serving a now-broken URL (the stale-hint lock).
@@ -702,7 +712,7 @@ ON CONFLICT (target_type, target_key, method) DO UPDATE SET
 # Columns returned by the access_methods getters, in order.
 ACCESS_METHOD_COLUMNS = (
     "method", "cost_rank", "status", "resource_url", "params",
-    "record_count", "error", "attempts", "last_ok_at", "last_fail_at",
+    "record_count", "error", "attempts", "last_ok_at", "last_fail_at", "revision",
 )
 
 
@@ -717,8 +727,12 @@ def record_access_attempt(
     params: str | None = None,
     record_count: int | None = None,
     error: str | None = None,
+    revision: int = 0,
 ) -> None:
     """Upsert the outcome of one method attempt against one target. Caller commits.
+
+    ``revision`` is the rung's `access.AccessMethod.revision` the attempt ran at: a non-ok row from
+    an older revision reads as untried, so a fixed rung gets one fresh walk.
 
     ``status`` must be one of ``ACCESS_STATUSES``. On 'ok' the last_ok_at timestamp advances; on any
     other outcome, last_fail_at. attempts increments on every call. On 'ok' a null resource_url /
@@ -738,7 +752,7 @@ def record_access_attempt(
         _UPSERT_ACCESS_METHOD,
         (
             target_type, target_key, method, cost_rank, status, resource_url,
-            params, record_count, error, ok_at, fail_at, now,
+            params, record_count, error, ok_at, fail_at, now, revision,
         ),
     )
 
@@ -747,7 +761,7 @@ def get_access_methods(conn: DBConn, target_type: str, target_key: str) -> list[
     """Return all recorded method rows for a target (see ACCESS_METHOD_COLUMNS)."""
     return conn.execute(
         "SELECT method, cost_rank, status, resource_url, params, record_count, "
-        "error, attempts, last_ok_at, last_fail_at FROM access_methods "
+        "error, attempts, last_ok_at, last_fail_at, revision FROM access_methods "
         "WHERE target_type = %s AND target_key = %s ORDER BY cost_rank",
         (target_type, target_key),
     ).fetchall()
@@ -780,7 +794,7 @@ def get_access_winner(
     """Return the cheapest 'ok' method row for a target, or None (see columns)."""
     return conn.execute(
         "SELECT method, cost_rank, status, resource_url, params, record_count, "
-        "error, attempts, last_ok_at, last_fail_at FROM access_methods "
+        "error, attempts, last_ok_at, last_fail_at, revision FROM access_methods "
         "WHERE target_type = %s AND target_key = %s AND status = 'ok' "
         "ORDER BY cost_rank LIMIT 1",
         (target_type, target_key),

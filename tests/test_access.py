@@ -255,6 +255,46 @@ def test_a_preferred_rung_that_once_failed_runs_ahead_of_the_stored_winner() -> 
     assert method == "generic" and generic.calls == calls + 1
 
 
+def test_a_revision_bump_gives_a_fixed_rung_one_fresh_walk() -> None:
+    """A cheaper rung failed, a costlier one won, then the cheaper rung's CODE was fixed: without a
+    revision the stored winner shadows it forever (2026-10-23, menu_apps and breadstack_locations)."""
+    conn = _conn()
+    fixed = _Method([])
+    generic = _Method([_store()])
+    catalog = [access.AccessMethod("fixed", 0, fixed), access.AccessMethod("generic", 3, generic)]
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "generic"   # fixed failed at rev 0
+
+    fixed.set([_store("Fixed")])                                              # the code is fixed...
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "generic"   # ...and still shadowed
+    calls = fixed.calls
+
+    bumped = [access.AccessMethod("fixed", 0, fixed, revision=1), access.AccessMethod("generic", 3, generic)]
+    assert _run(access.run_target(conn, "t", "k", bumped))[0] == "fixed"      # one fresh walk
+    assert fixed.calls == calls + 1
+    row = {r[0]: r for r in db.get_access_methods(conn, "t", "k")}["fixed"]
+    assert row[db.ACCESS_METHOD_COLUMNS.index("revision")] == 1
+
+
+def test_a_revision_bump_walks_a_still_failing_rung_once_and_never_an_ok_one() -> None:
+    conn = _conn()
+    dud = _Method([])
+    generic = _Method([_store()])
+    catalog = [access.AccessMethod("dud", 0, dud), access.AccessMethod("generic", 3, generic)]
+    _run(access.run_target(conn, "t", "k", catalog))
+    bumped = [access.AccessMethod("dud", 0, dud, revision=1), access.AccessMethod("generic", 3, generic)]
+    _run(access.run_target(conn, "t", "k", bumped))         # retried at rev 1, still nothing
+    _run(access.run_target(conn, "t", "k", bumped))         # rev-1 failure is current: not again
+    assert dud.calls == 2
+
+    # A bump to the WINNING rung re-decides nothing: an ok row is never stale.
+    ok_cheap = _Method([_store()])
+    costly = _Method([_store("Costly")])
+    catalog = [access.AccessMethod("cheap", 0, ok_cheap), access.AccessMethod("costly", 5, costly)]
+    _run(access.run_target(conn, "t2", "k", catalog))
+    bumped = [access.AccessMethod("cheap", 0, ok_cheap, revision=7), access.AccessMethod("costly", 5, costly)]
+    assert _run(access.run_target(conn, "t2", "k", bumped))[0] == "cheap" and costly.calls == 0
+
+
 def test_new_cheaper_rung_that_fails_falls_back_to_winner() -> None:
     conn = _conn()
     dear = _Method([_store()])

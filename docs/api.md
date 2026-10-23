@@ -30,6 +30,7 @@ class AccessMethod:
     name: str
     cost_rank: int            # try-priority: lower is tried first
     run: MethodRunner
+    revision: int = 0         # bump when the rung's code is fixed: its older failures read as untried
 
 # a runner is: async (conn, target_key, hint) -> (records, resource_url, params)
 MethodHint   = tuple[str | None, dict | None]     # the locator that won last time (None, None on first run)
@@ -48,7 +49,9 @@ async def run_target(
 
 `run_target` tries the stored winner first, re-walks cheapest-first on failure/staleness, persists
 each attempt in `access_methods`, and commits per attempt. Rungs named in `preferred` run ahead of the
-stored winner — the way to make a curated pin take effect on a target whose pinned rung once failed. Provide `plausible` when your records
+stored winner — the way to make a curated pin take effect on a target whose pinned rung once failed. A
+rung's failure recorded at an older `revision` counts as untried, so a code fix gets one fresh try
+on the targets it had failed. Provide `plausible` when your records
 aren't store-shaped (name + address/city/zip). `ReExploreGovernor` and `is_plausible`/`is_success` are
 also in this module.
 
