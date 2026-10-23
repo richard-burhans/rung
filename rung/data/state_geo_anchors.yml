@@ -154,6 +154,14 @@ NV:
   - [36.2083, -115.9839]  # Pahrump
   - [40.8324, -115.7631]  # Elko
   - [36.8055, -114.0672]  # Mesquite
+  # 2026-10-23: four roster stores sat beyond every circle above, so the sweep could never return them
+  # (`scripts/sweep_edge_band.py --states NV`: Tonopah 147 mi, Ely 119, Winnemucca x2 104): Greenlight
+  # Ely is open on Dutchie under its own chain and was missing for exactly this reason. West Wendover
+  # (88.6 mi from Elko) holds a Deep Roots store. Measured with all four: 0 roster rows unreachable.
+  - [39.2474, -114.8889]  # Ely
+  - [40.9730, -117.7357]  # Winnemucca
+  - [38.0671, -117.2301]  # Tonopah
+  - [40.7391, -114.0733]  # West Wendover
 
 MT:
   - [45.7833, -108.5007]  # Billings

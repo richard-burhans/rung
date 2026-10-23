@@ -45,6 +45,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-23
 
+- **Nevada's Dutchie sweep reaches its rural stores.** Four geo-anchors (Ely, Winnemucca, Tonopah,
+  West Wendover) are added to `rung/data/state_geo_anchors.yml`; four roster stores sat beyond every
+  existing anchor's circle, so the sweep could never return them.
+
 - **Deep Roots Harvest (NV) has a homepage override** in `rung/data/company_homepages.yml`. Nevada's
   roster names no website for it, so its own site, which lists all six stores, was never read.
 
