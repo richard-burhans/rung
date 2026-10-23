@@ -27,6 +27,14 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
   a name with no address. The address now starts at the first segment that starts like a street; a
   label before it stays with the name.
 
+- **NYCCABUDS (New York) has no website of its own.** Recon had given it the website of a nonprofit
+  with a similar name, and that organisation's offices were read as six stores. `company_homepages.yml`
+  now records `NY: none` for it, so recon stops looking.
+
+- **"Riviera Creek" in Ohio is Curaleaf.** It is Curaleaf's flower brand, and the Ohio roster licenses one
+  of Curaleaf's stores under it; `companies.yml` now lists it as a Curaleaf alias, so the two fold into one
+  operator.
+
 ### Added — 2026-10-21 (sub-categories)
 
 - **`store_products.subcategory` keeps the platform's own sub-category, raw**, beside the raw

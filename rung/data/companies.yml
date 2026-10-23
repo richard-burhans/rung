@@ -18,7 +18,10 @@ Bloc Dispensary:
                        #   Somerset, MI Benton Harbor, UT St. George/South Jordan) and Dutchie's chain is
                        #   justice-grown (dutchie_chains.yml). Owner, 2026-10-19
 Columbia Care: []
-Curaleaf: []
+Curaleaf:
+  - Riviera Creek      # OH: Curaleaf's flower brand. The roster licenses Curaleaf's Lorain store (2507 West Erie Ave,
+                       #   the `RC002` "RC Partner" shop) as "Riviera Creek", and a Weedmaps listing "Riviera Creek
+                       #   by Curaleaf New Albany" held a second row for the New Albany store (owner, 2026-10-23)
 Dankley:                      # NY operator under multiple legal-entity / spelling variants
   - DANKLEY                   # all-caps Weedmaps spelling (Queens store)
   - Dankley LLC               # legal entity (dankleycanna.com) for the same 2 Dutchie/Weedmaps stores
