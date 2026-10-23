@@ -19,6 +19,13 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-23 (failure TTL)
+
+- **A failure on a rung cheaper than the winner is retried after 60 days.** One failed attempt used
+  to shadow its rung for as long as a costlier winner kept working. Now such a failure counts as
+  untried once it is `access.FAILURE_TTL_DAYS` old, and `run_target`'s existing re-walk tries it
+  again. `run_target(failure_ttl_days=None)` disables it.
+
 ### Added — 2026-10-23 (rung revisions)
 
 - **`AccessMethod.revision` lets a fixed rung retry where it had failed.** A rung that failed kept

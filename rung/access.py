@@ -187,12 +187,29 @@ class AccessMethod:
     revision: int = 0
 
 
-def _stale_failure(row: tuple, method: AccessMethod) -> bool:
-    """A stored non-ok attempt made at an OLDER revision of ``method`` — a failure of code that has
-    since been fixed, which says nothing about the target any more."""
+#: Days after which a FAILED row on a rung cheaper than the winner reads as untried again, so the
+#: untried-cheaper re-walk retries it. Without it one failure shadowed its rung for as long as a
+#: costlier winner kept working: The Dispensary NV failed `dutchie_directory` once on 2026-06-17 and
+#: was held by Weedmaps (3 of its 6 stores) until 2026-10-23, though all six were open on Dutchie
+#: under the chain the rung derives. Priced before it was set (`access_census.py --failure-ttl`,
+#: 2026-10-23): at 60 days a first run re-walks ~2,340 Stage-2 targets, ~3,500 extra attempts, most of
+#: them directory rungs that match against a state sweep the run builds anyway; no Stage-3 target is
+#: affected. The re-walk is the existing one, so it runs every rung cheaper than the winner.
+FAILURE_TTL_DAYS = 60.0
+
+
+def _stale_failure(
+    row: tuple, method: AccessMethod, failure_ttl_days: float | None = FAILURE_TTL_DAYS,
+) -> bool:
+    """A stored non-ok attempt that no longer says anything about the target: made at an OLDER
+    revision of ``method`` (code since fixed), or older than ``failure_ttl_days`` (None: never)."""
     columns = db.ACCESS_METHOD_COLUMNS
-    status = row[columns.index("status")]
-    return status != "ok" and row[columns.index("revision")] < method.revision
+    if row[columns.index("status")] == "ok":
+        return False
+    if row[columns.index("revision")] < method.revision:
+        return True
+    age = _age_days(row[columns.index("last_fail_at")])
+    return failure_ttl_days is not None and age is not None and age >= failure_ttl_days
 
 
 def fits_vantage(method: AccessMethod) -> bool:
@@ -226,12 +243,13 @@ def is_success(
     return sum(1 for record in records if plausible(record)) >= min_records
 
 
-def _age_days(last_ok_at: str | None) -> float | None:
-    """Days since the winner last succeeded, or None if it never has."""
-    if last_ok_at is None:
+def _age_days(stamp: str | None) -> float | None:
+    """Days since a stored attempt timestamp (a winner's last success, a row's last failure), or
+    None if there is none."""
+    if stamp is None:
         return None
-    last_ok = datetime.datetime.fromisoformat(last_ok_at)
-    return (datetime.datetime.now(datetime.UTC) - last_ok).total_seconds() / 86400.0
+    then = datetime.datetime.fromisoformat(stamp)
+    return (datetime.datetime.now(datetime.UTC) - then).total_seconds() / 86400.0
 
 
 def _host_of(resource_url: str | None) -> str:
@@ -387,6 +405,7 @@ async def run_target(
     quality_key: Callable[[list], Any] = len,
     vantage_skips: Counter[str] | None = None,
     preferred: Collection[str] = (),
+    failure_ttl_days: float | None = FAILURE_TTL_DAYS,
 ) -> tuple[str | None, list]:
     """Run the ladder for one target, returning (winning_method, records).
 
@@ -398,6 +417,10 @@ async def run_target(
     hand-run ``max_yield`` pass to take effect (2026-10-23: THE SOURCE, PRC, Matchbox). A preferred
     rung that yields nothing costs one attempt and the walk goes on as before. (A rung whose CODE
     was fixed had the same problem, with no pin to name it; `AccessMethod.revision` covers that.)
+
+    ``failure_ttl_days`` (default `FAILURE_TTL_DAYS`, None to disable) lets a failure on a rung cheaper
+    than the winner count as untried once it is that old, so a rung that failed for a passing reason
+    is asked again instead of being shadowed by the winner for good.
 
     A rung whose ``egress`` is outside its ``vantage`` (`fits_vantage`) is dropped from the ladder
     BEFORE the winner-first order and the untried-cheaper test are computed — it writes no row, so
@@ -493,7 +516,8 @@ async def run_target(
         # working winner would shadow a cheaper/better method forever.
         untried_cheaper = any(
             method.cost_rank < winner_rank
-            and (method.name not in rows or _stale_failure(rows[method.name], method))
+            and (method.name not in rows
+                 or _stale_failure(rows[method.name], method, failure_ttl_days))
             for method in ladder
         )
         if not re_explore and not untried_cheaper:

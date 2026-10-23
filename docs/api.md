@@ -44,6 +44,7 @@ async def run_target(
     max_yield=False, quality_key=len,              # "best data now" mode (walk full ladder, keep richest)
     vantage_skips=None,                            # Counter of rungs dropped for this run's egress
     preferred=(),                                  # rung names to try FIRST (a curated pin), then the rest
+    failure_ttl_days=access.FAILURE_TTL_DAYS,       # a cheaper rung's failure this old reads as untried
 ) -> tuple[str | None, list]:                      # (winning_method_name, records)
 ```
 
@@ -51,7 +52,8 @@ async def run_target(
 each attempt in `access_methods`, and commits per attempt. Rungs named in `preferred` run ahead of the
 stored winner — the way to make a curated pin take effect on a target whose pinned rung once failed. A
 rung's failure recorded at an older `revision` counts as untried, so a code fix gets one fresh try
-on the targets it had failed. Provide `plausible` when your records
+on the targets it had failed, and any failure on a rung cheaper than the winner is retried once it is
+`failure_ttl_days` old (default `access.FAILURE_TTL_DAYS`, 60; None disables). Provide `plausible` when your records
 aren't store-shaped (name + address/city/zip). `ReExploreGovernor` and `is_plausible`/`is_success` are
 also in this module.
 

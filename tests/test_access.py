@@ -275,6 +275,26 @@ def test_a_revision_bump_gives_a_fixed_rung_one_fresh_walk() -> None:
     assert row[db.ACCESS_METHOD_COLUMNS.index("revision")] == 1
 
 
+def test_a_cheaper_rungs_old_failure_is_retried_and_a_recent_one_is_not() -> None:
+    """The Dispensary NV (2026-10-23): one `dutchie_directory` failure in June shadowed the rung behind
+    a Weedmaps winner for four months, though the stores had been on Dutchie all along."""
+    conn = _conn()
+    cheap = _Method([])
+    winner = _Method([_store()])
+    catalog = [access.AccessMethod("cheap", 1, cheap), access.AccessMethod("winner", 9, winner)]
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "winner"   # cheap failed just now
+    cheap.set([_store("Fixed upstream")])
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "winner"   # a recent failure holds
+    calls = cheap.calls
+
+    conn.execute("UPDATE access_methods SET last_fail_at = %s WHERE method = 'cheap'",
+                 ("2026-06-17T00:00:00+00:00",))
+    assert _run(access.run_target(conn, "t", "k", catalog, failure_ttl_days=None))[0] == "winner"
+    assert cheap.calls == calls                                              # disabled: still shadowed
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "cheap"    # 60 days on: asked again
+    assert cheap.calls == calls + 1
+
+
 def test_a_revision_bump_walks_a_still_failing_rung_once_and_never_an_ok_one() -> None:
     conn = _conn()
     dud = _Method([])
