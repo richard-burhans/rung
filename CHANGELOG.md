@@ -19,6 +19,14 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Added — 2026-10-23 (preferred rungs)
+
+- **`run_target(preferred=…)` tries named rungs before the stored winner.** A rung that had failed
+  once kept a row, so a later fix to its input (a curated store id, a chain slug) never ran: the stored
+  winner went first and won, and only a rung with no row at all was re-tried. A caller that knows a
+  rung is meant for a target now names it, and it is tried first; one that yields nothing costs one
+  attempt.
+
 ### Fixed — 2026-10-23
 
 - **A packed "NAME – ADDRESS" roster cell splits when a label sits before the street, or the street

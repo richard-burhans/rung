@@ -41,11 +41,14 @@ async def run_target(
     governor=None,                                 # ReExploreGovernor for staleness re-walks
     plausible=access.is_plausible,                 # your "is this a good record?" predicate
     max_yield=False, quality_key=len,              # "best data now" mode (walk full ladder, keep richest)
+    vantage_skips=None,                            # Counter of rungs dropped for this run's egress
+    preferred=(),                                  # rung names to try FIRST (a curated pin), then the rest
 ) -> tuple[str | None, list]:                      # (winning_method_name, records)
 ```
 
 `run_target` tries the stored winner first, re-walks cheapest-first on failure/staleness, persists
-each attempt in `access_methods`, and commits per attempt. Provide `plausible` when your records
+each attempt in `access_methods`, and commits per attempt. Rungs named in `preferred` run ahead of the
+stored winner — the way to make a curated pin take effect on a target whose pinned rung once failed. Provide `plausible` when your records
 aren't store-shaped (name + address/city/zip). `ReExploreGovernor` and `is_plausible`/`is_success` are
 also in this module.
 

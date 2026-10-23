@@ -227,6 +227,34 @@ def test_new_untried_cheaper_rung_triggers_one_rewalk() -> None:
     assert method == "fresh" and fresh2.calls == 1 and dear.calls == 1
 
 
+def test_a_preferred_rung_that_once_failed_runs_ahead_of_the_stored_winner() -> None:
+    """A pin added after its rung had failed: without `preferred` the stored winner keeps winning
+    (the rung has a row, so it is not "untried") — the 2026-10-23 THE SOURCE / PRC / Matchbox case.
+    A preferred rung costlier than the winner runs first too; one that yields nothing costs one
+    attempt and the winner still serves."""
+    conn = _conn()
+    pinned = _Method([])
+    generic = _Method([_store()])
+    catalog = [access.AccessMethod("pinned", 2, pinned), access.AccessMethod("generic", 3, generic)]
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "generic"   # pinned failed once
+
+    pinned.set([_store("Pinned")])                      # the pin is now right
+    assert _run(access.run_target(conn, "t", "k", catalog))[0] == "generic"   # winner-first: ignored
+    method, _ = _run(access.run_target(conn, "t", "k", catalog, preferred={"pinned"}))
+    assert method == "pinned"
+
+    costly = _Method([_store("Costly")])
+    catalog = [access.AccessMethod("generic", 3, generic), access.AccessMethod("costly", 30, costly)]
+    assert _run(access.run_target(conn, "t2", "k", catalog))[0] == "generic"
+    assert _run(access.run_target(conn, "t2", "k", catalog, preferred={"costly"}))[0] == "costly"
+
+    dud = _Method([])
+    catalog = [access.AccessMethod("generic", 3, generic), access.AccessMethod("dud", 1, dud)]
+    calls = generic.calls
+    method, _ = _run(access.run_target(conn, "t2", "k", catalog, preferred={"dud"}))
+    assert method == "generic" and generic.calls == calls + 1
+
+
 def test_new_cheaper_rung_that_fails_falls_back_to_winner() -> None:
     conn = _conn()
     dear = _Method([_store()])

@@ -14,7 +14,7 @@ import datetime
 import json
 import random
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -371,8 +371,19 @@ async def run_target(
     max_yield: bool = False,
     quality_key: Callable[[list], Any] = len,
     vantage_skips: Counter[str] | None = None,
+    preferred: Collection[str] = (),
 ) -> tuple[str | None, list]:
     """Run the ladder for one target, returning (winning_method, records).
+
+    ``preferred`` names rungs the CALLER knows are meant for this target (a curated pin: the
+    operator's store ids, its chain slug, its storefront URL). They are tried FIRST, ahead of the
+    stored winner, in cost order among themselves; the rest of the walk is unchanged. Without it a
+    pin added after its rung had once failed never ran: the stored winner is tried first and wins,
+    and the untried-cheaper re-walk only fires for a rung with NO row — so every pin needed a
+    hand-run ``max_yield`` pass to take effect (2026-10-23: THE SOURCE, PRC, Matchbox). A preferred
+    rung that yields nothing costs one attempt and the walk goes on as before. (A rung whose CODE
+    was fixed has the same problem — its pre-fix failure row shadows it — and is not covered here:
+    there is no pin to name it, so that case is still a ``max_yield`` pass.)
 
     A rung whose ``egress`` is outside its ``vantage`` (`fits_vantage`) is dropped from the ladder
     BEFORE the winner-first order and the untried-cheaper test are computed — it writes no row, so
@@ -471,6 +482,10 @@ async def run_target(
             order = [m for m in ladder if m.name == winner_name] + [
                 m for m in ladder if m.name != winner_name
             ]
+
+    if preferred:
+        first = [m for m in order if m.name in preferred]
+        order = first + [m for m in order if m.name not in preferred]
 
     for method in order:
         records, resource_url, params, outcome = await _attempt(
