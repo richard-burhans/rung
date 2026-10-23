@@ -68,6 +68,9 @@ _FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
 
 # Separators states use to pack "NAME – 123 Main St" into one cell.
 _NAME_ADDR_SEP_RE = re.compile(r"\s*[–—|]\s*|\s+-\s+")
+# `_STREET_RE`, allowing a paired street number ("2370 & 2380 Homestead Rd") — for splitting a
+# packed "NAME – ADDRESS" cell only, where the segment boundary already says where a street starts.
+_SPLIT_STREET_RE = re.compile(r"\d{1,6}(?:\s*[&-]\s*\d{1,6})?\s+[A-Za-z0-9.\- ]+")
 _YES_NO_VALUES = {"Y", "N", "YES", "NO", "X", "N/A", "NA", "-", "—"}
 # iframe srcs that never hold a dispensary list (analytics, embeds, video).
 _JUNK_IFRAME_RE = re.compile(
@@ -211,18 +214,21 @@ def _split_name_address(value: str) -> tuple[str, str | None]:
     Only splits when the segment after the name looks like a street address, so
     names that merely contain a hyphen (e.g. "BEYOND/HELLO - Reno") are left
     intact. A trailing license-type tag (no digits, few words — "Adult Use",
-    "Medical") is dropped from the address.
+    "Medical") is dropped from the address. The address starts at the first segment that
+    starts like a street, so a location label between the name and the street stays with
+    the name ("RISE CARSON CITY – US HWY 50 – 3060 U.S. Highway 50"), and a street number
+    may be a pair ("2370 & 2380 Homestead Rd") — Nevada's CCB list carries both, and each
+    left the whole cell in `name` with no address.
     """
     parts = [p.strip() for p in _NAME_ADDR_SEP_RE.split(value) if p.strip()]
     if len(parts) < 2:
         return value.strip(), None
-    name, rest = parts[0], parts[1:]
-    if len(rest) > 1 and not any(ch.isdigit() for ch in rest[-1]) and len(rest[-1].split()) <= 4:
-        rest = rest[:-1]
-    address = ", ".join(rest)
-    if name and _STREET_RE.match(address):
-        return name, address
-    return value.strip(), None
+    if len(parts) > 2 and not any(ch.isdigit() for ch in parts[-1]) and len(parts[-1].split()) <= 4:
+        parts = parts[:-1]
+    start = next((i for i in range(1, len(parts)) if _SPLIT_STREET_RE.match(parts[i])), None)
+    if start is None:
+        return value.strip(), None
+    return " – ".join(parts[:start]), ", ".join(parts[start:])
 
 
 # A cell that SAYS it holds nothing: Florida's operator table fills its blank columns with "n/a",

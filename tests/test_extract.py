@@ -143,6 +143,22 @@ def test_no_split_when_tail_is_not_a_street():
     assert _split_name_address("Beehive Farmacy - Reno") == ("Beehive Farmacy - Reno", None)
 
 
+def test_split_keeps_a_location_label_with_the_name():
+    # Nevada CCB: a label between the name and the street left the whole cell in `name`.
+    cell = f"RISE CARSON CITY {DASH} US HWY 50 {DASH} 3060 U.S. Highway 50 {DASH} Adult Use"
+    assert _split_name_address(cell) == (f"RISE CARSON CITY {DASH} US HWY 50", "3060 U.S. Highway 50")
+
+
+def test_split_takes_a_paired_street_number():
+    cell = f"THE SOURCE {DASH} 2370 & 2380 Homestead Rd {DASH} Adult Use"
+    assert _split_name_address(cell) == ("THE SOURCE", "2370 & 2380 Homestead Rd")
+
+
+def test_split_keeps_a_city_after_the_street():
+    cell = f"Green Leaf {DASH} 100 Main St {DASH} Las Vegas 89101"
+    assert _split_name_address(cell) == ("Green Leaf", "100 Main St, Las Vegas 89101")
+
+
 def test_no_split_without_separator():
     assert _split_name_address("Cookies Florida") == ("Cookies Florida", None)
 

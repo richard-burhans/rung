@@ -19,6 +19,14 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ## [Unreleased]
 
+### Fixed — 2026-10-23
+
+- **A packed "NAME – ADDRESS" roster cell splits when a label sits before the street, or the street
+  number is a pair.** Nevada's list carries "RISE CARSON CITY – US HWY 50 – 3060 U.S. Highway 50 –
+  Adult Use" and "THE SOURCE – 2370 & 2380 Homestead Rd – Adult Use", and both reached the roster as
+  a name with no address. The address now starts at the first segment that starts like a street; a
+  label before it stays with the name.
+
 ### Added — 2026-10-21 (sub-categories)
 
 - **`store_products.subcategory` keeps the platform's own sub-category, raw**, beside the raw
