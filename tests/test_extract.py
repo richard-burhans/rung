@@ -1081,6 +1081,21 @@ def test_va_cca_record_parses_a_squarespace_map_block() -> None:
     assert rec.source == "va_cca"
 
 
+def test_va_cca_record_reads_line1_when_it_carries_the_whole_address() -> None:
+    """Six 2026-10-23 blocks put the whole address on line 1 and left line 2 at the block's default,
+    "Richmond, VA, 23219" — which filed Bristol, Norfolk and Glen Allen in Richmond."""
+    def read(line1: str) -> tuple:
+        rec = _va_cca_record({"addressTitle": "X", "addressLine1": line1, "addressLine2": "Richmond, VA, 23219"})
+        assert rec is not None
+        return rec.address, rec.city, rec.zip_code
+
+    assert read("780 Gate City Highway Bristol, VA 24201") == ("780 Gate City Highway", "Bristol", "24201")
+    assert read("11190 W. Broad Street Glen Allen, VA 23060") == ("11190 W. Broad Street", "Glen Allen", "23060")
+    assert read("2804 Decatur St. Building 30 Richmond, VA 23224") == (
+        "2804 Decatur St. Building 30", "Richmond", "23224")
+    assert read("5902 Richmond Highway") == ("5902 Richmond Highway", "Richmond", "23219")   # line 2 as before
+
+
 def test_va_cca_record_skips_a_non_dispensary_map_block() -> None:
     # The page carries a map block with no addressTitle/addressLine1; it is not a dispensary.
     assert _va_cca_record({"mapZoom": 13, "mapLat": 38.0, "mapLng": -77.0}) is None

@@ -45,6 +45,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-23
 
+- **Virginia's roster reads an address written whole on line 1.** Six CCA map blocks put "street City,
+  VA ZIP" on line 1 and left line 2 at the block's default, "Richmond, VA, 23219", so Bristol, Norfolk,
+  Portsmouth, Suffolk and Glen Allen were filed in Richmond. Line 1's own city and ZIP now win.
+
 - **"WALLA WALLA" (WA) points at its own site.** The roster's Walla Walla Cannabis Company is trimmed to
   the city's name, and it held Walla Walla Weedery's homepage; `company_homepages.yml` now names
   wallawallacannabisco.com for it.

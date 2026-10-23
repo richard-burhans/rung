@@ -1605,6 +1605,28 @@ def _bc_lcrb_record(obj: dict) -> DispensaryRecord | None:
 _VA_LOCATION_RE = re.compile(r'"location":(\{[^{}]*\})')
 # addressLine2 is always "City, VA, ZIP" on this page (verified: 23/23, 2026-07-09).
 _VA_LINE2_RE = re.compile(r"^\s*(?P<city>[^,]+),\s*(?P<state>[A-Z]{2}),?\s*(?P<zip>\d{5})")
+# ⚠ BUT NOT ALWAYS TRUE (2026-10-23): six blocks carry the whole address on line 1 ("7635 Granby Street
+# Norfolk, VA 23505") and line 2 left at the map block's default, "Richmond, VA, 23219" — so Bristol,
+# Norfolk, Portsmouth, Suffolk and Glen Allen were filed in Richmond 23219 (their marker coordinates are
+# right). When line 1 itself ends in "City, ST ZIP", that is the address and line 2 is not read. The town
+# is the words after the street's last number or street-type word ("…Broad Street | Glen Allen",
+# "…Building 30 | Richmond").
+_VA_LINE1_TAIL_RE = re.compile(r"^(?P<head>.+?),\s*(?P<state>[A-Z]{2}),?\s*(?P<zip>\d{5})(?:-\d{4})?\s*$")
+_VA_STREET_END_RE = re.compile(
+    r"(?i)^(?:\S*\d\S*|st\.?|street|rd\.?|road|ave\.?|avenue|blvd\.?|boulevard|dr\.?|drive|ct\.?|court|"
+    r"hwy\.?|highway|pkwy\.?|parkway|ln\.?|lane|way|pl\.?|place|cir\.?|circle|ter\.?|terrace|pike|turnpike)$")
+
+
+def _va_line1_address(line1: str) -> tuple[str, str, str, str] | None:
+    """``(street, city, state, zip)`` when line 1 carries the whole address, else None."""
+    tail = _VA_LINE1_TAIL_RE.match(line1)
+    if tail is None:
+        return None
+    words = tail["head"].split()
+    cut = max((i for i, word in enumerate(words) if _VA_STREET_END_RE.match(word)), default=-1)
+    if cut < 0 or cut == len(words) - 1:
+        return None
+    return " ".join(words[:cut + 1]), " ".join(words[cut + 1:]), tail["state"], tail["zip"]
 
 
 def _va_cca_record(loc: dict) -> DispensaryRecord | None:
@@ -1614,7 +1636,9 @@ def _va_cca_record(loc: dict) -> DispensaryRecord | None:
     if not name or not street:
         return None                      # a non-dispensary map block (the page carries one)
     city = state = zip_code = None
-    if match := _VA_LINE2_RE.match(str(loc.get("addressLine2") or "")):
+    if whole := _va_line1_address(street):
+        street, city, state, zip_code = whole
+    elif match := _VA_LINE2_RE.match(str(loc.get("addressLine2") or "")):
         city, state, zip_code = (match["city"].strip(), match["state"], match["zip"])
     latitude, longitude = loc.get("markerLat"), loc.get("markerLng")
     if not (isinstance(latitude, (int, float)) and isinstance(longitude, (int, float))
