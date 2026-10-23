@@ -45,6 +45,10 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-23
 
+- **"WALLA WALLA" (WA) points at its own site.** The roster's Walla Walla Cannabis Company is trimmed to
+  the city's name, and it held Walla Walla Weedery's homepage; `company_homepages.yml` now names
+  wallawallacannabisco.com for it.
+
 - **Wallflower Cannabis House (NV) has a homepage override** in `rung/data/company_homepages.yml`.
   Nevada's roster names no website for it, so its own site, which lists both stores, was never read.
 
