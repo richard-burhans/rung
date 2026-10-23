@@ -38,6 +38,9 @@ work; nothing here is backdated or reconstructed to imply activity that did not 
 
 ### Fixed — 2026-10-23
 
+- **Deep Roots Harvest (NV) has a homepage override** in `rung/data/company_homepages.yml`. Nevada's
+  roster names no website for it, so its own site, which lists all six stores, was never read.
+
 - **A packed "NAME – ADDRESS" roster cell splits when a label sits before the street, or the street
   number is a pair.** Nevada's list carries "RISE CARSON CITY – US HWY 50 – 3060 U.S. Highway 50 –
   Adult Use" and "THE SOURCE – 2370 & 2380 Homestead Rd – Adult Use", and both reached the roster as
